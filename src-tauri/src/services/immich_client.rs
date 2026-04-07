@@ -25,6 +25,8 @@ pub struct AssetSummary {
     pub r#type: Option<String>,
     #[serde(default)]
     pub duration: Option<String>,
+    #[serde(default)]
+    pub live_photo_video_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -787,6 +789,10 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
                     .and_then(|v| v.get("videoDurationInSeconds"))
                     .and_then(value_to_string)
             }),
+        live_photo_video_id: value
+            .get("livePhotoVideoId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     };
 
     asset = normalize_asset_summary(asset);

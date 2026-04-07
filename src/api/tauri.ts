@@ -5,6 +5,8 @@ import type {
   AssetSummary,
   MemorySummary,
   TimelineMonths,
+  Settings,
+  CacheStats,
 } from "../types";
 
 export type AuthResponse = {
@@ -86,4 +88,20 @@ export async function fetchAlbumAssets(
   return invoke<AssetSummary[]>("get_album_assets", {
     albumId,
   });
+}
+
+export async function getSettings(): Promise<Settings> {
+  return invoke<Settings>("get_settings");
+}
+
+export async function updateSettings(settings: Settings): Promise<Settings> {
+  return invoke<Settings>("update_settings", { settings });
+}
+
+export async function getCacheStats(): Promise<CacheStats> {
+  return invoke<CacheStats>("get_cache_stats");
+}
+
+export async function getCachePath(): Promise<string> {
+  return invoke<string>("get_cache_path");
 }

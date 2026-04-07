@@ -9,6 +9,7 @@ use commands::assets::{
 use commands::auth::authenticate;
 use commands::folders::{get_assets_by_original_path, get_unique_original_paths};
 use commands::memories::fetch_memories;
+use commands::settings::{get_cache_path, get_cache_stats, get_settings, update_settings};
 use services::db::Database;
 use services::immich_client::ImmichClient;
 
@@ -35,7 +36,11 @@ pub fn main() {
             fetch_albums,
             get_album_assets,
             get_unique_original_paths,
-            get_assets_by_original_path
+            get_assets_by_original_path,
+            get_settings,
+            update_settings,
+            get_cache_stats,
+            get_cache_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

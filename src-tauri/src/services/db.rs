@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 
 use crate::services::immich_client::AssetSummary;
+use crate::commands::settings::Settings;
 
 pub struct Database {
     db_path: PathBuf,
@@ -33,9 +34,22 @@ impl Database {
                 checksum TEXT,
                 updated_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             ",
         )
         .map_err(|err| err.to_string())?;
+        
+        // Initialize default settings if not exist
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('live_photo_autoplay', 'true')",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+        
         Ok(())
     }
 
@@ -95,6 +109,7 @@ impl Database {
                     checksum: row.get(3)?,
                     r#type: None,
                     duration: None,
+                    live_photo_video_id: None,
                 })
             })
             .map_err(|err| err.to_string())?;
@@ -135,6 +150,48 @@ impl Database {
         let oldest_month = months.last().cloned();
 
         Ok((newest_month, oldest_month, months))
+    }
+
+    pub fn get_settings(&self) -> Result<Settings, String> {
+        let conn = self.open()?;
+        
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")
+            .map_err(|err| err.to_string())?;
+        
+        let home = std::env::var("HOME")
+            .ok()
+            .and_then(|h| {
+                let path = Path::new(&h).to_path_buf();
+                if path.exists() { Some(path) } else { None }
+            })
+            .ok_or_else(|| "Could not determine home directory".to_string())?;
+        
+        let thumbnail_cache_path = home.join(".config/immich-local-app/thumbnails");
+        let video_cache_path = home.join(".config/immich-local-app/videos");
+        
+        let live_photo_autoplay = stmt
+            .query_row(params!["live_photo_autoplay"], |row| row.get::<_, String>(0))
+            .map(|v| v == "true")
+            .unwrap_or(true);
+        
+        Ok(Settings {
+            live_photo_autoplay,
+            thumbnail_cache_path: thumbnail_cache_path.to_string_lossy().to_string(),
+            video_cache_path: video_cache_path.to_string_lossy().to_string(),
+        })
+    }
+
+    pub fn update_settings(&self, settings: &Settings) -> Result<Settings, String> {
+        let conn = self.open()?;
+        
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('live_photo_autoplay', ?1)",
+            params![settings.live_photo_autoplay.to_string()],
+        )
+        .map_err(|err| err.to_string())?;
+        
+        self.get_settings()
     }
 }
 

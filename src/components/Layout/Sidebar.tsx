@@ -1,11 +1,11 @@
-import { FolderTree, Heart, Image, Images } from "lucide-react";
+import { FolderTree, Heart, Image, Images, Settings } from "lucide-react";
 
 interface SidebarProps {
   activePage: AppPage;
   onNavigate?: (page: AppPage) => void;
 }
 
-export type AppPage = "photos" | "albums" | "folders";
+export type AppPage = "photos" | "albums" | "folders" | "settings";
 
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const navClass = (page: AppPage) =>
@@ -58,6 +58,20 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
         >
           <Heart size={16} className="shrink-0" />
           <span>Favorites</span>
+        </button>
+      </nav>
+
+      <div className="mt-auto px-2 text-xs font-semibold uppercase tracking-wide text-base-content/50">
+        App
+      </div>
+      <nav className="menu rounded-box bg-base-100 p-1">
+        <button
+          className={navClass("settings")}
+          type="button"
+          onClick={() => onNavigate?.("settings")}
+        >
+          <Settings size={16} className="shrink-0" />
+          <span>Settings</span>
         </button>
       </nav>
     </aside>

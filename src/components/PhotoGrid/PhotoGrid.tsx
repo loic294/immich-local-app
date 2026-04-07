@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, CirclePlay, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, CirclePlay, Film, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { AssetSummary, TimelineMonths } from "../../types";
+import type { AssetSummary, TimelineMonths, Settings } from "../../types";
 import {
   fetchTimelineMonths,
   getAssetPlayback,
   getAssetThumbnail,
+  getSettings,
 } from "../../api/tauri";
 
 type PhotoGridProps = {
@@ -25,6 +26,7 @@ export function PhotoGrid({
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [activeSrc, setActiveSrc] = useState<string | null>(null);
+  const [activeStillSrc, setActiveStillSrc] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [assetRatios, setAssetRatios] = useState<Record<string, number>>({});
   const [videoDurations, setVideoDurations] = useState<Record<string, number>>(
@@ -36,6 +38,9 @@ export function PhotoGrid({
   const [timelineMonths, setTimelineMonths] = useState<TimelineMonths | null>(
     null,
   );
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [isPlayingLivePhoto, setIsPlayingLivePhoto] = useState(false);
+  const [shouldAutoplayLivePhoto, setShouldAutoplayLivePhoto] = useState(false);
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
   const scrubberRef = useRef<HTMLDivElement | null>(null);
   const isScrubbingRef = useRef(false);
@@ -48,6 +53,19 @@ export function PhotoGrid({
     setShowVideoDebug(
       window.localStorage.getItem("immichDebugVideoMeta") === "1",
     );
+  }, []);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const data = await getSettings();
+        setSettings(data);
+      } catch (error) {
+        console.error("Failed to load settings:", error);
+      }
+    };
+
+    void loadSettings();
   }, []);
 
   useEffect(() => {
@@ -245,13 +263,58 @@ export function PhotoGrid({
     let cancelled = false;
     const asset = assets[activeIndex];
 
+    if (isVideoAsset(asset)) {
+      setActiveStillSrc(null);
+      return;
+    }
+
+    async function loadActiveStill() {
+      try {
+        const value = await getAssetThumbnail(asset.id);
+        if (!cancelled) {
+          setActiveStillSrc(value);
+        }
+      } catch {
+        if (!cancelled) {
+          setActiveStillSrc(null);
+        }
+      }
+    }
+
+    void loadActiveStill();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeIndex, assets, hasActive]);
+
+  useEffect(() => {
+    if (!hasActive || activeIndex === null) {
+      return;
+    }
+
+    let cancelled = false;
+    const asset = assets[activeIndex];
+
     async function loadActiveMedia() {
       try {
-        const value = isVideoAsset(asset)
-          ? await getAssetPlayback(asset.id)
-          : await getAssetThumbnail(asset.id);
-        if (!cancelled) {
-          setActiveSrc(isVideoAsset(asset) ? toPlayableSrc(value) : value);
+        let value: string;
+
+        // If it's a live photo and we're about to play the video, load the video
+        if (isPlayingLivePhoto && asset.livePhotoVideoId) {
+          value = await getAssetPlayback(asset.livePhotoVideoId);
+          if (!cancelled) {
+            setActiveSrc(toPlayableSrc(value));
+          }
+        } else if (isVideoAsset(asset)) {
+          value = await getAssetPlayback(asset.id);
+          if (!cancelled) {
+            setActiveSrc(toPlayableSrc(value));
+          }
+        } else {
+          if (!cancelled) {
+            setActiveSrc(null);
+          }
         }
       } catch {
         if (!cancelled) {
@@ -265,7 +328,7 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [activeIndex, assets, hasActive]);
+  }, [activeIndex, assets, hasActive, isPlayingLivePhoto]);
 
   useEffect(() => {
     if (!hasActive) {
@@ -276,10 +339,17 @@ export function PhotoGrid({
       if (event.key === "Escape") {
         setActiveIndex(null);
         setActiveSrc(null);
+        setActiveStillSrc(null);
+        setIsPlayingLivePhoto(false);
+        setShouldAutoplayLivePhoto(false);
         return;
       }
 
       if (event.key === "ArrowLeft") {
+        setActiveSrc(null);
+        setActiveStillSrc(null);
+        setIsPlayingLivePhoto(false);
+        setShouldAutoplayLivePhoto(true);
         setActiveIndex((current) => {
           if (current === null) {
             return current;
@@ -290,6 +360,10 @@ export function PhotoGrid({
       }
 
       if (event.key === "ArrowRight") {
+        setActiveSrc(null);
+        setActiveStillSrc(null);
+        setIsPlayingLivePhoto(false);
+        setShouldAutoplayLivePhoto(true);
         setActiveIndex((current) => {
           if (current === null) {
             return current;
@@ -304,6 +378,29 @@ export function PhotoGrid({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [assets.length, hasActive]);
+
+  useEffect(() => {
+    if (!hasActive || activeIndex === null) {
+      return;
+    }
+
+    // Autoplay live photos only once for each fullscreen view.
+    const asset = assets[activeIndex];
+    if (
+      shouldAutoplayLivePhoto &&
+      asset?.livePhotoVideoId &&
+      !isPlayingLivePhoto
+    ) {
+      setShouldAutoplayLivePhoto(false);
+      setIsPlayingLivePhoto(true);
+    }
+  }, [
+    activeIndex,
+    assets,
+    hasActive,
+    isPlayingLivePhoto,
+    shouldAutoplayLivePhoto,
+  ]);
 
   useEffect(() => {
     if (sections.length > 0 && !activeSectionKey) {
@@ -437,6 +534,22 @@ export function PhotoGrid({
 
   const activeAsset =
     hasActive && activeIndex !== null ? assets[activeIndex] : null;
+  const activeAssetRatio = activeAsset
+    ? getAssetRatio(activeAsset.id, assetRatios)
+    : 4 / 3;
+  const livePhotoFrameStyle = {
+    aspectRatio: String(activeAssetRatio),
+    maxWidth: "calc(100vw - 8rem)",
+    maxHeight: "calc(100vh - 6rem)",
+    width:
+      activeAssetRatio >= 1
+        ? `min(calc(100vw - 8rem), calc((100vh - 6rem) * ${activeAssetRatio}))`
+        : `calc((100vh - 6rem) * ${activeAssetRatio})`,
+    height:
+      activeAssetRatio >= 1
+        ? `calc((100vw - 8rem) / ${activeAssetRatio})`
+        : `min(calc(100vh - 6rem), calc((100vw - 8rem) / ${activeAssetRatio}))`,
+  } as const;
 
   const openLightbox = (assetId: string) => {
     const index = assets.findIndex((asset) => asset.id === assetId);
@@ -446,14 +559,24 @@ export function PhotoGrid({
 
     setActiveIndex(index);
     setActiveSrc(null);
+    setActiveStillSrc(null);
+    setIsPlayingLivePhoto(false);
+    setShouldAutoplayLivePhoto(true);
   };
 
   const closeLightbox = () => {
     setActiveIndex(null);
     setActiveSrc(null);
+    setActiveStillSrc(null);
+    setIsPlayingLivePhoto(false);
+    setShouldAutoplayLivePhoto(false);
   };
 
   const goPrev = () => {
+    setActiveSrc(null);
+    setActiveStillSrc(null);
+    setIsPlayingLivePhoto(false);
+    setShouldAutoplayLivePhoto(true);
     setActiveIndex((current) => {
       if (current === null) {
         return current;
@@ -463,6 +586,10 @@ export function PhotoGrid({
   };
 
   const goNext = () => {
+    setActiveSrc(null);
+    setActiveStillSrc(null);
+    setIsPlayingLivePhoto(false);
+    setShouldAutoplayLivePhoto(true);
     setActiveIndex((current) => {
       if (current === null) {
         return current;
@@ -549,6 +676,9 @@ export function PhotoGrid({
                               });
                             }}
                             showDebug={showVideoDebug}
+                            livePhotoAutoplay={
+                              settings?.livePhotoAutoplay ?? true
+                            }
                           />
                         </article>
                       ))}
@@ -709,10 +839,25 @@ export function PhotoGrid({
             onClick={(event) => {
               event.stopPropagation();
               closeLightbox();
+              setIsPlayingLivePhoto(false);
             }}
           >
             <X size={22} />
           </button>
+
+          {activeAsset?.livePhotoVideoId && isPlayingLivePhoto ? (
+            <button
+              type="button"
+              className="btn btn-circle btn-sm btn-ghost absolute right-16 top-4 border border-white/20 bg-black/40 text-white"
+              aria-label="Play live photo again"
+              onClick={(event) => {
+                event.stopPropagation();
+                setIsPlayingLivePhoto(false);
+              }}
+            >
+              <CirclePlay size={22} />
+            </button>
+          ) : null}
 
           <button
             type="button"
@@ -765,10 +910,63 @@ export function PhotoGrid({
                 Loading video...
               </div>
             )
+          ) : isPlayingLivePhoto && activeAsset?.livePhotoVideoId ? (
+            <div
+              className="relative flex items-center justify-center overflow-hidden"
+              style={livePhotoFrameStyle}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {activeStillSrc ? (
+                <img
+                  className="h-full w-full object-contain"
+                  src={activeStillSrc}
+                  alt={activeAsset.originalFileName}
+                />
+              ) : null}
+              {activeSrc ? (
+                <video
+                  className="absolute inset-0 h-full w-full object-fill"
+                  src={activeSrc}
+                  autoPlay
+                  playsInline
+                  onEnded={() => {
+                    setIsPlayingLivePhoto(false);
+                  }}
+                  onError={(event) => {
+                    const video = event.currentTarget;
+                    console.error("[live-photo-video-error]", {
+                      assetId: activeAsset.livePhotoVideoId,
+                      src: video.currentSrc,
+                      errorCode: video.error?.code,
+                      errorMessage: video.error?.message,
+                    });
+                  }}
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                  <span className="loading loading-spinner loading-sm text-white" />
+                </div>
+              )}
+            </div>
+          ) : activeAsset?.livePhotoVideoId ? (
+            <div
+              className="flex items-center justify-center"
+              style={livePhotoFrameStyle}
+            >
+              <img
+                className="max-h-full max-w-full object-contain"
+                src={activeStillSrc ?? activeSrc ?? ""}
+                alt={activeAsset.originalFileName}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setIsPlayingLivePhoto(true);
+                }}
+              />
+            </div>
           ) : (
             <img
               className="max-h-full max-w-full object-contain"
-              src={activeSrc ?? ""}
+              src={activeStillSrc ?? activeSrc ?? ""}
               alt={activeAsset.originalFileName}
               onClick={(event) => event.stopPropagation()}
             />
@@ -872,6 +1070,7 @@ function AssetThumbnail({
   durationSeconds,
   onDuration,
   showDebug,
+  livePhotoAutoplay,
 }: {
   asset: AssetSummary;
   onOpen: () => void;
@@ -879,15 +1078,21 @@ function AssetThumbnail({
   durationSeconds?: number;
   onDuration: (seconds: number) => void;
   showDebug: boolean;
+  livePhotoAutoplay: boolean;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [livePhotoVideoSrc, setLivePhotoVideoSrc] = useState<string | null>(
+    null,
+  );
   const [videoRetryToken, setVideoRetryToken] = useState(0);
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
+  const [isPlayingLivePhoto, setIsPlayingLivePhoto] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const retryTimeoutRef = useRef<number | null>(null);
   const isVideo = isVideoAsset(asset);
+  const isLivePhoto = asset.livePhotoVideoId != null;
 
   useEffect(() => {
     let canceled = false;
@@ -945,6 +1150,53 @@ function AssetThumbnail({
     };
   }, [asset.id, isHovering, isVideo, isVideoLoading, videoSrc]);
 
+  // Load live photo video when hovering (if autoplay enabled and not already loaded)
+  useEffect(() => {
+    if (
+      !isLivePhoto ||
+      !isHovering ||
+      livePhotoVideoSrc ||
+      isVideoLoading ||
+      !livePhotoAutoplay
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadLivePhotoPlayback() {
+      setIsVideoLoading(true);
+      try {
+        const value = await getAssetPlayback(asset.livePhotoVideoId!);
+        if (!cancelled) {
+          setLivePhotoVideoSrc(toPlayableSrc(value));
+        }
+      } catch {
+        if (!cancelled) {
+          setLivePhotoVideoSrc(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsVideoLoading(false);
+        }
+      }
+    }
+
+    void loadLivePhotoPlayback();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    asset.id,
+    asset.livePhotoVideoId,
+    isHovering,
+    isLivePhoto,
+    livePhotoVideoSrc,
+    isVideoLoading,
+    livePhotoAutoplay,
+  ]);
+
   useEffect(() => {
     return () => {
       if (retryTimeoutRef.current !== null) {
@@ -960,15 +1212,43 @@ function AssetThumbnail({
     }
 
     if (isHovering) {
-      void video.play().catch(() => {
-        // Ignore autoplay rejection; user can still click for fullscreen playback.
-      });
+      // For live photos with autoplay enabled, play the video
+      if (
+        isLivePhoto &&
+        livePhotoAutoplay &&
+        livePhotoVideoSrc &&
+        !isPlayingLivePhoto
+      ) {
+        setIsPlayingLivePhoto(true);
+        void video.play().catch(() => {
+          // Ignore autoplay rejection
+        });
+        return;
+      }
+
+      // For regular videos
+      if (isVideo && videoSrc) {
+        void video.play().catch(() => {
+          // Ignore autoplay rejection; user can still click for fullscreen playback.
+        });
+      }
       return;
     }
 
+    // Mouse left
     video.pause();
     video.currentTime = 0;
-  }, [isHovering, videoSrc, videoRetryToken]);
+    setIsPlayingLivePhoto(false);
+  }, [
+    isHovering,
+    videoSrc,
+    videoRetryToken,
+    isVideo,
+    isLivePhoto,
+    livePhotoAutoplay,
+    livePhotoVideoSrc,
+    isPlayingLivePhoto,
+  ]);
 
   if (!src) {
     return (
@@ -987,6 +1267,7 @@ function AssetThumbnail({
       onMouseLeave={() => {
         setIsHovering(false);
         setVideoRetryToken(0);
+        setIsPlayingLivePhoto(false);
         if (retryTimeoutRef.current !== null) {
           window.clearTimeout(retryTimeoutRef.current);
           retryTimeoutRef.current = null;
@@ -994,7 +1275,46 @@ function AssetThumbnail({
       }}
       aria-label={`Open ${asset.originalFileName} in full screen`}
     >
-      {isVideo && isHovering && videoSrc ? (
+      {isLivePhoto && isHovering && isPlayingLivePhoto && livePhotoVideoSrc ? (
+        <video
+          ref={previewVideoRef}
+          className="h-full w-full object-cover"
+          src={livePhotoVideoSrc}
+          muted
+          autoPlay
+          playsInline
+          preload="metadata"
+          onEnded={() => {
+            setIsPlayingLivePhoto(false);
+          }}
+          onCanPlay={(event) => {
+            if (!isHovering) {
+              return;
+            }
+
+            const video = event.currentTarget;
+            video.muted = true;
+            void video.play().catch(() => {
+              // Autoplay may still be denied on some systems.
+            });
+          }}
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              onRatio(video.videoWidth / video.videoHeight);
+            }
+          }}
+          onError={(event) => {
+            const video = event.currentTarget;
+            console.error("[live-photo-hover-error]", {
+              assetId: asset.livePhotoVideoId,
+              src: video.currentSrc,
+              errorCode: video.error?.code,
+              errorMessage: video.error?.message,
+            });
+          }}
+        />
+      ) : isVideo && isHovering && videoSrc ? (
         <video
           ref={previewVideoRef}
           className="h-full w-full object-cover"
@@ -1061,6 +1381,11 @@ function AssetThumbnail({
               onRatio(image.naturalWidth / image.naturalHeight);
             }
           }}
+          onClick={() => {
+            if (isLivePhoto && !livePhotoAutoplay) {
+              setIsPlayingLivePhoto(true);
+            }
+          }}
         />
       )}
 
@@ -1071,7 +1396,20 @@ function AssetThumbnail({
         </div>
       ) : null}
 
+      {isLivePhoto ? (
+        <div className="absolute right-1 top-1 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] text-white">
+          <Film size={12} />
+          <span>LIVE</span>
+        </div>
+      ) : null}
+
       {isVideo && isHovering && isVideoLoading ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/25">
+          <span className="loading loading-spinner loading-sm text-white" />
+        </div>
+      ) : null}
+
+      {isLivePhoto && isHovering && isVideoLoading && livePhotoAutoplay ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/25">
           <span className="loading loading-spinner loading-sm text-white" />
         </div>

@@ -5,6 +5,7 @@ export type AssetSummary = {
   checksum: string | null;
   type: string | null;
   duration: string | null;
+  livePhotoVideoId: string | null;
 };
 
 export type AssetPage = {
@@ -46,4 +47,18 @@ export type AlbumSummary = {
   endDate: string | null;
   assetCount: number | null;
   owner: AlbumOwnerSummary | null;
+};
+
+export type Settings = {
+  livePhotoAutoplay: boolean;
+  thumbnailCachePath: string;
+  videoCachePath: string;
+};
+
+export type CacheStats = {
+  totalThumbnailsSize: number;
+  thumbnailsCount: number;
+  totalVideosSize: number;
+  videosCount: number;
+  totalSize: number;
 };

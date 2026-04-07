@@ -6,6 +6,7 @@ import type { AppPage } from "./components/Layout/Sidebar";
 import { AlbumsPage } from "./pages/AlbumsPage";
 import { FoldersPage } from "./pages/FoldersPage";
 import { PhotosPage } from "./pages/PhotosPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 export function App() {
   const [activePage, setActivePage] = useState<AppPage>("photos");
@@ -42,6 +43,10 @@ export function App() {
 
   if (activePage === "folders") {
     return <FoldersPage session={session} onNavigate={setActivePage} />;
+  }
+
+  if (activePage === "settings") {
+    return <SettingsPage onNavigate={setActivePage} />;
   }
 
   return <PhotosPage session={session} onNavigate={setActivePage} />;
