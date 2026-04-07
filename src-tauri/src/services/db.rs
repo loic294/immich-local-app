@@ -110,6 +110,10 @@ impl Database {
                     r#type: None,
                     duration: None,
                     live_photo_video_id: None,
+                    is_favorite: false,
+                    is_archived: false,
+                    visibility: Some("timeline".to_string()),
+                    rating: None,
                 })
             })
             .map_err(|err| err.to_string())?;

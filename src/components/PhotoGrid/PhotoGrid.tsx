@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, CirclePlay, Film, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { AssetSummary, TimelineMonths, Settings } from "../../types";
+import { FullscreenMetadataBar } from "./FullscreenMetadataBar";
+import { FullscreenThumbnailStrip } from "./FullscreenThumbnailStrip";
+import type {
+  AssetSummary,
+  AssetVisibility,
+  TimelineMonths,
+  Settings,
+} from "../../types";
 import {
   fetchTimelineMonths,
   getAssetPlayback,
   getAssetThumbnail,
   getSettings,
+  refreshAsset,
+  updateAssetFavorite,
+  updateAssetRating,
+  updateAssetVisibility,
 } from "../../api/tauri";
 
 type PhotoGridProps = {
@@ -39,8 +50,14 @@ export function PhotoGrid({
     null,
   );
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [assetOverrides, setAssetOverrides] = useState<
+    Record<string, Partial<AssetSummary>>
+  >({});
   const [isPlayingLivePhoto, setIsPlayingLivePhoto] = useState(false);
   const [shouldAutoplayLivePhoto, setShouldAutoplayLivePhoto] = useState(false);
+  const [favoriteUpdateId, setFavoriteUpdateId] = useState<string | null>(null);
+  const [archiveUpdateId, setArchiveUpdateId] = useState<string | null>(null);
+  const [ratingUpdateId, setRatingUpdateId] = useState<string | null>(null);
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
   const scrubberRef = useRef<HTMLDivElement | null>(null);
   const isScrubbingRef = useRef(false);
@@ -136,16 +153,25 @@ export function PhotoGrid({
     };
   }, [assets.length]);
 
+  const displayAssets = useMemo(
+    () =>
+      assets.map((asset) => {
+        const override = assetOverrides[asset.id];
+        return override ? { ...asset, ...override } : asset;
+      }),
+    [assetOverrides, assets],
+  );
+
   const loadedCountText = useMemo(() => {
     if (!hasNextPage) {
-      return `${assets.length} loaded (all)`;
+      return `${displayAssets.length} loaded (all)`;
     }
-    return `${assets.length} loaded`;
-  }, [assets.length, hasNextPage]);
+    return `${displayAssets.length} loaded`;
+  }, [displayAssets.length, hasNextPage]);
 
   const sections = useMemo(() => {
-    return groupAssetsByDay(assets);
-  }, [assets]);
+    return groupAssetsByDay(displayAssets);
+  }, [displayAssets]);
 
   const justifiedSections = useMemo(() => {
     return sections.map((section) => ({
@@ -253,15 +279,75 @@ export function PhotoGrid({
   }, [activeSectionKey]);
 
   const hasActive =
-    activeIndex !== null && activeIndex >= 0 && activeIndex < assets.length;
+    activeIndex !== null &&
+    activeIndex >= 0 &&
+    activeIndex < displayAssets.length;
+  const activeAsset =
+    hasActive && activeIndex !== null ? displayAssets[activeIndex] : null;
 
   useEffect(() => {
-    if (!hasActive || activeIndex === null) {
+    if (activeAsset) {
+      console.log("[PhotoGrid] Active asset changed:", {
+        assetId: activeAsset.id,
+        fileName: activeAsset.originalFileName,
+        rating: activeAsset.rating,
+        isFavorite: activeAsset.isFavorite,
+        isArchived: activeAsset.isArchived,
+        visibility: activeAsset.visibility,
+      });
+    }
+  }, [activeAsset?.id]);
+
+  // Refresh asset metadata from server when navigating to a new asset
+  useEffect(() => {
+    if (!activeAsset || !hasActive) {
       return;
     }
 
+    const asset = activeAsset;
     let cancelled = false;
-    const asset = assets[activeIndex];
+
+    async function refreshAssetMetadata() {
+      try {
+        const refreshed = await refreshAsset(asset.id);
+        if (!cancelled) {
+          console.log("[PhotoGrid] Asset refreshed from server:", {
+            assetId: refreshed.id,
+            rating: refreshed.rating,
+            isFavorite: refreshed.isFavorite,
+            isArchived: refreshed.isArchived,
+          });
+          // Update the override with the server's latest metadata
+          updateActiveAssetOverride({
+            rating: refreshed.rating,
+            isFavorite: refreshed.isFavorite,
+            isArchived: refreshed.isArchived,
+            visibility: refreshed.visibility,
+          });
+        }
+      } catch (error) {
+        // Silently fail if server is offline; navigation should not be blocked
+        console.log(
+          "[PhotoGrid] Failed to refresh asset from server (network may be offline):",
+          error,
+        );
+      }
+    }
+
+    void refreshAssetMetadata();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAsset?.id, hasActive]);
+
+  useEffect(() => {
+    if (!activeAsset) {
+      return;
+    }
+
+    const asset = activeAsset;
+    let cancelled = false;
 
     if (isVideoAsset(asset)) {
       setActiveStillSrc(null);
@@ -286,21 +372,20 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [activeIndex, assets, hasActive]);
+  }, [activeAsset]);
 
   useEffect(() => {
-    if (!hasActive || activeIndex === null) {
+    if (!activeAsset) {
       return;
     }
 
+    const asset = activeAsset;
     let cancelled = false;
-    const asset = assets[activeIndex];
 
     async function loadActiveMedia() {
       try {
         let value: string;
 
-        // If it's a live photo and we're about to play the video, load the video
         if (isPlayingLivePhoto && asset.livePhotoVideoId) {
           value = await getAssetPlayback(asset.livePhotoVideoId);
           if (!cancelled) {
@@ -311,10 +396,8 @@ export function PhotoGrid({
           if (!cancelled) {
             setActiveSrc(toPlayableSrc(value));
           }
-        } else {
-          if (!cancelled) {
-            setActiveSrc(null);
-          }
+        } else if (!cancelled) {
+          setActiveSrc(null);
         }
       } catch {
         if (!cancelled) {
@@ -328,7 +411,7 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [activeIndex, assets, hasActive, isPlayingLivePhoto]);
+  }, [activeAsset, isPlayingLivePhoto]);
 
   useEffect(() => {
     if (!hasActive) {
@@ -368,7 +451,7 @@ export function PhotoGrid({
           if (current === null) {
             return current;
           }
-          return Math.min(assets.length - 1, current + 1);
+          return Math.min(displayAssets.length - 1, current + 1);
         });
       }
     };
@@ -377,30 +460,22 @@ export function PhotoGrid({
     return () => {
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [assets.length, hasActive]);
+  }, [displayAssets.length, hasActive]);
 
   useEffect(() => {
-    if (!hasActive || activeIndex === null) {
+    if (!activeAsset) {
       return;
     }
 
-    // Autoplay live photos only once for each fullscreen view.
-    const asset = assets[activeIndex];
     if (
       shouldAutoplayLivePhoto &&
-      asset?.livePhotoVideoId &&
+      activeAsset.livePhotoVideoId &&
       !isPlayingLivePhoto
     ) {
       setShouldAutoplayLivePhoto(false);
       setIsPlayingLivePhoto(true);
     }
-  }, [
-    activeIndex,
-    assets,
-    hasActive,
-    isPlayingLivePhoto,
-    shouldAutoplayLivePhoto,
-  ]);
+  }, [activeAsset, isPlayingLivePhoto, shouldAutoplayLivePhoto]);
 
   useEffect(() => {
     if (sections.length > 0 && !activeSectionKey) {
@@ -532,70 +607,159 @@ export function PhotoGrid({
     jumpToProgress(y / Math.max(1, rect.height), behavior);
   };
 
-  const activeAsset =
-    hasActive && activeIndex !== null ? assets[activeIndex] : null;
   const activeAssetRatio = activeAsset
     ? getAssetRatio(activeAsset.id, assetRatios)
     : 4 / 3;
   const livePhotoFrameStyle = {
     aspectRatio: String(activeAssetRatio),
     maxWidth: "calc(100vw - 8rem)",
-    maxHeight: "calc(100vh - 6rem)",
+    maxHeight: "calc(100vh - 18rem)",
     width:
       activeAssetRatio >= 1
-        ? `min(calc(100vw - 8rem), calc((100vh - 6rem) * ${activeAssetRatio}))`
-        : `calc((100vh - 6rem) * ${activeAssetRatio})`,
+        ? `min(calc(100vw - 8rem), calc((100vh - 18rem) * ${activeAssetRatio}))`
+        : `calc((100vh - 18rem) * ${activeAssetRatio})`,
     height:
       activeAssetRatio >= 1
         ? `calc((100vw - 8rem) / ${activeAssetRatio})`
-        : `min(calc(100vh - 6rem), calc((100vw - 8rem) / ${activeAssetRatio}))`,
+        : `min(calc(100vh - 18rem), calc((100vw - 8rem) / ${activeAssetRatio}))`,
   } as const;
 
+  const resetFullscreenPlayback = (autoplayLivePhoto: boolean) => {
+    setActiveSrc(null);
+    setActiveStillSrc(null);
+    setIsPlayingLivePhoto(false);
+    setShouldAutoplayLivePhoto(autoplayLivePhoto);
+  };
+
+  const showAssetAtIndex = (index: number, autoplayLivePhoto: boolean) => {
+    setActiveIndex(index);
+    resetFullscreenPlayback(autoplayLivePhoto);
+  };
+
   const openLightbox = (assetId: string) => {
-    const index = assets.findIndex((asset) => asset.id === assetId);
+    const index = displayAssets.findIndex((asset) => asset.id === assetId);
     if (index < 0) {
       return;
     }
 
-    setActiveIndex(index);
-    setActiveSrc(null);
-    setActiveStillSrc(null);
-    setIsPlayingLivePhoto(false);
-    setShouldAutoplayLivePhoto(true);
+    showAssetAtIndex(index, true);
   };
 
   const closeLightbox = () => {
     setActiveIndex(null);
-    setActiveSrc(null);
-    setActiveStillSrc(null);
-    setIsPlayingLivePhoto(false);
-    setShouldAutoplayLivePhoto(false);
+    resetFullscreenPlayback(false);
   };
 
   const goPrev = () => {
-    setActiveSrc(null);
-    setActiveStillSrc(null);
-    setIsPlayingLivePhoto(false);
-    setShouldAutoplayLivePhoto(true);
-    setActiveIndex((current) => {
-      if (current === null) {
-        return current;
-      }
-      return Math.max(0, current - 1);
-    });
+    if (activeIndex === null) {
+      return;
+    }
+
+    showAssetAtIndex(Math.max(0, activeIndex - 1), true);
   };
 
   const goNext = () => {
-    setActiveSrc(null);
-    setActiveStillSrc(null);
-    setIsPlayingLivePhoto(false);
-    setShouldAutoplayLivePhoto(true);
-    setActiveIndex((current) => {
-      if (current === null) {
-        return current;
-      }
-      return Math.min(assets.length - 1, current + 1);
+    if (activeIndex === null) {
+      return;
+    }
+
+    showAssetAtIndex(Math.min(displayAssets.length - 1, activeIndex + 1), true);
+  };
+
+  const updateActiveAssetOverride = (override: Partial<AssetSummary>) => {
+    if (!activeAsset) {
+      return;
+    }
+
+    setAssetOverrides((current) => ({
+      ...current,
+      [activeAsset.id]: {
+        ...current[activeAsset.id],
+        ...override,
+      },
+    }));
+  };
+
+  const handleFavoriteToggle = async () => {
+    if (!activeAsset) {
+      return;
+    }
+
+    const nextValue = !activeAsset.isFavorite;
+    updateActiveAssetOverride({ isFavorite: nextValue });
+    setFavoriteUpdateId(activeAsset.id);
+
+    try {
+      await updateAssetFavorite(activeAsset.id, nextValue);
+    } catch (error) {
+      updateActiveAssetOverride({ isFavorite: activeAsset.isFavorite });
+      console.error("Failed to update asset favorite status:", error);
+    } finally {
+      setFavoriteUpdateId((current) =>
+        current === activeAsset.id ? null : current,
+      );
+    }
+  };
+
+  const handleArchiveToggle = async () => {
+    if (!activeAsset) {
+      return;
+    }
+
+    const nextIsArchived = !activeAsset.isArchived;
+    const nextVisibility: AssetVisibility = nextIsArchived
+      ? "archive"
+      : "timeline";
+
+    updateActiveAssetOverride({
+      isArchived: nextIsArchived,
+      visibility: nextVisibility,
     });
+    setArchiveUpdateId(activeAsset.id);
+
+    try {
+      await updateAssetVisibility(activeAsset.id, nextVisibility);
+    } catch (error) {
+      updateActiveAssetOverride({
+        isArchived: activeAsset.isArchived,
+        visibility: activeAsset.visibility,
+      });
+      console.error("Failed to update asset archive status:", error);
+    } finally {
+      setArchiveUpdateId((current) =>
+        current === activeAsset.id ? null : current,
+      );
+    }
+  };
+
+  const handleRatingChange = async (rating: number | null) => {
+    if (!activeAsset) {
+      return;
+    }
+
+    console.log("[PhotoGrid] Rating change requested:", {
+      assetId: activeAsset.id,
+      oldRating: activeAsset.rating,
+      newRating: rating,
+    });
+
+    updateActiveAssetOverride({ rating });
+    setRatingUpdateId(activeAsset.id);
+
+    try {
+      await updateAssetRating(activeAsset.id, rating);
+      console.log("[PhotoGrid] Rating update succeeded:", {
+        assetId: activeAsset.id,
+        rating,
+      });
+    } catch (error) {
+      updateActiveAssetOverride({ rating: activeAsset.rating });
+      console.error("Failed to update asset rating:", error);
+    } finally {
+      setRatingUpdateId((current) =>
+        current === activeAsset.id ? null : current,
+      );
+    }
   };
 
   return (
@@ -827,7 +991,7 @@ export function PhotoGrid({
 
       {activeAsset ? (
         <div
-          className="group fixed inset-0 z-9999 flex items-center justify-center bg-black p-6"
+          className="group fixed inset-0 z-9999 flex items-center justify-center bg-black/96 p-6"
           role="dialog"
           aria-modal="true"
           onClick={closeLightbox}
@@ -845,7 +1009,7 @@ export function PhotoGrid({
             <X size={22} />
           </button>
 
-          {activeAsset?.livePhotoVideoId && isPlayingLivePhoto ? (
+          {activeAsset.livePhotoVideoId && isPlayingLivePhoto ? (
             <button
               type="button"
               className="btn btn-circle btn-sm btn-ghost absolute right-16 top-4 border border-white/20 bg-black/40 text-white"
@@ -880,97 +1044,128 @@ export function PhotoGrid({
               event.stopPropagation();
               goNext();
             }}
-            disabled={activeIndex === assets.length - 1}
+            disabled={activeIndex === displayAssets.length - 1}
           >
             <ChevronRight size={28} />
           </button>
 
-          {isVideoAsset(activeAsset) ? (
-            activeSrc ? (
-              <video
-                className="max-h-full max-w-full object-contain"
-                src={activeSrc}
-                controls
-                autoPlay
-                playsInline
-                onError={(event) => {
-                  const video = event.currentTarget;
-                  console.error("[video-fullscreen-error]", {
-                    assetId: activeAsset.id,
-                    src: video.currentSrc,
-                    errorCode: video.error?.code,
-                    errorMessage: video.error?.message,
-                  });
-                }}
-                onClick={(event) => event.stopPropagation()}
-              />
-            ) : (
-              <div className="flex items-center gap-2 text-sm text-white/80">
-                <span className="loading loading-spinner loading-sm" />
-                Loading video...
-              </div>
-            )
-          ) : isPlayingLivePhoto && activeAsset?.livePhotoVideoId ? (
-            <div
-              className="relative flex items-center justify-center overflow-hidden"
-              style={livePhotoFrameStyle}
-              onClick={(event) => event.stopPropagation()}
-            >
-              {activeStillSrc ? (
+          <div
+            className="pointer-events-none flex h-full w-full max-w-[min(96rem,calc(100vw-4rem))] flex-col items-center justify-center gap-2 py-2"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12">
+              {isVideoAsset(activeAsset) ? (
+                activeSrc ? (
+                  <video
+                    className="max-h-full max-w-full object-contain"
+                    src={activeSrc}
+                    controls
+                    autoPlay
+                    playsInline
+                    onError={(event) => {
+                      const video = event.currentTarget;
+                      console.error("[video-fullscreen-error]", {
+                        assetId: activeAsset.id,
+                        src: video.currentSrc,
+                        errorCode: video.error?.code,
+                        errorMessage: video.error?.message,
+                      });
+                    }}
+                  />
+                ) : (
+                  <div className="flex items-center gap-2 text-sm text-white/80">
+                    <span className="loading loading-spinner loading-sm" />
+                    Loading video...
+                  </div>
+                )
+              ) : isPlayingLivePhoto && activeAsset.livePhotoVideoId ? (
+                <div
+                  className="relative flex items-center justify-center overflow-hidden"
+                  style={livePhotoFrameStyle}
+                >
+                  {activeStillSrc ? (
+                    <img
+                      className="h-full w-full object-contain"
+                      src={activeStillSrc}
+                      alt={activeAsset.originalFileName}
+                    />
+                  ) : null}
+                  {activeSrc ? (
+                    <video
+                      className="absolute inset-0 h-full w-full object-fill"
+                      src={activeSrc}
+                      autoPlay
+                      playsInline
+                      onEnded={() => {
+                        setIsPlayingLivePhoto(false);
+                      }}
+                      onError={(event) => {
+                        const video = event.currentTarget;
+                        console.error("[live-photo-video-error]", {
+                          assetId: activeAsset.livePhotoVideoId,
+                          src: video.currentSrc,
+                          errorCode: video.error?.code,
+                          errorMessage: video.error?.message,
+                        });
+                      }}
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                      <span className="loading loading-spinner loading-sm text-white" />
+                    </div>
+                  )}
+                </div>
+              ) : activeAsset.livePhotoVideoId ? (
+                <div
+                  className="flex items-center justify-center"
+                  style={livePhotoFrameStyle}
+                >
+                  <img
+                    className="max-h-full max-w-full object-contain"
+                    src={activeStillSrc ?? activeSrc ?? ""}
+                    alt={activeAsset.originalFileName}
+                    onClick={() => {
+                      setIsPlayingLivePhoto(true);
+                    }}
+                  />
+                </div>
+              ) : (
                 <img
-                  className="h-full w-full object-contain"
-                  src={activeStillSrc}
+                  className="max-h-full max-w-full object-contain"
+                  src={activeStillSrc ?? activeSrc ?? ""}
                   alt={activeAsset.originalFileName}
                 />
-              ) : null}
-              {activeSrc ? (
-                <video
-                  className="absolute inset-0 h-full w-full object-fill"
-                  src={activeSrc}
-                  autoPlay
-                  playsInline
-                  onEnded={() => {
-                    setIsPlayingLivePhoto(false);
-                  }}
-                  onError={(event) => {
-                    const video = event.currentTarget;
-                    console.error("[live-photo-video-error]", {
-                      assetId: activeAsset.livePhotoVideoId,
-                      src: video.currentSrc,
-                      errorCode: video.error?.code,
-                      errorMessage: video.error?.message,
-                    });
-                  }}
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                  <span className="loading loading-spinner loading-sm text-white" />
-                </div>
               )}
             </div>
-          ) : activeAsset?.livePhotoVideoId ? (
-            <div
-              className="flex items-center justify-center"
-              style={livePhotoFrameStyle}
-            >
-              <img
-                className="max-h-full max-w-full object-contain"
-                src={activeStillSrc ?? activeSrc ?? ""}
-                alt={activeAsset.originalFileName}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setIsPlayingLivePhoto(true);
+
+            <div className="pointer-events-auto w-full max-w-5xl">
+              <FullscreenMetadataBar
+                asset={activeAsset}
+                isUpdatingFavorite={favoriteUpdateId === activeAsset.id}
+                isUpdatingArchive={archiveUpdateId === activeAsset.id}
+                isUpdatingRating={ratingUpdateId === activeAsset.id}
+                onToggleFavorite={() => {
+                  void handleFavoriteToggle();
+                }}
+                onToggleArchive={() => {
+                  void handleArchiveToggle();
+                }}
+                onSetRating={(rating) => {
+                  void handleRatingChange(rating);
                 }}
               />
             </div>
-          ) : (
-            <img
-              className="max-h-full max-w-full object-contain"
-              src={activeStillSrc ?? activeSrc ?? ""}
-              alt={activeAsset.originalFileName}
-              onClick={(event) => event.stopPropagation()}
-            />
-          )}
+
+            <div className="pointer-events-auto w-full max-w-5xl rounded-2xl border border-white/10 bg-black/35 px-3 py-2 backdrop-blur-md">
+              <FullscreenThumbnailStrip
+                assets={displayAssets}
+                activeIndex={activeIndex ?? 0}
+                onSelect={(index) => {
+                  showAssetAtIndex(index, true);
+                }}
+              />
+            </div>
+          </div>
         </div>
       ) : null}
     </section>

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AlbumSummary,
+  AssetVisibility,
   AssetPage,
   AssetSummary,
   MemorySummary,
@@ -58,6 +59,12 @@ export async function getAssetPlayback(assetId: string): Promise<string> {
   });
 }
 
+export async function refreshAsset(assetId: string): Promise<AssetSummary> {
+  return invoke<AssetSummary>("refresh_asset", {
+    assetId,
+  });
+}
+
 export async function fetchMemories(): Promise<MemorySummary[]> {
   return invoke<MemorySummary[]>("fetch_memories");
 }
@@ -104,4 +111,36 @@ export async function getCacheStats(): Promise<CacheStats> {
 
 export async function getCachePath(): Promise<string> {
   return invoke<string>("get_cache_path");
+}
+
+export async function updateAssetFavorite(
+  assetId: string,
+  isFavorite: boolean,
+): Promise<AssetSummary> {
+  return invoke<AssetSummary>("update_asset_favorite", {
+    assetId,
+    isFavorite,
+  });
+}
+
+export async function updateAssetVisibility(
+  assetId: string,
+  visibility: AssetVisibility,
+): Promise<AssetSummary> {
+  return invoke<AssetSummary>("update_asset_visibility", {
+    payload: {
+      assetId,
+      visibility,
+    },
+  });
+}
+
+export async function updateAssetRating(
+  assetId: string,
+  rating: number | null,
+): Promise<AssetSummary> {
+  return invoke<AssetSummary>("update_asset_rating", {
+    assetId,
+    rating,
+  });
 }

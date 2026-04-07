@@ -6,6 +6,10 @@ export type AssetSummary = {
   type: string | null;
   duration: string | null;
   livePhotoVideoId: string | null;
+  isFavorite: boolean;
+  isArchived: boolean;
+  visibility: string | null;
+  rating: number | null;
 };
 
 export type AssetPage = {
@@ -62,3 +66,5 @@ export type CacheStats = {
   videosCount: number;
   totalSize: number;
 };
+
+export type AssetVisibility = "timeline" | "archive" | "hidden" | "locked";

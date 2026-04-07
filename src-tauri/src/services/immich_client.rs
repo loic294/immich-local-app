@@ -27,6 +27,14 @@ pub struct AssetSummary {
     pub duration: Option<String>,
     #[serde(default)]
     pub live_photo_video_id: Option<String>,
+    #[serde(default)]
+    pub is_favorite: bool,
+    #[serde(default)]
+    pub is_archived: bool,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub rating: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +162,45 @@ impl ImmichClient {
 
         self.fetch_assets_inner(&session, page, page_size, search_term)
             .await
+    }
+
+    pub async fn get_asset(&self, asset_id: &str) -> Result<AssetSummary, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/asset/{}", session.server_url, asset_id);
+        let response = self
+            .client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+
+        if !status.is_success() {
+            return Err(format!(
+                "fetch asset failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        parse_asset_summary_from_value(
+            &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
+        )
     }
 
     pub async fn get_memories(&self) -> Result<Vec<MemorySummary>, String> {
@@ -519,6 +566,214 @@ impl ImmichClient {
         Ok(output_path.to_string_lossy().to_string())
     }
 
+    pub async fn update_asset_favorite(
+        &self,
+        asset_id: &str,
+        is_favorite: bool,
+    ) -> Result<AssetSummary, String> {
+        let payload = serde_json::json!({
+            "isFavorite": is_favorite,
+        });
+
+        self.update_asset_inner(asset_id, payload).await
+    }
+
+    pub async fn update_asset_visibility(
+        &self,
+        asset_id: &str,
+        visibility: &str,
+    ) -> Result<AssetSummary, String> {
+        let payload = serde_json::json!({
+            "visibility": visibility,
+        });
+
+        self.update_asset_inner(asset_id, payload).await
+    }
+
+    pub async fn update_asset_rating(
+        &self,
+        asset_id: &str,
+        rating: Option<i32>,
+    ) -> Result<AssetSummary, String> {
+        let payload = serde_json::json!({
+            "rating": rating,
+        });
+
+        self.update_asset_inner(asset_id, payload).await
+    }
+
+    async fn update_asset_inner(
+        &self,
+        asset_id: &str,
+        payload: Value,
+    ) -> Result<AssetSummary, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        // First, try to verify the asset exists with a GET request
+        let get_url = format!("{}/api/asset/{}", session.server_url, asset_id);
+        eprintln!("[update_asset_inner] Verifying asset exists with GET: {}", get_url);
+        
+        let get_response = self
+            .client
+            .get(&get_url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        
+        let get_status = get_response.status();
+        eprintln!("[update_asset_inner] GET response status: {}", get_status);
+        
+        if get_status == 404 {
+            eprintln!("[update_asset_inner] Asset not found with GET /api/asset/, trying /api/assets/");
+            let get_url_plural = format!("{}/api/assets/{}", session.server_url, asset_id);
+            let get_response_plural = self
+                .client
+                .get(&get_url_plural)
+                .headers(headers.clone())
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+            eprintln!("[update_asset_inner] GET /api/assets/ response status: {}", get_response_plural.status());
+        }
+
+        // Try PATCH on singular endpoint
+        eprintln!("[update_asset_inner] Trying PATCH /api/asset/{}", asset_id);
+        let url = format!("{}/api/asset/{}", session.server_url, asset_id);
+        
+        let response = self
+            .client
+            .patch(&url)
+            .headers(headers.clone())
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        
+        eprintln!("[update_asset_inner] PATCH /api/asset/ status: {}", status);
+        eprintln!("[update_asset_inner] PATCH /api/asset/ body: {}", truncate_for_log(&body));
+        
+        if status == 404 {
+            eprintln!("[update_asset_inner] PATCH /api/asset/ returned 404, trying PUT /api/asset/");
+            
+            let response = self
+                .client
+                .put(&url)
+                .headers(headers.clone())
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+            
+            eprintln!("[update_asset_inner] PUT /api/asset/ status: {}", status);
+            eprintln!("[update_asset_inner] PUT /api/asset/ body: {}", truncate_for_log(&body));
+            
+            if status == 404 {
+                eprintln!("[update_asset_inner] PUT /api/asset/ returned 404, trying PATCH /api/assets/");
+                
+                let url_plural = format!("{}/api/assets/{}", session.server_url, asset_id);
+                let response = self
+                    .client
+                    .patch(url_plural.clone())
+                    .headers(headers.clone())
+                    .json(&payload)
+                    .send()
+                    .await
+                    .map_err(|err| err.to_string())?;
+
+                let status = response.status();
+                let body = response.text().await.map_err(|err| err.to_string())?;
+                
+                eprintln!("[update_asset_inner] PATCH /api/assets/ status: {}", status);
+                eprintln!("[update_asset_inner] PATCH /api/assets/ body: {}", truncate_for_log(&body));
+                
+                if status == 404 {
+                    eprintln!("[update_asset_inner] PATCH /api/assets/ returned 404, trying PUT /api/assets/");
+                    
+                    let response = self
+                        .client
+                        .put(url_plural)
+                        .headers(headers)
+                        .json(&payload)
+                        .send()
+                        .await
+                        .map_err(|err| err.to_string())?;
+
+                    let status = response.status();
+                    let body = response.text().await.map_err(|err| err.to_string())?;
+                    
+                    eprintln!("[update_asset_inner] PUT /api/assets/ status: {}", status);
+                    eprintln!("[update_asset_inner] PUT /api/assets/ body: {}", truncate_for_log(&body));
+                    
+                    if !status.is_success() {
+                        return Err(format!(
+                            "asset update failed with status {} after trying all endpoints ({})",
+                            status,
+                            truncate_for_log(&body)
+                        ));
+                    }
+                    
+                    return parse_asset_summary_from_value(
+                        &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
+                    );
+                }
+                
+                if !status.is_success() {
+                    return Err(format!(
+                        "asset update failed with status {} ({})",
+                        status,
+                        truncate_for_log(&body)
+                    ));
+                }
+                
+                return parse_asset_summary_from_value(
+                    &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
+                );
+            }
+            
+            if !status.is_success() {
+                return Err(format!(
+                    "asset update failed with status {} ({})",
+                    status,
+                    truncate_for_log(&body)
+                ));
+            }
+            
+            return parse_asset_summary_from_value(
+                &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
+            );
+        }
+        
+        if !status.is_success() {
+            return Err(format!(
+                "asset update failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        parse_asset_summary_from_value(
+            &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
+        )
+    }
+
     async fn fetch_assets_inner(
         &self,
         session: &AuthSession,
@@ -793,6 +1048,23 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
             .get("livePhotoVideoId")
             .and_then(Value::as_str)
             .map(str::to_string),
+        is_favorite: value
+            .get("isFavorite")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        is_archived: value
+            .get("isArchived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        visibility: value
+            .get("visibility")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        rating: value
+            .get("exifInfo")
+            .and_then(|v| v.get("rating"))
+            .and_then(Value::as_i64)
+            .map(|rating| rating as i32),
     };
 
     asset = normalize_asset_summary(asset);

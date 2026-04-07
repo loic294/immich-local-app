@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::services::immich_client::AssetSummary;
 use crate::AppState;
@@ -18,6 +18,13 @@ pub struct TimelineMonths {
     pub newest_month: Option<String>,
     pub oldest_month: Option<String>,
     pub months: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAssetVisibilityPayload {
+    pub asset_id: String,
+    pub visibility: String,
 }
 
 #[tauri::command]
@@ -90,6 +97,27 @@ pub async fn get_asset_playback(
 }
 
 #[tauri::command]
+pub async fn refresh_asset(
+    asset_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<AssetSummary, String> {
+    // Fetch the latest asset metadata from the server
+    let asset = state
+        .immich
+        .get_asset(&asset_id)
+        .await
+        .map_err(|err| format!("refresh asset failed: {err}"))?;
+
+    // Update the cache with the latest metadata
+    state
+        .db
+        .upsert_assets(&[asset.clone()])
+        .map_err(|err| format!("failed to cache refreshed asset: {err}"))?;
+
+    Ok(asset)
+}
+
+#[tauri::command]
 pub async fn get_timeline_months(
     state: tauri::State<'_, AppState>,
 ) -> Result<TimelineMonths, String> {
@@ -103,4 +131,66 @@ pub async fn get_timeline_months(
         oldest_month,
         months,
     })
+}
+
+#[tauri::command]
+pub async fn update_asset_favorite(
+    asset_id: String,
+    is_favorite: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<AssetSummary, String> {
+    let updated_asset = state
+        .immich
+        .update_asset_favorite(&asset_id, is_favorite)
+        .await
+        .map_err(|err| format!("favorite update failed: {err}"))?;
+
+    // Cache the updated asset
+    state
+        .db
+        .upsert_assets(&[updated_asset.clone()])
+        .map_err(|err| format!("failed to cache updated asset: {err}"))?;
+
+    Ok(updated_asset)
+}
+
+#[tauri::command]
+pub async fn update_asset_visibility(
+    payload: UpdateAssetVisibilityPayload,
+    state: tauri::State<'_, AppState>,
+) -> Result<AssetSummary, String> {
+    let updated_asset = state
+        .immich
+        .update_asset_visibility(&payload.asset_id, &payload.visibility)
+        .await
+        .map_err(|err| format!("visibility update failed: {err}"))?;
+
+    // Cache the updated asset
+    state
+        .db
+        .upsert_assets(&[updated_asset.clone()])
+        .map_err(|err| format!("failed to cache updated asset: {err}"))?;
+
+    Ok(updated_asset)
+}
+
+#[tauri::command]
+pub async fn update_asset_rating(
+    asset_id: String,
+    rating: Option<i32>,
+    state: tauri::State<'_, AppState>,
+) -> Result<AssetSummary, String> {
+    let updated_asset = state
+        .immich
+        .update_asset_rating(&asset_id, rating)
+        .await
+        .map_err(|err| format!("rating update failed: {err}"))?;
+
+    // Cache the updated asset
+    state
+        .db
+        .upsert_assets(&[updated_asset.clone()])
+        .map_err(|err| format!("failed to cache updated asset: {err}"))?;
+
+    Ok(updated_asset)
 }
