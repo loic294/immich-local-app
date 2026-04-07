@@ -125,7 +125,9 @@ export function PhotosPage({ session }: PhotosPageProps) {
           memoryIndex={memoryViewer.memoryIndex}
           assetIndex={memoryViewer.assetIndex}
           onClose={() => setMemoryViewer(null)}
-          onChange={(next: { memoryIndex: number; assetIndex: number }) => setMemoryViewer(next)}
+          onChange={(next: { memoryIndex: number; assetIndex: number }) =>
+            setMemoryViewer(next)
+          }
         />
       ) : null}
     </main>
