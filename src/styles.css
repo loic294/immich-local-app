@@ -1,0 +1,302 @@
+:root {
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+  color: #1f2933;
+  background: radial-gradient(
+    circle at top right,
+    #f4efe5 0%,
+    #e7ecef 65%,
+    #d3dce4 100%
+  );
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.card {
+  max-width: 460px;
+  margin: 80px auto;
+  background: #ffffffd9;
+  border: 1px solid #d0d9e2;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 14px 40px #64748b2e;
+}
+
+.subtitle {
+  margin-top: 8px;
+  color: #51606f;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+
+input,
+button {
+  border-radius: 8px;
+  border: 1px solid #b9c6d4;
+  padding: 10px;
+  font-size: 14px;
+}
+
+button {
+  background: #1f6feb;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #80a7e0;
+  cursor: wait;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.grid-shell {
+  background: #ffffffd9;
+  border: 1px solid #d0d9e2;
+  border-radius: 14px;
+  padding: 8px;
+}
+
+.grid-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.grid-viewport {
+  height: calc(100vh - 240px);
+  overflow: auto;
+  border-top: 1px solid #d0d9e2;
+  padding-top: 4px;
+}
+
+.justified-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.day-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.day-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px;
+}
+
+.day-separator {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  background: linear-gradient(to bottom, #ffffffe8 85%, transparent);
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.day-separator::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #cbd5e1;
+}
+
+.day-item {
+  padding: 0;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+}
+
+.asset-card {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+.thumb-button {
+  all: unset;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: zoom-in;
+}
+
+.thumb {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  object-fit: cover;
+  display: block;
+  background: #e2e8f0;
+}
+
+.thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.asset-name {
+  font-weight: 600;
+  margin: 0 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-meta,
+.asset-id,
+.status,
+.error {
+  margin: 0;
+  font-size: 12px;
+  color: #44525f;
+  word-break: break-word;
+}
+
+.error {
+  color: #b42318;
+  margin-top: 12px;
+}
+
+.status {
+  margin-top: 10px;
+}
+
+.load-sentinel {
+  height: 1px;
+}
+
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #ffffff33;
+  border-radius: 999px;
+  background: #00000066;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 52px;
+  height: 52px;
+  border: 1px solid #ffffff33;
+  border-radius: 999px;
+  background: #00000066;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.lightbox-overlay:hover .lightbox-nav {
+  opacity: 1;
+}
+
+.lightbox-nav:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.lightbox-prev {
+  left: 16px;
+}
+
+.lightbox-next {
+  right: 16px;
+}
+
+.lightbox-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 900px) {
+  .day-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 3px;
+  }
+
+  .day-separator {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 560px) {
+  .page {
+    padding: 14px;
+  }
+
+  .day-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px;
+  }
+
+  .grid-viewport {
+    height: calc(100vh - 220px);
+  }
+}

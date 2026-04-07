@@ -1,0 +1,114 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use rusqlite::{params, Connection};
+
+use crate::services::immich_client::AssetSummary;
+
+pub struct Database {
+    db_path: PathBuf,
+}
+
+impl Database {
+    pub fn new() -> Result<Self, String> {
+        let mut app_dir = dirs_home().ok_or_else(|| "cannot resolve home directory".to_string())?;
+        app_dir.push(".config");
+        app_dir.push("immich-local-app");
+        fs::create_dir_all(&app_dir).map_err(|err| err.to_string())?;
+
+        let db_path = app_dir.join("db.sqlite");
+        let db = Self { db_path };
+        db.init()?;
+        Ok(db)
+    }
+
+    fn init(&self) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS assets (
+                id TEXT PRIMARY KEY,
+                original_file_name TEXT NOT NULL,
+                file_created_at TEXT,
+                checksum TEXT,
+                updated_at INTEGER NOT NULL
+            );
+            ",
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    fn open(&self) -> Result<Connection, String> {
+        Connection::open(&self.db_path).map_err(|err| err.to_string())
+    }
+
+    pub fn upsert_assets(&self, assets: &[AssetSummary]) -> Result<(), String> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+
+        for asset in assets {
+            tx.execute(
+                "
+                INSERT INTO assets (id, original_file_name, file_created_at, checksum, updated_at)
+                VALUES (?1, ?2, ?3, ?4, strftime('%s', 'now'))
+                ON CONFLICT(id) DO UPDATE SET
+                    original_file_name = excluded.original_file_name,
+                    file_created_at = excluded.file_created_at,
+                    checksum = excluded.checksum,
+                    updated_at = excluded.updated_at
+                ",
+                params![
+                    asset.id,
+                    asset.original_file_name,
+                    asset.file_created_at,
+                    asset.checksum
+                ],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+
+        tx.commit().map_err(|err| err.to_string())
+    }
+
+    pub fn get_assets(&self, page: u32, page_size: u32) -> Result<Vec<AssetSummary>, String> {
+        let conn = self.open()?;
+        let offset = i64::from(page) * i64::from(page_size);
+
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT id, original_file_name, file_created_at, checksum
+                FROM assets
+                ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                LIMIT ?1 OFFSET ?2
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let rows = stmt
+            .query_map(params![i64::from(page_size), offset], |row| {
+                Ok(AssetSummary {
+                    id: row.get(0)?,
+                    original_file_name: row.get(1)?,
+                    file_created_at: row.get(2)?,
+                    checksum: row.get(3)?,
+                })
+            })
+            .map_err(|err| err.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|err| err.to_string())?);
+        }
+
+        Ok(items)
+    }
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("HOME") {
+        return Some(Path::new(&home).to_path_buf());
+    }
+    None
+}
