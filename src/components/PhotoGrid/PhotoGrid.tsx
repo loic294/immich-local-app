@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import type { AssetSummary } from "../../types";
-import { getAssetThumbnail } from "../../api/tauri";
+import type { AssetSummary, TimelineMonths } from "../../types";
+import { fetchTimelineMonths, getAssetThumbnail } from "../../api/tauri";
 
 type PhotoGridProps = {
   assets: AssetSummary[];
@@ -20,6 +20,16 @@ export function PhotoGrid({
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [activeSrc, setActiveSrc] = useState<string | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [assetRatios, setAssetRatios] = useState<Record<string, number>>({});
+  const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
+  const [scrollThumbHeight, setScrollThumbHeight] = useState(28);
+  const [timelineMonths, setTimelineMonths] = useState<TimelineMonths | null>(
+    null,
+  );
+  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  const scrubberRef = useRef<HTMLDivElement | null>(null);
+  const isScrubbingRef = useRef(false);
 
   useEffect(() => {
     if (!sentinelRef.current) {
@@ -46,6 +56,49 @@ export function PhotoGrid({
     };
   }, [hasNextPage, isFetching, onLoadMore]);
 
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) {
+      return;
+    }
+
+    const updateWidth = () => {
+      setViewportWidth(element.clientWidth);
+    };
+
+    updateWidth();
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    let canceled = false;
+
+    async function loadTimelineMonths() {
+      try {
+        const data = await fetchTimelineMonths();
+        if (!canceled) {
+          setTimelineMonths(data);
+        }
+      } catch {
+        if (!canceled) {
+          setTimelineMonths(null);
+        }
+      }
+    }
+
+    void loadTimelineMonths();
+
+    return () => {
+      canceled = true;
+    };
+  }, [assets.length]);
+
   const loadedCountText = useMemo(() => {
     if (!hasNextPage) {
       return `${assets.length} loaded (all)`;
@@ -56,6 +109,111 @@ export function PhotoGrid({
   const sections = useMemo(() => {
     return groupAssetsByDay(assets);
   }, [assets]);
+
+  const justifiedSections = useMemo(() => {
+    return sections.map((section) => ({
+      ...section,
+      rows: buildJustifiedRows(section.items, viewportWidth, assetRatios),
+    }));
+  }, [assetRatios, sections, viewportWidth]);
+
+  const timelineBounds = useMemo(() => {
+    if (!timelineMonths?.newestMonth || !timelineMonths?.oldestMonth) {
+      return null;
+    }
+
+    const newestIndex = getMonthIndexFromMonthKey(timelineMonths.newestMonth);
+    const oldestIndex = getMonthIndexFromMonthKey(timelineMonths.oldestMonth);
+    if (
+      newestIndex === null ||
+      oldestIndex === null ||
+      newestIndex < oldestIndex
+    ) {
+      return null;
+    }
+
+    return {
+      newestIndex,
+      oldestIndex,
+      range: Math.max(1, newestIndex - oldestIndex),
+    };
+  }, [timelineMonths]);
+
+  const monthDots = useMemo(() => {
+    if (!timelineBounds || !timelineMonths) {
+      return [];
+    }
+
+    return timelineMonths.months
+      .map((monthKey) => {
+        const index = getMonthIndexFromMonthKey(monthKey);
+        if (index === null) {
+          return null;
+        }
+
+        const clamped = Math.min(
+          timelineBounds.newestIndex,
+          Math.max(timelineBounds.oldestIndex, index),
+        );
+        const ratio =
+          (timelineBounds.newestIndex - clamped) / timelineBounds.range;
+        return {
+          monthKey,
+          ratio,
+        };
+      })
+      .filter(
+        (dot): dot is { monthKey: string; ratio: number } => dot !== null,
+      );
+  }, [timelineBounds, timelineMonths]);
+
+  const yearMarkers = useMemo(() => {
+    if (
+      !timelineBounds ||
+      !timelineMonths?.newestMonth ||
+      !timelineMonths?.oldestMonth
+    ) {
+      return [];
+    }
+
+    const newestYear = Number.parseInt(
+      timelineMonths.newestMonth.slice(0, 4),
+      10,
+    );
+    const oldestYear = Number.parseInt(
+      timelineMonths.oldestMonth.slice(0, 4),
+      10,
+    );
+    if (Number.isNaN(newestYear) || Number.isNaN(oldestYear)) {
+      return [];
+    }
+
+    const markers: Array<{ year: number; ratio: number }> = [];
+    for (let year = newestYear; year >= oldestYear; year -= 1) {
+      const januaryIndex = getMonthIndexFromParts(year, 1);
+      if (januaryIndex === null) {
+        continue;
+      }
+
+      const clamped = Math.min(
+        timelineBounds.newestIndex,
+        Math.max(timelineBounds.oldestIndex, januaryIndex),
+      );
+      const ratio =
+        (timelineBounds.newestIndex - clamped) / timelineBounds.range;
+      markers.push({ year, ratio });
+    }
+
+    return markers;
+  }, [timelineBounds, timelineMonths]);
+
+  const currentMonthLabel = useMemo(() => {
+    if (!activeSectionKey) {
+      return null;
+    }
+
+    return getMonthYearLabelFromKey(activeSectionKey);
+  }, [activeSectionKey]);
 
   const hasActive =
     activeIndex !== null && activeIndex >= 0 && activeIndex < assets.length;
@@ -126,6 +284,136 @@ export function PhotoGrid({
     };
   }, [assets.length, hasActive]);
 
+  useEffect(() => {
+    if (sections.length > 0 && !activeSectionKey) {
+      setActiveSectionKey(sections[0].key);
+    }
+  }, [activeSectionKey, sections]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || sections.length === 0) {
+      return;
+    }
+
+    const updateActiveSection = () => {
+      const nextThumbHeight = Math.max(
+        24,
+        Math.round(
+          (viewport.clientHeight / Math.max(1, viewport.scrollHeight)) *
+            viewport.clientHeight,
+        ),
+      );
+      setScrollThumbHeight((prev) =>
+        prev === nextThumbHeight ? prev : nextThumbHeight,
+      );
+
+      const threshold = viewport.scrollTop + 56;
+      let currentKey = sections[0].key;
+
+      for (const section of sections) {
+        const element = sectionRefs.current[section.key];
+        if (!element) {
+          continue;
+        }
+
+        if (element.offsetTop <= threshold) {
+          currentKey = section.key;
+        } else {
+          break;
+        }
+      }
+
+      setActiveSectionKey((prev) => (prev === currentKey ? prev : currentKey));
+    };
+
+    updateActiveSection();
+    viewport.addEventListener("scroll", updateActiveSection, { passive: true });
+
+    return () => {
+      viewport.removeEventListener("scroll", updateActiveSection);
+    };
+  }, [sections]);
+
+  const timelineProgress = useMemo(() => {
+    if (!timelineBounds || !activeSectionKey) {
+      return 0;
+    }
+
+    const activeMonthIndex = getMonthIndexFromSectionKey(activeSectionKey);
+    if (activeMonthIndex === null) {
+      return 0;
+    }
+
+    const clamped = Math.min(
+      timelineBounds.newestIndex,
+      Math.max(timelineBounds.oldestIndex, activeMonthIndex),
+    );
+    return (timelineBounds.newestIndex - clamped) / timelineBounds.range;
+  }, [activeSectionKey, timelineBounds]);
+
+  const scrubberThumbTop = useMemo(() => {
+    const trackHeight = scrubberRef.current?.clientHeight ?? 0;
+    const maxTop = Math.max(0, trackHeight - scrollThumbHeight);
+    return maxTop * timelineProgress;
+  }, [scrollThumbHeight, timelineProgress]);
+
+  const jumpToProgress = (
+    nextProgress: number,
+    behavior: ScrollBehavior = "auto",
+  ) => {
+    const viewport = viewportRef.current;
+    if (!viewport || !timelineBounds || sections.length === 0) {
+      return;
+    }
+
+    const clamped = Math.max(0, Math.min(1, nextProgress));
+    const targetMonthIndex = Math.round(
+      timelineBounds.newestIndex - clamped * timelineBounds.range,
+    );
+
+    let nearestSection: { key: string; distance: number } | null = null;
+    for (const section of sections) {
+      const monthIndex = getMonthIndexFromSectionKey(section.key);
+      if (monthIndex === null) {
+        continue;
+      }
+
+      const distance = Math.abs(monthIndex - targetMonthIndex);
+      if (!nearestSection || distance < nearestSection.distance) {
+        nearestSection = { key: section.key, distance };
+      }
+    }
+
+    if (!nearestSection) {
+      return;
+    }
+
+    const target = sectionRefs.current[nearestSection.key];
+    if (!target) {
+      return;
+    }
+
+    viewport.scrollTo({
+      top: Math.max(0, target.offsetTop - 48),
+      behavior,
+    });
+  };
+
+  const jumpToClientY = (
+    clientY: number,
+    behavior: ScrollBehavior = "auto",
+  ) => {
+    const track = scrubberRef.current;
+    if (!track) {
+      return;
+    }
+
+    const rect = track.getBoundingClientRect();
+    const y = clientY - rect.top;
+    jumpToProgress(y / Math.max(1, rect.height), behavior);
+  };
+
   const activeAsset =
     hasActive && activeIndex !== null ? assets[activeIndex] : null;
 
@@ -163,50 +451,222 @@ export function PhotoGrid({
   };
 
   return (
-    <section className="grid-shell">
-      <div className="grid-stats">{loadedCountText}</div>
+    <section>
+      <div className="mb-1 text-xs text-base-content/60">{loadedCountText}</div>
 
-      <div ref={viewportRef} className="grid-viewport">
-        <div className="justified-grid">
-          {sections.map((section) => (
-            <section key={section.key} className="day-section">
-              <div className="day-separator">
-                <span>{section.label}</span>
-              </div>
+      <div className="relative">
+        <div
+          ref={viewportRef}
+          className="h-[calc(100vh-180px)] overflow-auto pr-14 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+        >
+          <div className="flex flex-col gap-2.5">
+            {justifiedSections.map((section) => (
+              <section
+                key={section.key}
+                className="flex flex-col gap-1"
+                ref={(node) => {
+                  sectionRefs.current[section.key] = node;
+                }}
+              >
+                <div className="sticky top-0 z-10 flex items-center gap-2 bg-base-200 pt-5 pb-3 text-sm font-semibold text-base-content/80">
+                  <span>{section.label}</span>
+                  <div className="h-px flex-1 bg-base-300" />
+                </div>
 
-              <div className="day-grid">
-                {section.items.map((asset) => (
-                  <article key={asset.id} className="asset-card day-item">
-                    <AssetThumbnail
-                      assetId={asset.id}
-                      name={asset.originalFileName}
-                      onOpen={(src) => {
-                        openLightbox(asset.id, src);
-                      }}
-                    />
-                  </article>
-                ))}
-              </div>
-            </section>
-          ))}
+                <div className="flex flex-col gap-1">
+                  {section.rows.map((row, rowIndex) => (
+                    <div
+                      key={`${section.key}-${rowIndex}`}
+                      className="flex gap-1"
+                      style={{ height: `${row.height}px` }}
+                    >
+                      {row.items.map((asset) => (
+                        <article
+                          key={asset.id}
+                          className="overflow-hidden bg-base-300"
+                          style={{
+                            width: `${row.height * getAssetRatio(asset.id, assetRatios)}px`,
+                          }}
+                        >
+                          <AssetThumbnail
+                            assetId={asset.id}
+                            name={asset.originalFileName}
+                            onOpen={(src) => {
+                              openLightbox(asset.id, src);
+                            }}
+                            onRatio={(ratio) => {
+                              setAssetRatios((current) => {
+                                const existing = current[asset.id];
+                                if (
+                                  existing &&
+                                  Math.abs(existing - ratio) < 0.01
+                                ) {
+                                  return current;
+                                }
+
+                                return {
+                                  ...current,
+                                  [asset.id]: ratio,
+                                };
+                              });
+                            }}
+                          />
+                        </article>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+
+          <div ref={sentinelRef} className="h-px" />
         </div>
 
-        <div ref={sentinelRef} className="load-sentinel" />
+        <aside className="absolute inset-y-2 right-0 hidden w-14 xl:block">
+          <div ref={scrubberRef} className="relative h-full">
+            <div
+              role="slider"
+              aria-label="Timeline scrollbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(timelineProgress * 100)}
+              className="absolute inset-0 cursor-ns-resize select-none touch-none"
+              onPointerDown={(event) => {
+                isScrubbingRef.current = true;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                jumpToClientY(event.clientY, "auto");
+              }}
+              onPointerMove={(event) => {
+                if (!isScrubbingRef.current) {
+                  return;
+                }
+                jumpToClientY(event.clientY, "auto");
+              }}
+              onPointerUp={(event) => {
+                if (isScrubbingRef.current) {
+                  jumpToClientY(event.clientY, "auto");
+                }
+                isScrubbingRef.current = false;
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                }
+              }}
+              onPointerCancel={(event) => {
+                isScrubbingRef.current = false;
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                }
+              }}
+            />
+
+            <div className="absolute right-5 top-0 h-full w-px bg-primary/35" />
+
+            {monthDots.map((dot) => (
+              <span
+                key={dot.monthKey}
+                className="absolute right-4 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-primary/55"
+                style={{ top: `${dot.ratio * 100}%` }}
+              />
+            ))}
+
+            <div
+              className="absolute right-3.75 w-0.75 rounded-full bg-primary"
+              style={{
+                top: `${scrubberThumbTop}px`,
+                height: `${scrollThumbHeight}px`,
+              }}
+            />
+
+            {currentMonthLabel ? (
+              <div
+                className="badge badge-sm badge-outline absolute right-0 pointer-events-none border-primary/40 bg-base-100 text-[11px] font-medium text-base-content/80"
+                style={{ top: `${Math.max(4, scrubberThumbTop - 8)}px` }}
+              >
+                {currentMonthLabel}
+              </div>
+            ) : null}
+
+            <div className="absolute inset-0">
+              {yearMarkers.map((marker) => {
+                const topPercent = marker.ratio * 100;
+                const isActiveYear =
+                  activeSectionKey !== null &&
+                  getYearFromKey(activeSectionKey) === marker.year;
+
+                return (
+                  <div
+                    key={marker.year}
+                    className="absolute right-0 -translate-y-1/2"
+                    style={{ top: `${topPercent}%` }}
+                  >
+                    <button
+                      type="button"
+                      className={`mr-1 rounded px-1 text-xs transition-colors ${
+                        isActiveYear
+                          ? "font-semibold text-primary"
+                          : "text-base-content/60 hover:text-base-content"
+                      }`}
+                      onClick={() => {
+                        if (!timelineBounds) {
+                          return;
+                        }
+
+                        const yearStart = getMonthIndexFromParts(
+                          marker.year,
+                          1,
+                        );
+                        if (yearStart === null) {
+                          return;
+                        }
+
+                        const clamped = Math.min(
+                          timelineBounds.newestIndex,
+                          Math.max(timelineBounds.oldestIndex, yearStart),
+                        );
+                        const progress =
+                          (timelineBounds.newestIndex - clamped) /
+                          timelineBounds.range;
+                        jumpToProgress(progress, "smooth");
+                      }}
+                    >
+                      {marker.year}
+                    </button>
+                    <span
+                      className={`absolute -left-1.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${
+                        isActiveYear ? "bg-primary" : "bg-primary/50"
+                      }`}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </aside>
       </div>
 
-      {isFetching ? <p className="status">Loading more assets...</p> : null}
-      {!hasNextPage ? <p className="status">No more assets to load.</p> : null}
+      {isFetching ? (
+        <p className="mt-2 text-xs text-base-content/60">
+          Loading more assets...
+        </p>
+      ) : null}
+      {!hasNextPage ? (
+        <p className="mt-2 text-xs text-base-content/60">
+          No more assets to load.
+        </p>
+      ) : null}
 
       {activeAsset ? (
         <div
-          className="lightbox-overlay"
+          className="group fixed inset-0 z-9999 flex items-center justify-center bg-black p-6"
           role="dialog"
           aria-modal="true"
           onClick={closeLightbox}
         >
           <button
             type="button"
-            className="lightbox-close"
+            className="btn btn-circle btn-sm btn-ghost absolute right-4 top-4 border border-white/20 bg-black/40 text-white"
             aria-label="Close full screen"
             onClick={(event) => {
               event.stopPropagation();
@@ -218,7 +678,7 @@ export function PhotoGrid({
 
           <button
             type="button"
-            className="lightbox-nav lightbox-prev"
+            className="btn btn-circle btn-md btn-ghost absolute left-4 top-1/2 -translate-y-1/2 border border-white/20 bg-black/40 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
             aria-label="Previous image"
             onClick={(event) => {
               event.stopPropagation();
@@ -231,7 +691,7 @@ export function PhotoGrid({
 
           <button
             type="button"
-            className="lightbox-nav lightbox-next"
+            className="btn btn-circle btn-md btn-ghost absolute right-4 top-1/2 -translate-y-1/2 border border-white/20 bg-black/40 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
             aria-label="Next image"
             onClick={(event) => {
               event.stopPropagation();
@@ -243,7 +703,7 @@ export function PhotoGrid({
           </button>
 
           <img
-            className="lightbox-image"
+            className="max-h-full max-w-full object-contain"
             src={activeSrc ?? ""}
             alt={activeAsset.originalFileName}
             onClick={(event) => event.stopPropagation()}
@@ -312,12 +772,30 @@ function getAssetDay(fileCreatedAt: string | null): {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   const key = `${y}-${m}-${d}`;
-  const label = date.toLocaleDateString(undefined, {
-    weekday: "short",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+
+  const today = new Date();
+  const todayStart = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const dateStart = new Date(y, date.getMonth(), date.getDate());
+  const diffMs = todayStart.getTime() - dateStart.getTime();
+  const diffDays = Math.round(diffMs / 86_400_000);
+
+  let label: string;
+  if (diffDays === 0) {
+    label = "Today";
+  } else if (diffDays === 1) {
+    label = "Yesterday";
+  } else {
+    label = date.toLocaleDateString(undefined, {
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
 
   return { key, label };
 }
@@ -326,10 +804,12 @@ function AssetThumbnail({
   assetId,
   name,
   onOpen,
+  onRatio,
 }: {
   assetId: string;
   name: string;
   onOpen: (src: string) => void;
+  onRatio: (ratio: number) => void;
 }) {
   const [src, setSrc] = useState<string | null>(null);
 
@@ -357,17 +837,149 @@ function AssetThumbnail({
   }, [assetId]);
 
   if (!src) {
-    return <div className="thumb thumb-placeholder">Loading preview...</div>;
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-base-300 text-xs text-base-content/60">
+        Loading preview...
+      </div>
+    );
   }
 
   return (
     <button
       type="button"
-      className="thumb-button"
+      className="block h-full w-full cursor-zoom-in"
       onClick={() => onOpen(src)}
       aria-label={`Open ${name} in full screen`}
     >
-      <img className="thumb" src={src} alt={name} loading="lazy" />
+      <img
+        className="h-full w-full object-contain transition-transform duration-200 hover:scale-105"
+        src={src}
+        alt={name}
+        loading="lazy"
+        onLoad={(event) => {
+          const image = event.currentTarget;
+          if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+            onRatio(image.naturalWidth / image.naturalHeight);
+          }
+        }}
+      />
     </button>
   );
+}
+
+function getAssetRatio(
+  assetId: string,
+  ratios: Record<string, number>,
+): number {
+  return ratios[assetId] ?? 4 / 3;
+}
+
+function buildJustifiedRows(
+  items: AssetSummary[],
+  containerWidth: number,
+  ratios: Record<string, number>,
+): Array<{ items: AssetSummary[]; height: number }> {
+  if (containerWidth <= 0 || items.length === 0) {
+    return [];
+  }
+
+  const gap = 4;
+  const targetRowHeight = containerWidth < 700 ? 120 : 210;
+  const rows: Array<{ items: AssetSummary[]; height: number }> = [];
+
+  let rowItems: AssetSummary[] = [];
+  let rowRatioSum = 0;
+
+  for (const item of items) {
+    const ratio = getAssetRatio(item.id, ratios);
+    rowItems.push(item);
+    rowRatioSum += ratio;
+
+    const projectedWidth =
+      rowRatioSum * targetRowHeight + gap * (rowItems.length - 1);
+    if (projectedWidth >= containerWidth && rowItems.length > 1) {
+      const height = Math.max(
+        90,
+        Math.min(
+          280,
+          (containerWidth - gap * (rowItems.length - 1)) / rowRatioSum,
+        ),
+      );
+      rows.push({ items: rowItems, height });
+      rowItems = [];
+      rowRatioSum = 0;
+    }
+  }
+
+  if (rowItems.length > 0) {
+    rows.push({
+      items: rowItems,
+      height: targetRowHeight,
+    });
+  }
+
+  return rows;
+}
+
+function getYearFromKey(key: string): number | null {
+  const yearPart = key.split("-")[0];
+  const year = Number.parseInt(yearPart ?? "", 10);
+  return Number.isNaN(year) ? null : year;
+}
+
+function getMonthIndexFromParts(year: number, month: number): number | null {
+  if (!Number.isFinite(year) || !Number.isFinite(month)) {
+    return null;
+  }
+
+  if (month < 1 || month > 12) {
+    return null;
+  }
+
+  return year * 12 + (month - 1);
+}
+
+function getMonthIndexFromMonthKey(key: string): number | null {
+  const [yearRaw, monthRaw] = key.split("-");
+  const year = Number.parseInt(yearRaw ?? "", 10);
+  const month = Number.parseInt(monthRaw ?? "", 10);
+  if (Number.isNaN(year) || Number.isNaN(month)) {
+    return null;
+  }
+
+  return getMonthIndexFromParts(year, month);
+}
+
+function getMonthIndexFromSectionKey(key: string): number | null {
+  const [yearRaw, monthRaw] = key.split("-");
+  const year = Number.parseInt(yearRaw ?? "", 10);
+  const month = Number.parseInt(monthRaw ?? "", 10);
+  if (Number.isNaN(year) || Number.isNaN(month)) {
+    return null;
+  }
+
+  return getMonthIndexFromParts(year, month);
+}
+
+function getMonthYearLabelFromKey(key: string): string {
+  const [yearRaw, monthRaw, dayRaw] = key.split("-");
+  const year = Number.parseInt(yearRaw ?? "", 10);
+  const month = Number.parseInt(monthRaw ?? "", 10);
+  const day = Number.parseInt(dayRaw ?? "", 10);
+
+  if (
+    Number.isNaN(year) ||
+    Number.isNaN(month) ||
+    Number.isNaN(day) ||
+    month < 1 ||
+    month > 12
+  ) {
+    return "";
+  }
+
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    year: "numeric",
+  });
 }

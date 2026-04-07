@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use chrono::Local;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,6 +24,17 @@ pub struct AssetSummary {
 pub struct AssetListResult {
     pub items: Vec<AssetSummary>,
     pub has_next_page: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySummary {
+    pub id: String,
+    pub title: Option<String>,
+    pub memory_at: Option<String>,
+    pub year: Option<i32>,
+    #[serde(default)]
+    pub assets: Vec<AssetSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,7 +93,12 @@ impl ImmichClient {
         Ok(session)
     }
 
-    pub async fn get_assets(&self, page: u32, page_size: u32) -> Result<AssetListResult, String> {
+    pub async fn get_assets(
+        &self,
+        page: u32,
+        page_size: u32,
+        search_term: Option<&str>,
+    ) -> Result<AssetListResult, String> {
         let session = self
             .session
             .lock()
@@ -89,7 +106,47 @@ impl ImmichClient {
             .clone()
             .ok_or_else(|| "not authenticated".to_string())?;
 
-        self.fetch_assets_inner(&session, page, page_size).await
+        self.fetch_assets_inner(&session, page, page_size, search_term)
+            .await
+    }
+
+    pub async fn get_memories(&self) -> Result<Vec<MemorySummary>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let request_date = Local::now().format("%Y-%m-%dT00:00:00").to_string();
+        let url = format!("{}/api/memories", session.server_url);
+
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .query(&[("for", request_date.as_str())])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "memory fetch failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        parse_memories(&body)
     }
 
     pub async fn get_asset_thumbnail_data_url(&self, asset_id: &str) -> Result<String, String> {
@@ -154,6 +211,7 @@ impl ImmichClient {
         session: &AuthSession,
         page: u32,
         page_size: u32,
+        search_term: Option<&str>,
     ) -> Result<AssetListResult, String> {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -164,15 +222,21 @@ impl ImmichClient {
         // Immich metadata search is the canonical paginated endpoint.
         let page_number = page + 1;
         let search_url = format!("{}/api/search/metadata", session.server_url);
+        let mut search_payload = serde_json::json!({
+            "page": page_number,
+            "size": page_size,
+            "withExif": true
+        });
+
+        if let Some(term) = search_term.map(str::trim).filter(|value| !value.is_empty()) {
+            search_payload["originalFileName"] = Value::String(term.to_string());
+        }
 
         let response = self
             .client
             .post(search_url)
             .headers(headers.clone())
-            .json(&serde_json::json!({
-                "page": page_number,
-                "size": page_size
-            }))
+            .json(&search_payload)
             .send()
             .await
             .map_err(|err| err.to_string())?;
@@ -269,6 +333,23 @@ fn parse_asset_list(payload: &str) -> Result<AssetListResult, String> {
     }
 
     Err("unknown asset payload shape".to_string())
+}
+
+fn parse_memories(payload: &str) -> Result<Vec<MemorySummary>, String> {
+    if let Ok(mut memories) = serde_json::from_str::<Vec<MemorySummary>>(payload) {
+        memories.retain(|memory| !memory.assets.is_empty());
+        return Ok(memories);
+    }
+
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    if let Some(items) = value.get("items") {
+        let mut memories =
+            serde_json::from_value::<Vec<MemorySummary>>(items.clone()).map_err(|err| err.to_string())?;
+        memories.retain(|memory| !memory.assets.is_empty());
+        return Ok(memories);
+    }
+
+    Err("unknown memories payload shape".to_string())
 }
 
 fn extract_has_next_page(value: &Value) -> bool {

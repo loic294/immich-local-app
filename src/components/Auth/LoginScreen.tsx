@@ -26,39 +26,52 @@ export function LoginScreen({
   }
 
   return (
-    <section className="card">
-      <h1>Connect to Immich</h1>
-      <p className="subtitle">
-        Milestone 1: authenticate and fetch first asset page.
-      </p>
+    <section className="card mx-auto mt-20 w-full max-w-md border border-base-300 bg-base-100 shadow-xl">
+      <div className="card-body">
+        <h1 className="card-title text-2xl">Connect to Immich</h1>
+        <p className="text-sm text-base-content/70">
+          Milestone 1: authenticate and fetch first asset page.
+        </p>
 
-      <form onSubmit={handleSubmit} className="form">
-        <label>
-          Server URL
-          <input
-            required
-            type="url"
-            value={serverUrl}
-            onChange={(event) => setServerUrl(event.target.value)}
-          />
-        </label>
-        <label>
-          API Key
-          <input
-            required
-            type="password"
-            placeholder="Enter your Immich API key"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-          />
-        </label>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <label className="form-control w-full">
+            <span className="label-text mb-1">Server URL</span>
+            <input
+              required
+              type="url"
+              value={serverUrl}
+              className="input input-bordered w-full"
+              onChange={(event) => setServerUrl(event.target.value)}
+            />
+          </label>
 
-        <button disabled={isLoading} type="submit">
-          {isLoading ? "Connecting..." : "Connect"}
-        </button>
-      </form>
+          <label className="form-control w-full">
+            <span className="label-text mb-1">API Key</span>
+            <input
+              required
+              type="password"
+              placeholder="Enter your Immich API key"
+              value={apiKey}
+              className="input input-bordered w-full"
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </label>
 
-      {error ? <p className="error">{error}</p> : null}
+          <button
+            disabled={isLoading}
+            type="submit"
+            className="btn btn-primary w-full"
+          >
+            {isLoading ? "Connecting..." : "Connect"}
+          </button>
+        </form>
+
+        {error ? (
+          <div role="alert" className="alert alert-error alert-soft text-sm">
+            <span>{error}</span>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

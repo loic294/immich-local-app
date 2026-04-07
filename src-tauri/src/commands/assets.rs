@@ -12,15 +12,24 @@ pub struct AssetPage {
     pub has_next_page: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineMonths {
+    pub newest_month: Option<String>,
+    pub oldest_month: Option<String>,
+    pub months: Vec<String>,
+}
+
 #[tauri::command]
 pub async fn fetch_assets(
     page: u32,
     page_size: u32,
+    search: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
     let result = state
         .immich
-        .get_assets(page, page_size)
+        .get_assets(page, page_size, search.as_deref())
         .await
         .map_err(|err| format!("fetch assets failed: {err}"))?;
 
@@ -66,4 +75,20 @@ pub async fn get_asset_thumbnail(
         .get_asset_thumbnail_data_url(&asset_id)
         .await
         .map_err(|err| format!("thumbnail load failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn get_timeline_months(
+    state: tauri::State<'_, AppState>,
+) -> Result<TimelineMonths, String> {
+    let (newest_month, oldest_month, months) = state
+        .db
+        .get_timeline_months()
+        .map_err(|err| format!("timeline query failed: {err}"))?;
+
+    Ok(TimelineMonths {
+        newest_month,
+        oldest_month,
+        months,
+    })
 }

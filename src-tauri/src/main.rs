@@ -2,8 +2,9 @@ mod commands;
 mod db;
 mod services;
 
-use commands::assets::{fetch_assets, get_asset_thumbnail, get_cached_assets};
+use commands::assets::{fetch_assets, get_asset_thumbnail, get_cached_assets, get_timeline_months};
 use commands::auth::authenticate;
+use commands::memories::fetch_memories;
 use services::db::Database;
 use services::immich_client::ImmichClient;
 
@@ -23,7 +24,9 @@ pub fn main() {
             authenticate,
             fetch_assets,
             get_cached_assets,
-            get_asset_thumbnail
+            get_asset_thumbnail,
+            get_timeline_months,
+            fetch_memories
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -3,12 +3,13 @@ import { fetchAssets } from "../api/tauri";
 
 const PAGE_SIZE = 30;
 
-export function useAssets(enabled: boolean) {
+export function useAssets(enabled: boolean, searchTerm: string) {
   return useInfiniteQuery({
-    queryKey: ["assets"],
+    queryKey: ["assets", searchTerm],
     enabled,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => fetchAssets(pageParam, PAGE_SIZE),
+    queryFn: ({ pageParam }) =>
+      fetchAssets(pageParam, PAGE_SIZE, searchTerm.trim() || null),
     getNextPageParam: (lastPage, allPages) => {
       if (lastPage.hasNextPage) {
         return allPages.length;

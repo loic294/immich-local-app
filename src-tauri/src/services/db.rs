@@ -104,6 +104,36 @@ impl Database {
 
         Ok(items)
     }
+
+    pub fn get_timeline_months(&self) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
+        let conn = self.open()?;
+
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT DISTINCT substr(file_created_at, 1, 7) AS month_key
+                FROM assets
+                WHERE file_created_at IS NOT NULL
+                  AND length(file_created_at) >= 7
+                ORDER BY month_key DESC
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?;
+
+        let mut months = Vec::new();
+        for row in rows {
+            months.push(row.map_err(|err| err.to_string())?);
+        }
+
+        let newest_month = months.first().cloned();
+        let oldest_month = months.last().cloned();
+
+        Ok((newest_month, oldest_month, months))
+    }
 }
 
 fn dirs_home() -> Option<PathBuf> {

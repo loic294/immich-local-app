@@ -11,3 +11,17 @@ export type AssetPage = {
   items: AssetSummary[];
   hasNextPage: boolean;
 };
+
+export type MemorySummary = {
+  id: string;
+  title: string | null;
+  memoryAt: string | null;
+  year: number | null;
+  assets: AssetSummary[];
+};
+
+export type TimelineMonths = {
+  newestMonth: string | null;
+  oldestMonth: string | null;
+  months: string[];
+};
