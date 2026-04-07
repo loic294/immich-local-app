@@ -6,6 +6,7 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct AuthResponse {
     pub access_token_preview: String,
+    pub user_id: String,
 }
 
 #[tauri::command]
@@ -28,5 +29,6 @@ pub async fn authenticate(
 
     Ok(AuthResponse {
         access_token_preview: preview,
+        user_id: session.user_id,
     })
 }

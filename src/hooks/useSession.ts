@@ -4,6 +4,7 @@ import { authenticate } from "../api/tauri";
 export type Session = {
   serverUrl: string;
   apiKey: string;
+  userId: string;
 };
 
 const AUTH_STORAGE_KEY = "immichLocalApp.auth";
@@ -18,16 +19,19 @@ function readStoredSession(): Session | null {
     const parsed = JSON.parse(raw) as Partial<Session>;
     if (
       typeof parsed.serverUrl !== "string" ||
-      typeof parsed.apiKey !== "string" ||
-      !parsed.serverUrl ||
-      !parsed.apiKey
+      typeof parsed.apiKey !== "string"
     ) {
+      return null;
+    }
+
+    if (!parsed.serverUrl || !parsed.apiKey) {
       return null;
     }
 
     return {
       serverUrl: parsed.serverUrl,
       apiKey: parsed.apiKey,
+      userId: typeof parsed.userId === "string" ? parsed.userId : "",
     };
   } catch {
     return null;
@@ -75,9 +79,16 @@ export function useSession(): UseSessionReturn {
       setError(null);
 
       try {
-        await authenticate(sessionToRestore.serverUrl, sessionToRestore.apiKey);
+        const authResponse = await authenticate(
+          sessionToRestore.serverUrl,
+          sessionToRestore.apiKey,
+        );
         if (!cancelled) {
-          setSession(sessionToRestore);
+          setSession({
+            serverUrl: sessionToRestore.serverUrl,
+            apiKey: sessionToRestore.apiKey,
+            userId: authResponse.userId,
+          });
         }
       } catch {
         clearPersistedSession();
@@ -101,8 +112,12 @@ export function useSession(): UseSessionReturn {
     setIsAuthenticating(true);
 
     try {
-      await authenticate(input.serverUrl, input.apiKey);
-      const nextSession = { serverUrl: input.serverUrl, apiKey: input.apiKey };
+      const authResponse = await authenticate(input.serverUrl, input.apiKey);
+      const nextSession = {
+        serverUrl: input.serverUrl,
+        apiKey: input.apiKey,
+        userId: authResponse.userId,
+      };
       persistSession(nextSession);
       setSession(nextSession);
     } catch (err) {

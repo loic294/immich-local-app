@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -7,6 +9,7 @@ use chrono::Local;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 const IMMICH_API_KEY_HEADER: &str = "x-api-key";
@@ -18,6 +21,10 @@ pub struct AssetSummary {
     pub original_file_name: String,
     pub file_created_at: Option<String>,
     pub checksum: Option<String>,
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub duration: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,16 +44,43 @@ pub struct MemorySummary {
     pub assets: Vec<AssetSummary>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumOwnerSummary {
+    pub id: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumSummary {
+    pub id: String,
+    pub album_name: String,
+    pub album_thumbnail_asset_id: Option<String>,
+    pub owner_id: String,
+    #[serde(default)]
+    pub shared: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub asset_count: Option<u32>,
+    pub owner: Option<AlbumOwnerSummary>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AuthSession {
     pub server_url: String,
     pub access_token: String,
     pub refresh_token: Option<String>,
+    pub user_id: String,
 }
 
 pub struct ImmichClient {
     client: reqwest::Client,
     session: Mutex<Option<AuthSession>>,
+    playback_downloads: Arc<Mutex<HashSet<String>>>,
 }
 
 impl ImmichClient {
@@ -54,6 +88,7 @@ impl ImmichClient {
         Self {
             client: reqwest::Client::new(),
             session: Mutex::new(None),
+            playback_downloads: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -81,10 +116,19 @@ impl ImmichClient {
             return Err(format!("api key validation failed with status {}", response.status()));
         }
 
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        let value: Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
+        let user_id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "authentication response missing user id".to_string())?
+            .to_string();
+
         let session = AuthSession {
             server_url: normalize_base(server_url),
             access_token: api_key.to_string(),
             refresh_token: None,
+            user_id,
         };
 
         let mut guard = self.session.lock().await;
@@ -149,6 +193,183 @@ impl ImmichClient {
         parse_memories(&body)
     }
 
+    pub async fn get_albums(&self) -> Result<Vec<AlbumSummary>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let owned_url = format!("{}/api/albums", session.server_url);
+        let shared_url = format!("{}/api/albums", session.server_url);
+
+        let owned_response = self
+            .client
+            .get(owned_url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let owned_status = owned_response.status();
+        let owned_body = owned_response.text().await.map_err(|err| err.to_string())?;
+        if !owned_status.is_success() {
+            return Err(format!(
+                "album fetch failed with status {} ({})",
+                owned_status,
+                truncate_for_log(&owned_body)
+            ));
+        }
+
+        let shared_response = self
+            .client
+            .get(shared_url)
+            .headers(headers)
+            .query(&[("shared", "true")])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let shared_status = shared_response.status();
+        let shared_body = shared_response.text().await.map_err(|err| err.to_string())?;
+        if !shared_status.is_success() {
+            return Err(format!(
+                "shared album fetch failed with status {} ({})",
+                shared_status,
+                truncate_for_log(&shared_body)
+            ));
+        }
+
+        let mut albums = parse_album_list(&owned_body)?;
+        let shared_albums = parse_album_list(&shared_body)?;
+
+        let mut seen = HashSet::new();
+        albums.retain(|album| seen.insert(album.id.clone()));
+        for album in shared_albums {
+            if seen.insert(album.id.clone()) {
+                albums.push(album);
+            }
+        }
+
+        Ok(albums)
+    }
+
+    pub async fn get_unique_original_paths(&self) -> Result<Vec<String>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/view/folder/unique-paths", session.server_url);
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "folder path fetch failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        serde_json::from_str::<Vec<String>>(&body).map_err(|err| err.to_string())
+    }
+
+    pub async fn get_album_assets(&self, album_id: &str) -> Result<Vec<AssetSummary>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/albums/{}", session.server_url, album_id);
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .query(&[("withoutAssets", "false")])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "album detail fetch failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        parse_album_assets(&body)
+    }
+
+    pub async fn get_assets_by_original_path(&self, path: &str) -> Result<Vec<AssetSummary>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/view/folder", session.server_url);
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .query(&[("path", path)])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "folder asset fetch failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        let result = parse_asset_list(&body)?;
+        Ok(result.items)
+    }
+
     pub async fn get_asset_thumbnail_data_url(&self, asset_id: &str) -> Result<String, String> {
         let session = self
             .session
@@ -204,6 +425,96 @@ impl ImmichClient {
         fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
 
         Ok(to_data_url(&content_type, bytes.as_ref()))
+    }
+
+    pub async fn get_asset_playback_file_path(&self, asset_id: &str) -> Result<String, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let cache_dir = video_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+
+        if let Some(cached_path) = read_cached_video_path(&cache_dir, asset_id)? {
+            return Ok(cached_path);
+        }
+
+        let output_path = cache_dir.join(format!("{}.mp4", asset_id));
+        if !output_path.exists() {
+            let _ = fs::File::create(&output_path).map_err(|err| err.to_string())?;
+        }
+
+        let should_spawn = {
+            let mut downloads = self.playback_downloads.lock().await;
+            downloads.insert(asset_id.to_string())
+        };
+
+        if should_spawn {
+            let client = self.client.clone();
+            let access_token = session.access_token.clone();
+            let server_url = session.server_url.clone();
+            let asset_id_string = asset_id.to_string();
+            let path_for_download = output_path.clone();
+            let downloads = Arc::clone(&self.playback_downloads);
+
+            tokio::spawn(async move {
+                let mut headers = HeaderMap::new();
+                if let Ok(header_value) = HeaderValue::from_str(&access_token) {
+                    headers.insert(IMMICH_API_KEY_HEADER, header_value);
+                } else {
+                    let mut guard = downloads.lock().await;
+                    guard.remove(&asset_id_string);
+                    return;
+                }
+
+                let url = format!(
+                    "{}/api/assets/{}/video/playback",
+                    server_url, asset_id_string
+                );
+
+                let response_result = client.get(url).headers(headers).send().await;
+                let mut response = match response_result {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let mut guard = downloads.lock().await;
+                        guard.remove(&asset_id_string);
+                        return;
+                    }
+                };
+
+                if !response.status().is_success() {
+                    let mut guard = downloads.lock().await;
+                    guard.remove(&asset_id_string);
+                    return;
+                }
+
+                let file_result = tokio::fs::File::create(&path_for_download).await;
+                let mut file = match file_result {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let mut guard = downloads.lock().await;
+                        guard.remove(&asset_id_string);
+                        return;
+                    }
+                };
+
+                while let Ok(Some(chunk)) = response.chunk().await {
+                    if file.write_all(&chunk).await.is_err() {
+                        break;
+                    }
+                }
+
+                let _ = file.flush().await;
+
+                let mut guard = downloads.lock().await;
+                guard.remove(&asset_id_string);
+            });
+        }
+
+        Ok(output_path.to_string_lossy().to_string())
     }
 
     async fn fetch_assets_inner(
@@ -296,7 +607,7 @@ fn parse_asset_list(payload: &str) -> Result<AssetListResult, String> {
     if let Ok(items) = serde_json::from_str::<Vec<AssetSummary>>(payload) {
         return Ok(AssetListResult {
             has_next_page: !items.is_empty(),
-            items,
+            items: items.into_iter().map(normalize_asset_summary).collect(),
         });
     }
 
@@ -304,8 +615,7 @@ fn parse_asset_list(payload: &str) -> Result<AssetListResult, String> {
     let has_next_page = extract_has_next_page(&value);
 
     if let Some(items) = value.get("items") {
-        let parsed =
-            serde_json::from_value::<Vec<AssetSummary>>(items.clone()).map_err(|err| err.to_string())?;
+        let parsed = parse_asset_array(items)?;
         return Ok(AssetListResult {
             has_next_page,
             items: parsed,
@@ -314,8 +624,7 @@ fn parse_asset_list(payload: &str) -> Result<AssetListResult, String> {
 
     if let Some(assets) = value.get("assets") {
         if assets.is_array() {
-            let parsed =
-                serde_json::from_value::<Vec<AssetSummary>>(assets.clone()).map_err(|err| err.to_string())?;
+            let parsed = parse_asset_array(assets)?;
             return Ok(AssetListResult {
                 has_next_page,
                 items: parsed,
@@ -323,8 +632,7 @@ fn parse_asset_list(payload: &str) -> Result<AssetListResult, String> {
         }
 
         if let Some(items) = assets.get("items") {
-            let parsed = serde_json::from_value::<Vec<AssetSummary>>(items.clone())
-                .map_err(|err| err.to_string())?;
+            let parsed = parse_asset_array(items)?;
             return Ok(AssetListResult {
                 has_next_page,
                 items: parsed,
@@ -350,6 +658,166 @@ fn parse_memories(payload: &str) -> Result<Vec<MemorySummary>, String> {
     }
 
     Err("unknown memories payload shape".to_string())
+}
+
+fn parse_album_list(payload: &str) -> Result<Vec<AlbumSummary>, String> {
+    if let Ok(items) = serde_json::from_str::<Vec<AlbumSummary>>(payload) {
+        return Ok(items);
+    }
+
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    if let Some(items) = value.get("items") {
+        return serde_json::from_value::<Vec<AlbumSummary>>(items.clone()).map_err(|err| err.to_string());
+    }
+
+    Err("unknown album payload shape".to_string())
+}
+
+fn parse_album_assets(payload: &str) -> Result<Vec<AssetSummary>, String> {
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    let assets = value
+        .get("assets")
+        .ok_or_else(|| "album response missing assets".to_string())?;
+
+    if assets.is_array() {
+        return parse_asset_array(assets);
+    }
+
+    if let Some(items) = assets.get("items") {
+        return parse_asset_array(items);
+    }
+
+    Err("unknown album assets payload shape".to_string())
+}
+
+fn parse_asset_array(value: &Value) -> Result<Vec<AssetSummary>, String> {
+    let array = value
+        .as_array()
+        .ok_or_else(|| "asset payload is not an array".to_string())?;
+
+    let mut result = Vec::with_capacity(array.len());
+    for item in array {
+        if let Ok(parsed) = serde_json::from_value::<AssetSummary>(item.clone()) {
+            result.push(enrich_asset_summary_from_value(parsed, item));
+            continue;
+        }
+
+        result.push(parse_asset_summary_from_value(item)?);
+    }
+
+    Ok(result)
+}
+
+fn enrich_asset_summary_from_value(mut asset: AssetSummary, value: &Value) -> AssetSummary {
+    if asset.r#type.is_none() {
+        asset.r#type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("assetType").and_then(Value::as_str))
+            .map(str::to_string);
+    }
+
+    if asset.duration.is_none() {
+        asset.duration = value
+            .get("duration")
+            .and_then(value_to_string)
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("duration"))
+                    .and_then(value_to_string)
+            })
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("videoDurationInSeconds"))
+                    .and_then(value_to_string)
+            });
+    }
+
+    normalize_asset_summary(asset)
+}
+
+fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "asset missing id".to_string())?
+        .to_string();
+
+    let original_file_name = value
+        .get("originalFileName")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("filename").and_then(Value::as_str))
+        .unwrap_or("unknown")
+        .to_string();
+
+    let file_created_at = value
+        .get("fileCreatedAt")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let checksum = value
+        .get("checksum")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let mut asset = AssetSummary {
+        id,
+        original_file_name,
+        file_created_at,
+        checksum,
+        r#type: value
+            .get("type")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("assetType").and_then(Value::as_str))
+            .map(str::to_string),
+        duration: value
+            .get("duration")
+            .and_then(value_to_string)
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("duration"))
+                    .and_then(value_to_string)
+            })
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("videoDurationInSeconds"))
+                    .and_then(value_to_string)
+            }),
+    };
+
+    asset = normalize_asset_summary(asset);
+    Ok(asset)
+}
+
+fn normalize_asset_summary(mut asset: AssetSummary) -> AssetSummary {
+    if asset.r#type.is_none() {
+        let lower = asset.original_file_name.to_lowercase();
+        if lower.ends_with(".mp4")
+            || lower.ends_with(".mov")
+            || lower.ends_with(".webm")
+            || lower.ends_with(".m4v")
+            || lower.ends_with(".mkv")
+            || lower.ends_with(".avi")
+        {
+            asset.r#type = Some("VIDEO".to_string());
+        }
+    }
+
+    asset
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    if let Some(string_value) = value.as_str() {
+        return Some(string_value.to_string());
+    }
+
+    value
+        .as_f64()
+        .map(|number| number.to_string())
 }
 
 fn extract_has_next_page(value: &Value) -> bool {
@@ -399,6 +867,14 @@ fn thumbnail_cache_dir() -> Result<PathBuf, String> {
         .join("thumbnails"))
 }
 
+    fn video_cache_dir() -> Result<PathBuf, String> {
+        let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
+        Ok(Path::new(&home)
+        .join(".config")
+        .join("immich-local-app")
+        .join("videos"))
+    }
+
 fn read_cached_thumbnail(cache_dir: &Path, asset_id: &str) -> Result<Option<String>, String> {
     for ext in ["jpg", "jpeg", "webp", "png"] {
         let candidate = cache_dir.join(format!("{}.{}", asset_id, ext));
@@ -410,6 +886,17 @@ fn read_cached_thumbnail(cache_dir: &Path, asset_id: &str) -> Result<Option<Stri
                 _ => "image/jpeg",
             };
             return Ok(Some(to_data_url(content_type, &data)));
+        }
+    }
+
+    Ok(None)
+}
+
+fn read_cached_video_path(cache_dir: &Path, asset_id: &str) -> Result<Option<String>, String> {
+    for ext in ["mp4", "webm", "mov", "m4v"] {
+        let candidate = cache_dir.join(format!("{}.{}", asset_id, ext));
+        if candidate.exists() {
+            return Ok(Some(candidate.to_string_lossy().to_string()));
         }
     }
 

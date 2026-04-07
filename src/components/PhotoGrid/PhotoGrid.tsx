@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, CirclePlay, X } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { AssetSummary, TimelineMonths } from "../../types";
-import { fetchTimelineMonths, getAssetThumbnail } from "../../api/tauri";
+import {
+  fetchTimelineMonths,
+  getAssetPlayback,
+  getAssetThumbnail,
+} from "../../api/tauri";
 
 type PhotoGridProps = {
   assets: AssetSummary[];
@@ -22,6 +27,10 @@ export function PhotoGrid({
   const [activeSrc, setActiveSrc] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [assetRatios, setAssetRatios] = useState<Record<string, number>>({});
+  const [videoDurations, setVideoDurations] = useState<Record<string, number>>(
+    {},
+  );
+  const [showVideoDebug, setShowVideoDebug] = useState(false);
   const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
   const [scrollThumbHeight, setScrollThumbHeight] = useState(28);
   const [timelineMonths, setTimelineMonths] = useState<TimelineMonths | null>(
@@ -30,6 +39,16 @@ export function PhotoGrid({
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
   const scrubberRef = useRef<HTMLDivElement | null>(null);
   const isScrubbingRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    setShowVideoDebug(
+      window.localStorage.getItem("immichDebugVideoMeta") === "1",
+    );
+  }, []);
 
   useEffect(() => {
     if (!sentinelRef.current) {
@@ -226,11 +245,13 @@ export function PhotoGrid({
     let cancelled = false;
     const asset = assets[activeIndex];
 
-    async function loadActiveImage() {
+    async function loadActiveMedia() {
       try {
-        const value = await getAssetThumbnail(asset.id);
+        const value = isVideoAsset(asset)
+          ? await getAssetPlayback(asset.id)
+          : await getAssetThumbnail(asset.id);
         if (!cancelled) {
-          setActiveSrc(value);
+          setActiveSrc(isVideoAsset(asset) ? toPlayableSrc(value) : value);
         }
       } catch {
         if (!cancelled) {
@@ -239,7 +260,7 @@ export function PhotoGrid({
       }
     }
 
-    void loadActiveImage();
+    void loadActiveMedia();
 
     return () => {
       cancelled = true;
@@ -417,14 +438,14 @@ export function PhotoGrid({
   const activeAsset =
     hasActive && activeIndex !== null ? assets[activeIndex] : null;
 
-  const openLightbox = (assetId: string, src: string) => {
+  const openLightbox = (assetId: string) => {
     const index = assets.findIndex((asset) => asset.id === assetId);
     if (index < 0) {
       return;
     }
 
     setActiveIndex(index);
-    setActiveSrc(src);
+    setActiveSrc(null);
   };
 
   const closeLightbox = () => {
@@ -490,10 +511,9 @@ export function PhotoGrid({
                           }}
                         >
                           <AssetThumbnail
-                            assetId={asset.id}
-                            name={asset.originalFileName}
-                            onOpen={(src) => {
-                              openLightbox(asset.id, src);
+                            asset={asset}
+                            onOpen={() => {
+                              openLightbox(asset.id);
                             }}
                             onRatio={(ratio) => {
                               setAssetRatios((current) => {
@@ -511,6 +531,24 @@ export function PhotoGrid({
                                 };
                               });
                             }}
+                            durationSeconds={videoDurations[asset.id]}
+                            onDuration={(seconds) => {
+                              setVideoDurations((current) => {
+                                const existing = current[asset.id];
+                                if (
+                                  typeof existing === "number" &&
+                                  Math.abs(existing - seconds) < 0.2
+                                ) {
+                                  return current;
+                                }
+
+                                return {
+                                  ...current,
+                                  [asset.id]: seconds,
+                                };
+                              });
+                            }}
+                            showDebug={showVideoDebug}
                           />
                         </article>
                       ))}
@@ -702,12 +740,39 @@ export function PhotoGrid({
             <ChevronRight size={28} />
           </button>
 
-          <img
-            className="max-h-full max-w-full object-contain"
-            src={activeSrc ?? ""}
-            alt={activeAsset.originalFileName}
-            onClick={(event) => event.stopPropagation()}
-          />
+          {isVideoAsset(activeAsset) ? (
+            activeSrc ? (
+              <video
+                className="max-h-full max-w-full object-contain"
+                src={activeSrc}
+                controls
+                autoPlay
+                playsInline
+                onError={(event) => {
+                  const video = event.currentTarget;
+                  console.error("[video-fullscreen-error]", {
+                    assetId: activeAsset.id,
+                    src: video.currentSrc,
+                    errorCode: video.error?.code,
+                    errorMessage: video.error?.message,
+                  });
+                }}
+                onClick={(event) => event.stopPropagation()}
+              />
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-white/80">
+                <span className="loading loading-spinner loading-sm" />
+                Loading video...
+              </div>
+            )
+          ) : (
+            <img
+              className="max-h-full max-w-full object-contain"
+              src={activeSrc ?? ""}
+              alt={activeAsset.originalFileName}
+              onClick={(event) => event.stopPropagation()}
+            />
+          )}
         </div>
       ) : null}
     </section>
@@ -801,24 +866,35 @@ function getAssetDay(fileCreatedAt: string | null): {
 }
 
 function AssetThumbnail({
-  assetId,
-  name,
+  asset,
   onOpen,
   onRatio,
+  durationSeconds,
+  onDuration,
+  showDebug,
 }: {
-  assetId: string;
-  name: string;
-  onOpen: (src: string) => void;
+  asset: AssetSummary;
+  onOpen: () => void;
   onRatio: (ratio: number) => void;
+  durationSeconds?: number;
+  onDuration: (seconds: number) => void;
+  showDebug: boolean;
 }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [videoRetryToken, setVideoRetryToken] = useState(0);
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
+  const [isHovering, setIsHovering] = useState(false);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const retryTimeoutRef = useRef<number | null>(null);
+  const isVideo = isVideoAsset(asset);
 
   useEffect(() => {
     let canceled = false;
 
     async function load() {
       try {
-        const value = await getAssetThumbnail(assetId);
+        const value = await getAssetThumbnail(asset.id);
         if (!canceled) {
           setSrc(value);
         }
@@ -834,7 +910,65 @@ function AssetThumbnail({
     return () => {
       canceled = true;
     };
-  }, [assetId]);
+  }, [asset.id]);
+
+  useEffect(() => {
+    if (!isVideo || !isHovering || videoSrc || isVideoLoading) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadPlayback() {
+      setIsVideoLoading(true);
+      try {
+        const value = await getAssetPlayback(asset.id);
+        if (!cancelled) {
+          setVideoSrc(toPlayableSrc(value));
+          setVideoRetryToken(0);
+        }
+      } catch {
+        if (!cancelled) {
+          setVideoSrc(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsVideoLoading(false);
+        }
+      }
+    }
+
+    void loadPlayback();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [asset.id, isHovering, isVideo, isVideoLoading, videoSrc]);
+
+  useEffect(() => {
+    return () => {
+      if (retryTimeoutRef.current !== null) {
+        window.clearTimeout(retryTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const video = previewVideoRef.current;
+    if (!video) {
+      return;
+    }
+
+    if (isHovering) {
+      void video.play().catch(() => {
+        // Ignore autoplay rejection; user can still click for fullscreen playback.
+      });
+      return;
+    }
+
+    video.pause();
+    video.currentTime = 0;
+  }, [isHovering, videoSrc, videoRetryToken]);
 
   if (!src) {
     return (
@@ -847,24 +981,204 @@ function AssetThumbnail({
   return (
     <button
       type="button"
-      className="block h-full w-full cursor-zoom-in"
-      onClick={() => onOpen(src)}
-      aria-label={`Open ${name} in full screen`}
+      className="relative block h-full w-full cursor-zoom-in"
+      onClick={onOpen}
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => {
+        setIsHovering(false);
+        setVideoRetryToken(0);
+        if (retryTimeoutRef.current !== null) {
+          window.clearTimeout(retryTimeoutRef.current);
+          retryTimeoutRef.current = null;
+        }
+      }}
+      aria-label={`Open ${asset.originalFileName} in full screen`}
     >
-      <img
-        className="h-full w-full object-contain transition-transform duration-200 hover:scale-105"
-        src={src}
-        alt={name}
-        loading="lazy"
-        onLoad={(event) => {
-          const image = event.currentTarget;
-          if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-            onRatio(image.naturalWidth / image.naturalHeight);
+      {isVideo && isHovering && videoSrc ? (
+        <video
+          ref={previewVideoRef}
+          className="h-full w-full object-cover"
+          src={
+            videoRetryToken > 0 ? `${videoSrc}?r=${videoRetryToken}` : videoSrc
           }
-        }}
-      />
+          muted
+          loop
+          autoPlay
+          playsInline
+          preload="metadata"
+          onCanPlay={(event) => {
+            if (!isHovering) {
+              return;
+            }
+
+            const video = event.currentTarget;
+            video.muted = true;
+            void video.play().catch(() => {
+              // Autoplay may still be denied on some systems.
+            });
+          }}
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              onRatio(video.videoWidth / video.videoHeight);
+            }
+
+            if (Number.isFinite(video.duration) && video.duration > 0) {
+              onDuration(video.duration);
+            }
+          }}
+          onError={(event) => {
+            const video = event.currentTarget;
+            console.error("[video-hover-error]", {
+              assetId: asset.id,
+              src: video.currentSrc,
+              errorCode: video.error?.code,
+              errorMessage: video.error?.message,
+            });
+
+            if (!isHovering) {
+              return;
+            }
+
+            if (retryTimeoutRef.current !== null) {
+              window.clearTimeout(retryTimeoutRef.current);
+            }
+
+            retryTimeoutRef.current = window.setTimeout(() => {
+              setVideoRetryToken((current) => current + 1);
+            }, 250);
+          }}
+        />
+      ) : (
+        <img
+          className="h-full w-full object-contain transition-transform duration-200 hover:scale-105"
+          src={src}
+          alt={asset.originalFileName}
+          loading="lazy"
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+              onRatio(image.naturalWidth / image.naturalHeight);
+            }
+          }}
+        />
+      )}
+
+      {isVideo ? (
+        <div className="absolute right-1 top-1 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] text-white">
+          <span>{formatVideoDuration(asset.duration, durationSeconds)}</span>
+          <CirclePlay size={12} />
+        </div>
+      ) : null}
+
+      {isVideo && isHovering && isVideoLoading ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/25">
+          <span className="loading loading-spinner loading-sm text-white" />
+        </div>
+      ) : null}
+
+      {isVideo && showDebug ? (
+        <div className="absolute bottom-1 left-1 max-w-[95%] rounded bg-black/70 px-1.5 py-1 text-[10px] leading-tight text-white">
+          <div>id: {asset.id.slice(0, 8)}</div>
+          <div>type: {asset.type ?? "null"}</div>
+          <div>raw duration: {asset.duration ?? "null"}</div>
+          <div>
+            resolved seconds:{" "}
+            {typeof durationSeconds === "number"
+              ? durationSeconds.toFixed(2)
+              : "null"}
+          </div>
+          <div>has playback src: {videoSrc ? "yes" : "no"}</div>
+        </div>
+      ) : null}
     </button>
   );
+}
+
+function isVideoAsset(asset: AssetSummary): boolean {
+  if ((asset.type ?? "").toUpperCase() === "VIDEO") {
+    return true;
+  }
+
+  const name = asset.originalFileName.toLowerCase();
+  return /(\.mp4|\.mov|\.webm|\.mkv|\.avi|\.m4v)$/.test(name);
+}
+
+function formatVideoDuration(
+  value: string | null,
+  durationSeconds?: number,
+): string {
+  if (
+    typeof durationSeconds === "number" &&
+    Number.isFinite(durationSeconds) &&
+    durationSeconds > 0
+  ) {
+    return formatDurationSeconds(Math.round(durationSeconds));
+  }
+
+  if (!value) {
+    return "0:00";
+  }
+
+  const trimmed = value.trim();
+
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const numeric = Number.parseFloat(trimmed);
+    return formatDurationSeconds(Math.max(0, Math.round(numeric)));
+  }
+
+  if (/^PT/i.test(trimmed)) {
+    const isoMatch = trimmed.match(
+      /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/i,
+    );
+    if (isoMatch) {
+      const hours = Number.parseFloat(isoMatch[1] ?? "0");
+      const minutes = Number.parseFloat(isoMatch[2] ?? "0");
+      const seconds = Number.parseFloat(isoMatch[3] ?? "0");
+      const totalSeconds = Math.round(hours * 3600 + minutes * 60 + seconds);
+      if (Number.isFinite(totalSeconds) && totalSeconds > 0) {
+        return formatDurationSeconds(totalSeconds);
+      }
+    }
+  }
+
+  const main = trimmed.split(".")[0] ?? "";
+  const parts = main
+    .split(":")
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
+
+  if (parts.length === 0) {
+    return "0:00";
+  }
+
+  let seconds = 0;
+  for (const part of parts) {
+    seconds = seconds * 60 + part;
+  }
+
+  return formatDurationSeconds(seconds);
+}
+
+function formatDurationSeconds(totalSeconds: number): string {
+  const safe = Math.max(0, totalSeconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function toPlayableSrc(value: string): string {
+  if (value.startsWith("/")) {
+    return convertFileSrc(value);
+  }
+
+  return value;
 }
 
 function getAssetRatio(

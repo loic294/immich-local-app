@@ -1,9 +1,14 @@
+import { useState } from "react";
 import { useSession } from "./hooks/useSession";
 import { LoginScreen } from "./components/Auth/LoginScreen";
 import { LoadingScreen } from "./components/Layout/LoadingScreen";
+import type { AppPage } from "./components/Layout/Sidebar";
+import { AlbumsPage } from "./pages/AlbumsPage";
+import { FoldersPage } from "./pages/FoldersPage";
 import { PhotosPage } from "./pages/PhotosPage";
 
 export function App() {
+  const [activePage, setActivePage] = useState<AppPage>("photos");
   const {
     session,
     storedSession,
@@ -31,5 +36,13 @@ export function App() {
     );
   }
 
-  return <PhotosPage session={session} />;
+  if (activePage === "albums") {
+    return <AlbumsPage session={session} onNavigate={setActivePage} />;
+  }
+
+  if (activePage === "folders") {
+    return <FoldersPage session={session} onNavigate={setActivePage} />;
+  }
+
+  return <PhotosPage session={session} onNavigate={setActivePage} />;
 }

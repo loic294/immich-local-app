@@ -3,6 +3,8 @@ export type AssetSummary = {
   originalFileName: string;
   fileCreatedAt: string | null;
   checksum: string | null;
+  type: string | null;
+  duration: string | null;
 };
 
 export type AssetPage = {
@@ -24,4 +26,24 @@ export type TimelineMonths = {
   newestMonth: string | null;
   oldestMonth: string | null;
   months: string[];
+};
+
+export type AlbumOwnerSummary = {
+  id: string;
+  name: string | null;
+  email: string | null;
+};
+
+export type AlbumSummary = {
+  id: string;
+  albumName: string;
+  albumThumbnailAssetId: string | null;
+  ownerId: string;
+  shared: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  assetCount: number | null;
+  owner: AlbumOwnerSummary | null;
 };

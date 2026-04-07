@@ -1,20 +1,28 @@
-import { Heart, Image, MapPin, Search, Share2 } from "lucide-react";
+import { FolderTree, Heart, Image, Images } from "lucide-react";
 
 interface SidebarProps {
-  onNavigate?: (page: string) => void;
+  activePage: AppPage;
+  onNavigate?: (page: AppPage) => void;
 }
 
-export function Sidebar({ onNavigate }: SidebarProps) {
+export type AppPage = "photos" | "albums" | "folders";
+
+export function Sidebar({ activePage, onNavigate }: SidebarProps) {
+  const navClass = (page: AppPage) =>
+    page === activePage
+      ? "btn btn-sm btn-soft btn-primary justify-start"
+      : "btn btn-sm btn-ghost justify-start";
+
   return (
     <aside className="hidden flex-col gap-3 border-r border-base-300 bg-base-100 p-3 lg:flex">
-      <div className="flex h-9 items-center gap-2 px-2 text-3xl font-bold text-primary">
-        <div className="h-3.5 w-3.5 rounded-full bg-linear-to-br from-error via-warning to-info" />
+      <div className="flex h-9 items-center gap-2 px-2 text-2xl font-bold text-primary">
+        <div className="h-7 w-7 rounded-full bg-linear-to-br from-error via-warning to-info" />
         <span>immich.local</span>
       </div>
 
       <nav className="menu rounded-box bg-base-100 p-1">
         <button
-          className="btn btn-sm btn-soft btn-primary justify-start"
+          className={navClass("photos")}
           type="button"
           onClick={() => onNavigate?.("photos")}
         >
@@ -22,28 +30,20 @@ export function Sidebar({ onNavigate }: SidebarProps) {
           <span>Photos</span>
         </button>
         <button
-          className="btn btn-sm btn-ghost justify-start"
+          className={navClass("albums")}
           type="button"
-          onClick={() => onNavigate?.("explore")}
+          onClick={() => onNavigate?.("albums")}
         >
-          <Search size={16} className="shrink-0" />
-          <span>Explore</span>
+          <Images size={16} className="shrink-0" />
+          <span>Albums</span>
         </button>
         <button
-          className="btn btn-sm btn-ghost justify-start"
+          className={navClass("folders")}
           type="button"
-          onClick={() => onNavigate?.("map")}
+          onClick={() => onNavigate?.("folders")}
         >
-          <MapPin size={16} className="shrink-0" />
-          <span>Map</span>
-        </button>
-        <button
-          className="btn btn-sm btn-ghost justify-start"
-          type="button"
-          onClick={() => onNavigate?.("sharing")}
-        >
-          <Share2 size={16} className="shrink-0" />
-          <span>Sharing</span>
+          <FolderTree size={16} className="shrink-0" />
+          <span>Folders</span>
         </button>
       </nav>
 
@@ -54,7 +54,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         <button
           className="btn btn-sm btn-ghost justify-start"
           type="button"
-          onClick={() => onNavigate?.("favorites")}
+          disabled
         >
           <Heart size={16} className="shrink-0" />
           <span>Favorites</span>

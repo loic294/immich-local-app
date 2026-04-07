@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAssets } from "../hooks/useAssets";
 import { useMemories } from "../hooks/useMemories";
 import { Header } from "../components/Layout/Header";
-import { Sidebar } from "../components/Layout/Sidebar";
+import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { MemoriesStrip } from "../components/Memories/MemoriesStrip";
 import { MemoryFullscreenViewer } from "../components/Memories/MemoryFullscreenViewer";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
@@ -11,9 +11,10 @@ import type { Session } from "../hooks/useSession";
 
 interface PhotosPageProps {
   session: Session;
+  onNavigate: (page: AppPage) => void;
 }
 
-export function PhotosPage({ session }: PhotosPageProps) {
+export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [memoryViewer, setMemoryViewer] = useState<{
@@ -55,7 +56,7 @@ export function PhotosPage({ session }: PhotosPageProps) {
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar />
+      <Sidebar activePage="photos" onNavigate={onNavigate} />
 
       <section className="min-w-0">
         <Header

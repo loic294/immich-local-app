@@ -19,7 +19,14 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.config/immich-local-app/videos/**",
+          "$HOME/.config/immich-local-app/thumbnails/**"
+        ]
+      }
     }
   },
   "bundle": {

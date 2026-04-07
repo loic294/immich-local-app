@@ -93,6 +93,8 @@ impl Database {
                     original_file_name: row.get(1)?,
                     file_created_at: row.get(2)?,
                     checksum: row.get(3)?,
+                    r#type: None,
+                    duration: None,
                 })
             })
             .map_err(|err| err.to_string())?;

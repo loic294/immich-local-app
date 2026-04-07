@@ -4,12 +4,14 @@ interface HeaderProps {
   searchInput: string;
   onSearchChange: (value: string) => void;
   serverUrl: string;
+  searchPlaceholder?: string;
 }
 
 export function Header({
   searchInput,
   onSearchChange,
   serverUrl,
+  searchPlaceholder = "Search your photos",
 }: HeaderProps) {
   return (
     <header className="navbar border-b border-base-300 bg-base-100 px-3 sm:px-4">
@@ -21,7 +23,7 @@ export function Header({
           <Search size={16} className="text-base-content/60" />
           <input
             id="asset-search"
-            placeholder="Search your photos"
+            placeholder={searchPlaceholder}
             type="text"
             className="grow"
             value={searchInput}

@@ -78,6 +78,18 @@ pub async fn get_asset_thumbnail(
 }
 
 #[tauri::command]
+pub async fn get_asset_playback(
+    asset_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    state
+        .immich
+        .get_asset_playback_file_path(&asset_id)
+        .await
+        .map_err(|err| format!("video playback load failed: {err}"))
+}
+
+#[tauri::command]
 pub async fn get_timeline_months(
     state: tauri::State<'_, AppState>,
 ) -> Result<TimelineMonths, String> {
