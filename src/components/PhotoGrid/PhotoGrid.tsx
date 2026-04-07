@@ -57,7 +57,8 @@ export function PhotoGrid({
     return groupAssetsByDay(assets);
   }, [assets]);
 
-  const hasActive = activeIndex !== null && activeIndex >= 0 && activeIndex < assets.length;
+  const hasActive =
+    activeIndex !== null && activeIndex >= 0 && activeIndex < assets.length;
 
   useEffect(() => {
     if (!hasActive || activeIndex === null) {
@@ -125,7 +126,8 @@ export function PhotoGrid({
     };
   }, [assets.length, hasActive]);
 
-  const activeAsset = hasActive && activeIndex !== null ? assets[activeIndex] : null;
+  const activeAsset =
+    hasActive && activeIndex !== null ? assets[activeIndex] : null;
 
   const openLightbox = (assetId: string, src: string) => {
     const index = assets.findIndex((asset) => asset.id === assetId);
@@ -162,10 +164,7 @@ export function PhotoGrid({
 
   return (
     <section className="grid-shell">
-      <header className="grid-header">
-        <h2>Assets</h2>
-        <span>{loadedCountText}</span>
-      </header>
+      <div className="grid-stats">{loadedCountText}</div>
 
       <div ref={viewportRef} className="grid-viewport">
         <div className="justified-grid">
@@ -257,7 +256,8 @@ export function PhotoGrid({
 function groupAssetsByDay(
   assets: AssetSummary[],
 ): Array<{ key: string; label: string; items: AssetSummary[] }> {
-  const sections: Array<{ key: string; label: string; items: AssetSummary[] }> = [];
+  const sections: Array<{ key: string; label: string; items: AssetSummary[] }> =
+    [];
   let currentKey = "";
   let currentLabel = "";
   let currentItems: AssetSummary[] = [];
@@ -271,7 +271,11 @@ function groupAssetsByDay(
     }
 
     if (key !== currentKey) {
-      sections.push({ key: currentKey, label: currentLabel, items: currentItems });
+      sections.push({
+        key: currentKey,
+        label: currentLabel,
+        items: currentItems,
+      });
       currentKey = key;
       currentLabel = label;
       currentItems = [];
@@ -281,13 +285,20 @@ function groupAssetsByDay(
   }
 
   if (currentItems.length > 0) {
-    sections.push({ key: currentKey, label: currentLabel, items: currentItems });
+    sections.push({
+      key: currentKey,
+      label: currentLabel,
+      items: currentItems,
+    });
   }
 
   return sections;
 }
 
-function getAssetDay(fileCreatedAt: string | null): { key: string; label: string } {
+function getAssetDay(fileCreatedAt: string | null): {
+  key: string;
+  label: string;
+} {
   if (!fileCreatedAt) {
     return { key: "unknown", label: "Unknown date" };
   }
