@@ -1241,7 +1241,10 @@ export function PhotoGrid({
 
       if (event.key === "ArrowRight") {
         if (activeIndex !== null) {
-          showAssetAtIndex(Math.min(displayAssets.length - 1, activeIndex + 1), true);
+          showAssetAtIndex(
+            Math.min(displayAssets.length - 1, activeIndex + 1),
+            true,
+          );
         }
       }
     };
