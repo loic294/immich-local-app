@@ -46,6 +46,7 @@ type PhotoGridProps = {
   loadTimelineLayout?: (
     containerWidth: number,
   ) => Promise<TimelineLayoutResponse>;
+  maxHeight?: number;
 };
 
 type VirtualEntry =
@@ -77,6 +78,7 @@ export function PhotoGrid({
   availableDates: availableDatesProp,
   onJumpToDate,
   loadTimelineLayout,
+  maxHeight = 0,
 }: PhotoGridProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -386,7 +388,7 @@ export function PhotoGrid({
       return [];
     }
 
-    const overscan = Math.max(500, viewportHeight);
+    const overscan = Math.max(1000, viewportHeight * 1.5);
     const start = Math.max(0, scrollTop - overscan);
     const end = scrollTop + viewportHeight + overscan;
 
@@ -979,8 +981,8 @@ export function PhotoGrid({
   };
 
   return (
-    <section>
-      <div className="mb-1 flex items-center justify-between text-xs text-base-content/60">
+    <section className="flex min-h-0 flex-1 flex-col gap-1">
+      <div className="shrink-0 flex items-center justify-between text-xs text-base-content/60">
         <span>{loadedCountText}</span>
         {availableDates.length > 0 ? (
           <button
@@ -995,10 +997,14 @@ export function PhotoGrid({
         ) : null}
       </div>
 
-      <div className="relative flex items-start gap-2">
+      <div className="relative flex min-h-0 flex-1 items-stretch gap-2">
         <div
           ref={viewportRef}
-          className="hide-scrollbar h-[calc(100vh-180px)] min-w-0 flex-1 overflow-auto pl-2 pr-2"
+          className="hide-scrollbar min-h-0 min-w-0 flex-1 overflow-auto pl-2 pr-2"
+          style={{
+            height: maxHeight > 0 ? `${maxHeight}px` : "auto",
+            minHeight: 0,
+          }}
         >
           <div ref={topSentinelRef} className="h-px" />
           <div
@@ -1096,16 +1102,17 @@ export function PhotoGrid({
             void handleJumpToDate(dateKey);
           }}
           onScrubStateChange={setIsTimelineScrubbing}
+          maxHeight={maxHeight}
         />
       </div>
 
       {isFetching ? (
-        <p className="mt-2 text-xs text-base-content/60">
+        <p className="shrink-0 mt-2 text-xs text-base-content/60">
           Loading more assets...
         </p>
       ) : null}
       {!hasNextPage ? (
-        <p className="mt-2 text-xs text-base-content/60">
+        <p className="shrink-0 mt-2 text-xs text-base-content/60">
           No more assets to load.
         </p>
       ) : null}

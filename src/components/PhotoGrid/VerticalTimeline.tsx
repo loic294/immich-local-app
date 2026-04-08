@@ -14,6 +14,7 @@ interface VerticalTimelineProps {
   onSeekRatio: (ratio: number) => void;
   onJumpToDateKey: (dateKey: string) => void;
   onScrubStateChange?: (isScrubbing: boolean) => void;
+  maxHeight?: number;
 }
 
 type TimelinePoint = {
@@ -31,6 +32,7 @@ export function VerticalTimeline({
   onSeekRatio,
   onJumpToDateKey,
   onScrubStateChange,
+  maxHeight = 0,
 }: VerticalTimelineProps) {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -189,14 +191,18 @@ export function VerticalTimeline({
     : null;
 
   return (
-    <aside className="hidden h-[calc(100vh-180px)] w-16 shrink-0 lg:block">
+    <aside className="hidden min-h-0 w-16 shrink-0 lg:flex lg:flex-col">
       <div
         ref={containerRef}
-        className="relative mt-13 h-[calc(100%-52px)] w-full select-none"
+        className="relative w-full select-none"
+        style={{
+          height: maxHeight > 0 ? `${maxHeight - 50}px` : "auto",
+          minHeight: 0,
+        }}
       >
         <button
           type="button"
-          className="absolute inset-y-1 left-0 w-6 rounded-full bg-base-300/70 hover:bg-base-300"
+          className="absolute top-0 bottom-0 right-0 w-6 rounded-full bg-base-300/70 hover:bg-base-300"
           onMouseEnter={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             if (rect.height <= 0) {
@@ -227,60 +233,61 @@ export function VerticalTimeline({
           }}
           aria-label="Scroll timeline"
         />
+        <div className="absolute my-3 top-0 bottom-0 right-0">
+          {labelRatio !== null && hoverLabel ? (
+            <div
+              className="pointer-events-none absolute right-2 -translate-y-2/3 whitespace-nowrap rounded-full border border-base-100/90 bg-base-content px-2 py-1 text-[10px] font-semibold text-base-100 shadow-lg"
+              style={{ top: `${labelRatio * 100}%` }}
+            >
+              {hoverLabel}
+            </div>
+          ) : null}
 
-        {labelRatio !== null && hoverLabel ? (
+          {points.map((point) => (
+            <button
+              key={point.monthKey}
+              type="button"
+              className="absolute right-2 h-1.5 w-1.5 rounded-full bg-base-content/70 hover:scale-125 hover:bg-primary z-50"
+              style={{ top: `calc(${point.positionPercent}% - 2px)` }}
+              onClick={() => {
+                onJumpToDateKey(point.jumpDateKey);
+              }}
+              aria-label={`Jump to ${point.monthKey}`}
+            />
+          ))}
+
+          {yearMarkers.map((marker) => (
+            <button
+              key={`year-${marker.year}`}
+              type="button"
+              className="absolute right-8 -translate-y-1/2 p-0 text-[10px] font-semibold tabular-nums text-base-content/70 hover:text-primary"
+              style={{ top: `${marker.positionPercent}%` }}
+              onClick={() => {
+                onJumpToDateKey(marker.jumpDateKey);
+              }}
+              aria-label={`Jump to ${marker.year}`}
+            >
+              {marker.year}
+            </button>
+          ))}
+
           <div
-            className="pointer-events-none absolute left-2 -translate-y-2/3 whitespace-nowrap rounded-full border border-base-100/90 bg-base-content px-2 py-1 text-[10px] font-semibold text-base-100 shadow-lg"
-            style={{ top: `${labelRatio * 100}%` }}
-          >
-            {hoverLabel}
-          </div>
-        ) : null}
-
-        {points.map((point) => (
-          <button
-            key={point.monthKey}
-            type="button"
-            className="absolute left-2 h-1.5 w-1.5 rounded-full bg-base-content/70 hover:scale-125 hover:bg-primary z-50"
-            style={{ top: `calc(${point.positionPercent}% - 2px)` }}
-            onClick={() => {
-              onJumpToDateKey(point.jumpDateKey);
+            role="slider"
+            aria-valuenow={Math.round(activeRatio * 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Scroll position"
+            tabIndex={0}
+            className={`absolute right-1 h-4 w-4 cursor-row-resize rounded-full border-2 border-primary bg-primary/40 shadow transition-transform hover:scale-125 active:scale-125 ${isDragging ? "cursor-grabbing scale-125" : ""}`}
+            style={{ top: `calc(${activeRatio * 100}% - 8px)` }}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              dragRatioRef.current = activeRatio;
+              setDragRatio(activeRatio);
+              setIsDragging(true);
             }}
-            aria-label={`Jump to ${point.monthKey}`}
           />
-        ))}
-
-        {yearMarkers.map((marker) => (
-          <button
-            key={`year-${marker.year}`}
-            type="button"
-            className="absolute right-1 -translate-y-1/2 p-0 text-[10px] font-semibold tabular-nums text-base-content/70 hover:text-primary"
-            style={{ top: `${marker.positionPercent}%` }}
-            onClick={() => {
-              onJumpToDateKey(marker.jumpDateKey);
-            }}
-            aria-label={`Jump to ${marker.year}`}
-          >
-            {marker.year}
-          </button>
-        ))}
-
-        <div
-          role="slider"
-          aria-valuenow={Math.round(activeRatio * 100)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label="Scroll position"
-          tabIndex={0}
-          className={`absolute left-1 h-4 w-4 cursor-row-resize rounded-full border-2 border-primary bg-primary/40 shadow transition-transform hover:scale-125 active:scale-125 ${isDragging ? "cursor-grabbing scale-125" : ""}`}
-          style={{ top: `calc(${activeRatio * 100}% - 8px)` }}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            dragRatioRef.current = activeRatio;
-            setDragRatio(activeRatio);
-            setIsDragging(true);
-          }}
-        />
+        </div>
       </div>
     </aside>
   );
