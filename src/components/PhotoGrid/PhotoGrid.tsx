@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -67,6 +67,14 @@ type VirtualEntry =
       items: { id: string; width: number }[];
     };
 
+type ScrollRestoreAnchor = {
+  direction: "prepend" | "append";
+  assetId: string;
+  offsetWithinRow: number;
+  capturedScrollTop: number;
+  capturedAt: number;
+};
+
 export function PhotoGrid({
   assets,
   isFetching,
@@ -113,8 +121,62 @@ export function PhotoGrid({
   const isLoadingPreviousRef = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
   const latestScrollTopRef = useRef(0);
+  const latestVirtualEntriesRef = useRef<VirtualEntry[]>([]);
+  const latestRenderScrollTopRef = useRef(0);
+  const pendingScrollRestoreRef = useRef<ScrollRestoreAnchor | null>(null);
+  const pendingRestoreAttemptsRef = useRef(0);
+  const [layoutReadyAssetCount, setLayoutReadyAssetCount] = useState(0);
   const [timelineLayout, setTimelineLayout] =
     useState<TimelineLayoutResponse | null>(null);
+
+  const captureScrollRestoreAnchor = (
+    direction: "prepend" | "append",
+  ): ScrollRestoreAnchor | null => {
+    const currentEntries = latestVirtualEntriesRef.current;
+    const currentScrollTop = latestRenderScrollTopRef.current;
+    const firstVisibleRow = currentEntries.find(
+      (entry) =>
+        entry.type === "row" && entry.top + entry.height > currentScrollTop,
+    );
+
+    if (!firstVisibleRow || firstVisibleRow.type !== "row") {
+      console.log("[PhotoGrid] Scroll restore anchor capture skipped", {
+        direction,
+        reason: "no-visible-row",
+        currentScrollTop,
+      });
+      return null;
+    }
+
+    const anchorAssetId = firstVisibleRow.items[0]?.id;
+    if (!anchorAssetId) {
+      console.log("[PhotoGrid] Scroll restore anchor capture skipped", {
+        direction,
+        reason: "visible-row-has-no-items",
+        rowKey: firstVisibleRow.key,
+      });
+      return null;
+    }
+
+    const anchor: ScrollRestoreAnchor = {
+      direction,
+      assetId: anchorAssetId,
+      offsetWithinRow: currentScrollTop - firstVisibleRow.top,
+      capturedScrollTop: currentScrollTop,
+      capturedAt: Date.now(),
+    };
+
+    console.log("[PhotoGrid] Scroll restore anchor captured", {
+      direction,
+      assetId: anchor.assetId,
+      rowKey: firstVisibleRow.key,
+      rowTop: firstVisibleRow.top,
+      offsetWithinRow: anchor.offsetWithinRow,
+      capturedScrollTop: anchor.capturedScrollTop,
+    });
+
+    return anchor;
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -173,6 +235,9 @@ export function PhotoGrid({
           !isFetching &&
           !isLoadingNextRef.current
         ) {
+          const anchor = captureScrollRestoreAnchor("append");
+          pendingScrollRestoreRef.current = anchor;
+          pendingRestoreAttemptsRef.current = 0;
           isLoadingNextRef.current = true;
           void Promise.resolve(onLoadMore()).finally(() => {
             console.log(
@@ -204,25 +269,49 @@ export function PhotoGrid({
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
+        if (entry?.isIntersecting && pendingJumpDateKey) {
+          console.log(
+            "[PhotoGrid] Top sentinel intersection ignored during jump",
+            {
+              pendingJumpDateKey,
+              hasPreviousPage,
+              isFetchingPrevious,
+              isLoadingPrevious: isLoadingPreviousRef.current,
+            },
+          );
+          return;
+        }
+
         if (
           entry?.isIntersecting &&
           hasPreviousPage &&
           !isFetchingPrevious &&
-          !isLoadingPreviousRef.current
+          !isLoadingPreviousRef.current &&
+          !pendingScrollRestoreRef.current
         ) {
-          const viewport = viewportRef.current;
-          const previousHeight = viewport?.scrollHeight ?? 0;
+          const anchor = captureScrollRestoreAnchor("prepend");
+          pendingScrollRestoreRef.current = anchor;
+          pendingRestoreAttemptsRef.current = 0;
+
           isLoadingPreviousRef.current = true;
 
-          void Promise.resolve(onLoadPrevious()).then(() => {
-            requestAnimationFrame(() => {
-              const nextViewport = viewportRef.current;
-              if (nextViewport) {
-                nextViewport.scrollTop +=
-                  nextViewport.scrollHeight - previousHeight;
-              }
-            });
+          void Promise.resolve(onLoadPrevious()).finally(() => {
+            console.log(
+              "[PhotoGrid] onLoadPrevious settled -> resetting isLoadingPreviousRef",
+            );
+            isLoadingPreviousRef.current = false;
           });
+        }
+
+        if (entry?.isIntersecting && pendingScrollRestoreRef.current) {
+          console.log(
+            "[PhotoGrid] Top sentinel intersection ignored while restore pending",
+            {
+              pendingRestoreDirection:
+                pendingScrollRestoreRef.current.direction,
+              pendingRestoreAssetId: pendingScrollRestoreRef.current.assetId,
+            },
+          );
         }
       },
       {
@@ -236,7 +325,7 @@ export function PhotoGrid({
     return () => {
       observer.disconnect();
     };
-  }, [hasPreviousPage, isFetchingPrevious, onLoadPrevious]);
+  }, [hasPreviousPage, isFetchingPrevious, onLoadPrevious, pendingJumpDateKey]);
 
   useEffect(() => {
     if (!isFetching) {
@@ -436,6 +525,86 @@ export function PhotoGrid({
     });
   }, [virtualEntries, scrollTop, viewportHeight]);
 
+  useEffect(() => {
+    latestVirtualEntriesRef.current = virtualEntries;
+  }, [virtualEntries]);
+
+  useEffect(() => {
+    latestRenderScrollTopRef.current = scrollTop;
+  }, [scrollTop]);
+
+  useLayoutEffect(() => {
+    const pendingAnchor = pendingScrollRestoreRef.current;
+    if (!pendingAnchor || isFetching || isFetchingPrevious) {
+      return;
+    }
+
+    if (layoutReadyAssetCount !== displayAssets.length) {
+      console.log("[PhotoGrid] Scroll restore waiting for fresh layout", {
+        direction: pendingAnchor.direction,
+        assetId: pendingAnchor.assetId,
+        layoutReadyAssetCount,
+        displayAssetCount: displayAssets.length,
+      });
+      return;
+    }
+
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const anchorEntry = virtualEntries.find(
+      (entry) =>
+        entry.type === "row" &&
+        entry.items.some((item) => item.id === pendingAnchor.assetId),
+    );
+
+    if (!anchorEntry) {
+      pendingRestoreAttemptsRef.current += 1;
+      if (pendingRestoreAttemptsRef.current >= 3) {
+        console.log("[PhotoGrid] Scroll restore anchor dropped after retries", {
+          direction: pendingAnchor.direction,
+          assetId: pendingAnchor.assetId,
+          attempts: pendingRestoreAttemptsRef.current,
+        });
+        pendingScrollRestoreRef.current = null;
+        pendingRestoreAttemptsRef.current = 0;
+      } else {
+        console.log("[PhotoGrid] Scroll restore anchor not found yet, retrying", {
+          direction: pendingAnchor.direction,
+          assetId: pendingAnchor.assetId,
+          attempt: pendingRestoreAttemptsRef.current,
+        });
+      }
+      return;
+    }
+
+    const targetScrollTop = anchorEntry.top + pendingAnchor.offsetWithinRow;
+    viewport.scrollTop = targetScrollTop;
+    latestScrollTopRef.current = targetScrollTop;
+    latestRenderScrollTopRef.current = targetScrollTop;
+    setScrollTop(targetScrollTop);
+    console.log("[PhotoGrid] Scroll restore anchor restored", {
+      direction: pendingAnchor.direction,
+      assetId: pendingAnchor.assetId,
+      restoredWithEntryKey: anchorEntry.key,
+      targetScrollTop,
+      entryTop: anchorEntry.top,
+      offsetWithinRow: pendingAnchor.offsetWithinRow,
+      capturedScrollTop: pendingAnchor.capturedScrollTop,
+      latencyMs: Date.now() - pendingAnchor.capturedAt,
+    });
+    pendingScrollRestoreRef.current = null;
+    pendingRestoreAttemptsRef.current = 0;
+  }, [
+    displayAssets.length,
+    isFetching,
+    isFetchingPrevious,
+    layoutReadyAssetCount,
+    virtualEntries,
+  ]);
+
   const scrollToDateKey = (targetKey: string) => {
     const targetTop = sectionTopMapRef.current.get(targetKey);
     if (typeof targetTop === "number" && viewportRef.current) {
@@ -586,12 +755,19 @@ export function PhotoGrid({
     let cancelled = false;
 
     async function loadLayout() {
+      const assetCountForLayout = displayAssets.length;
       if (viewportWidth <= 0 || displayAssets.length === 0) {
         setGridSections([]);
+        setLayoutReadyAssetCount(assetCountForLayout);
         return;
       }
 
       try {
+        console.log("[PhotoGrid] calculateGridLayout start", {
+          assetCount: displayAssets.length,
+          viewportWidth,
+          scrollTop: latestRenderScrollTopRef.current,
+        });
         const data = await calculateGridLayout(
           displayAssets.map((asset) => ({
             id: asset.id,
@@ -603,12 +779,19 @@ export function PhotoGrid({
         );
 
         if (!cancelled) {
+          console.log("[PhotoGrid] calculateGridLayout done", {
+            sectionCount: data.sections.length,
+            previousSectionCount: gridSections.length,
+            assetCountForLayout,
+          });
           setGridSections(data.sections);
+          setLayoutReadyAssetCount(assetCountForLayout);
         }
       } catch (error) {
         if (!cancelled) {
           console.error("Failed to calculate grid layout:", error);
           setGridSections([]);
+          setLayoutReadyAssetCount(assetCountForLayout);
         }
       }
     }

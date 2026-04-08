@@ -205,9 +205,7 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
               hasNextPage={assetsWindow.hasNextPage}
               maxHeight={photoGridHeight}
               onLoadMore={() => assetsWindow.loadNextPage()}
-              onLoadPrevious={() => {
-                void assetsWindow.loadPreviousPage();
-              }}
+              onLoadPrevious={() => assetsWindow.loadPreviousPage()}
               onJumpToDate={async (dateKey) => {
                 const jumpTarget = await getCachedAssetJumpTarget(
                   dateKey,

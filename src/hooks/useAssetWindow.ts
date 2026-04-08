@@ -142,20 +142,35 @@ export function useAssetWindow(
 
   const loadPreviousPage = useCallback(async () => {
     if (isFetchingPreviousPage || orderedPages.length === 0) {
+      console.log("[useAssetWindow] loadPreviousPage: skipped", {
+        isFetchingPreviousPage,
+        orderedPagesLength: orderedPages.length,
+      });
       return;
     }
 
     const firstPageNumber = Math.min(...orderedPages);
     if (firstPageNumber <= 0) {
+      console.log("[useAssetWindow] loadPreviousPage: no previous pages", {
+        firstPageNumber,
+      });
       return;
     }
 
+    console.log("[useAssetWindow] loadPreviousPage: loading", {
+      previousPage: firstPageNumber - 1,
+    });
     setIsFetchingPreviousPage(true);
     setError(null);
 
     try {
       const previousPageNumber = firstPageNumber - 1;
       const previousPage = await loadPage(previousPageNumber);
+      console.log("[useAssetWindow] loadPreviousPage: loaded", {
+        previousPageNumber,
+        itemCount: previousPage.items.length,
+        hasNextPage: previousPage.hasNextPage,
+      });
       setPages((current) => ({
         ...current,
         [previousPageNumber]: previousPage,
@@ -172,6 +187,9 @@ export function useAssetWindow(
         err instanceof Error ? err : new Error("Failed to load previous page"),
       );
     } finally {
+      console.log(
+        "[useAssetWindow] loadPreviousPage: done, isFetchingPreviousPage -> false",
+      );
       setIsFetchingPreviousPage(false);
     }
   }, [isFetchingPreviousPage, loadPage, orderedPages]);
