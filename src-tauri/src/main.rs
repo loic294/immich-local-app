@@ -9,6 +9,7 @@ use commands::assets::{
     get_cached_asset_days, get_cached_asset_jump_target, get_timeline_months, refresh_asset, update_asset_favorite,
     update_asset_rating, update_asset_visibility, fetch_assets_by_month, get_calendar_assets_paged,
     calculate_grid_layout, get_cached_timeline_layout, get_cached_full_grid_layout,
+    get_cached_asset_details,
 };
 use commands::auth::{authenticate, restore_session, logout, get_profile_image};
 use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
@@ -44,6 +45,7 @@ pub fn main() {
             get_cached_timeline_layout,
             get_asset_thumbnail,
             get_asset_playback,
+            get_cached_asset_details,
             refresh_asset,
             get_timeline_months,
             update_asset_favorite,

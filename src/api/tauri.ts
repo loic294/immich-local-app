@@ -12,6 +12,7 @@ import type {
   TimelineMonths,
   Settings,
   CacheStats,
+  AssetCacheDetails,
 } from "../types";
 
 export type AuthResponse = {
@@ -137,6 +138,14 @@ export async function getAssetPlayback(assetId: string): Promise<string> {
 
 export async function refreshAsset(assetId: string): Promise<AssetSummary> {
   return invoke<AssetSummary>("refresh_asset", {
+    assetId,
+  });
+}
+
+export async function getCachedAssetDetails(
+  assetId: string,
+): Promise<AssetCacheDetails | null> {
+  return invoke<AssetCacheDetails | null>("get_cached_asset_details", {
     assetId,
   });
 }

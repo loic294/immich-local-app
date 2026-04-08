@@ -27,8 +27,10 @@ pub struct TimelineMonths {
 pub struct GridLayoutAssetInput {
     pub id: String,
     pub file_created_at: Option<String>,
+    pub r#type: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub thumbhash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -36,6 +38,7 @@ pub struct GridLayoutAssetInput {
 pub struct GridLayoutItem {
     pub id: String,
     pub width: f64,
+    pub thumbhash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +94,27 @@ pub struct TimelineLayoutResponse {
     pub total_rows: u32,
     pub days: Vec<TimelineLayoutDay>,
     pub months: Vec<TimelineLayoutMonth>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CachedAssetDetails {
+    pub id: String,
+    pub original_file_name: String,
+    pub original_path: Option<String>,
+    pub file_created_at: Option<String>,
+    pub checksum: Option<String>,
+    pub r#type: Option<String>,
+    pub duration: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub camera: Option<String>,
+    pub lens: Option<String>,
+    pub file_size_bytes: Option<i64>,
+    pub file_extension: Option<String>,
+    pub people: Option<String>,
+    pub tags: Option<String>,
+    pub exif_info_json: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,8 +334,10 @@ pub async fn get_cached_timeline_layout(
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,
+            r#type: asset.r#type,
             width: asset.width,
             height: asset.height,
+            thumbhash: asset.thumbhash,
         })
         .collect::<Vec<_>>();
 
@@ -397,8 +423,10 @@ pub async fn get_cached_full_grid_layout(
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,
+            r#type: asset.r#type,
             width: asset.width,
             height: asset.height,
+            thumbhash: asset.thumbhash,
         })
         .collect();
 
@@ -470,6 +498,36 @@ pub async fn refresh_asset(
         .map_err(|err| format!("failed to cache refreshed asset: {err}"))?;
 
     Ok(asset)
+}
+
+#[tauri::command]
+pub async fn get_cached_asset_details(
+    asset_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<CachedAssetDetails>, String> {
+    let details = state
+        .db
+        .get_asset_details(&asset_id)
+        .map_err(|err| format!("asset details cache read failed: {err}"))?;
+
+    Ok(details.map(|asset| CachedAssetDetails {
+        id: asset.id,
+        original_file_name: asset.original_file_name,
+        original_path: asset.original_path,
+        file_created_at: asset.file_created_at,
+        checksum: asset.checksum,
+        r#type: asset.r#type,
+        duration: asset.duration,
+        width: asset.width,
+        height: asset.height,
+        camera: asset.camera,
+        lens: asset.lens,
+        file_size_bytes: asset.file_size_bytes,
+        file_extension: asset.file_extension,
+        people: asset.people,
+        tags: asset.tags,
+        exif_info_json: asset.exif_info_json,
+    }))
 }
 
 #[tauri::command]
@@ -651,6 +709,7 @@ fn build_row(items: Vec<&GridLayoutAssetInput>, row_height: f64) -> GridLayoutRo
         .map(|item| GridLayoutItem {
             id: item.id.clone(),
             width: row_height * get_asset_ratio(item),
+            thumbhash: item.thumbhash.clone(),
         })
         .collect();
 
@@ -663,7 +722,19 @@ fn build_row(items: Vec<&GridLayoutAssetInput>, row_height: f64) -> GridLayoutRo
 fn get_asset_ratio(asset: &GridLayoutAssetInput) -> f64 {
     match (asset.width, asset.height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => width as f64 / height as f64,
-        _ => 4.0 / 3.0,
+        _ => {
+            let is_video = asset
+                .r#type
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("video"))
+                .unwrap_or(false);
+
+            if is_video {
+                16.0 / 9.0
+            } else {
+                4.0 / 3.0
+            }
+        }
     }
 }
 

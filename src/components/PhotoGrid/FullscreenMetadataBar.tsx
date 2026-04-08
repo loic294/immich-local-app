@@ -36,7 +36,7 @@ export function FullscreenMetadataBar({
   const displayRating = hoverRating ?? rating;
 
   return (
-    <div className="rounded-2xl bg-black/45 px-1 py-0.5 text-white backdrop-blur-md">
+    <div className="rounded-2xl border border-white/15 bg-zinc-900 px-1 py-0.5 text-white">
       <div className="flex items-center justify-center gap-6 lg:gap-8">
         {/* Star Rating */}
         <div className="join gap-0">

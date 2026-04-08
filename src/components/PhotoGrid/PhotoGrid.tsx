@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
+  Check,
   ChevronLeft,
   ChevronRight,
   CirclePlay,
+  Copy,
   Film,
-  X,
   Calendar,
+  Info,
 } from "lucide-react";
 import { thumbHashToRGBA } from "thumbhash";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -13,7 +16,9 @@ import { FullscreenMetadataBar } from "./FullscreenMetadataBar";
 import { FullscreenThumbnailStrip } from "./FullscreenThumbnailStrip";
 import { DatePickerModal } from "./DatePickerModal";
 import { VerticalTimeline } from "./VerticalTimeline";
+import { FullscreenInfoPanel } from "./FullscreenInfoPanel";
 import type {
+  AssetCacheDetails,
   GridLayoutSection,
   GridLayoutResponse,
   AssetSummary,
@@ -26,6 +31,7 @@ import type {
 import {
   calculateGridLayout,
   getAssetPlayback,
+  getCachedAssetDetails,
   getAssetThumbnail,
   getSettings,
   refreshAsset,
@@ -66,7 +72,7 @@ type VirtualEntry =
       sectionKey: string;
       top: number;
       height: number;
-      items: { id: string; width: number }[];
+      items: { id: string; width: number; thumbhash: string | null }[];
     };
 
 type ScrollRestoreAnchor = {
@@ -116,6 +122,13 @@ export function PhotoGrid({
   const [ratingUpdateId, setRatingUpdateId] = useState<string | null>(null);
   const [isTimelineScrubbing, setIsTimelineScrubbing] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showInfoPanel, setShowInfoPanel] = useState(false);
+  const [cachedAssetDetails, setCachedAssetDetails] =
+    useState<AssetCacheDetails | null>(null);
+  const [isLoadingCachedDetails, setIsLoadingCachedDetails] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "error">(
+    "idle",
+  );
   const [pendingJumpDateKey, setPendingJumpDateKey] = useState<string | null>(
     null,
   );
@@ -972,8 +985,10 @@ export function PhotoGrid({
           displayAssets.map((asset) => ({
             id: asset.id,
             fileCreatedAt: asset.fileCreatedAt,
+            type: asset.type,
             width: asset.width,
             height: asset.height,
+            thumbhash: asset.thumbhash,
           })),
           viewportWidth,
         );
@@ -1139,6 +1154,42 @@ export function PhotoGrid({
   }, [activeAsset, isPlayingLivePhoto]);
 
   useEffect(() => {
+    if (!activeAsset) {
+      setCachedAssetDetails(null);
+      setIsLoadingCachedDetails(false);
+      return;
+    }
+
+    const asset = activeAsset;
+    let cancelled = false;
+    setIsLoadingCachedDetails(true);
+
+    async function loadCachedDetails() {
+      try {
+        const details = await getCachedAssetDetails(asset.id);
+        if (!cancelled) {
+          setCachedAssetDetails(details);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load cached asset details:", error);
+          setCachedAssetDetails(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingCachedDetails(false);
+        }
+      }
+    }
+
+    void loadCachedDetails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAsset?.id]);
+
+  useEffect(() => {
     if (!hasActive) {
       return;
     }
@@ -1240,7 +1291,55 @@ export function PhotoGrid({
 
   const closeLightbox = () => {
     setActiveIndex(null);
+    setShowInfoPanel(false);
+    setCopyStatus("idle");
     resetFullscreenPlayback(false);
+  };
+
+  const handleCopyImageToClipboard = async () => {
+    if (!activeAsset || isVideoAsset(activeAsset)) {
+      return;
+    }
+
+    try {
+      let source = activeStillSrc ?? activeSrc;
+      if (!source) {
+        source = await getAssetThumbnail(activeAsset.id);
+        setActiveStillSrc(source);
+      }
+
+      const response = await fetch(source);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      if (
+        !navigator.clipboard ||
+        typeof navigator.clipboard.write !== "function" ||
+        typeof ClipboardItem === "undefined"
+      ) {
+        throw new Error("Clipboard image write is not supported");
+      }
+
+      const mimeType = blob.type && blob.type.length > 0 ? blob.type : "image/png";
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          [mimeType]: blob,
+        }),
+      ]);
+
+      setCopyStatus("success");
+      window.setTimeout(() => {
+        setCopyStatus("idle");
+      }, 1600);
+    } catch (error) {
+      console.error("Failed to copy image to clipboard:", error);
+      setCopyStatus("error");
+      window.setTimeout(() => {
+        setCopyStatus("idle");
+      }, 2000);
+    }
   };
 
   const goPrev = () => {
@@ -1471,12 +1570,24 @@ export function PhotoGrid({
                       // In full layout mode: render a placeholder so the virtual
                       // canvas stays stable while this page hasn't loaded yet
                       if (isUsingFullLayout) {
+                        const placeholderSrc = thumbhashToDataUrl(
+                          rowItem.thumbhash ?? null,
+                        );
                         return (
                           <div
                             key={rowItem.id}
-                            className="h-full shrink-0 bg-base-300"
+                            className="relative h-full shrink-0 overflow-hidden bg-base-300"
                             style={{ width: `${rowItem.width}px` }}
-                          />
+                          >
+                            {placeholderSrc ? (
+                              <img
+                                className="h-full w-full object-cover scale-110 blur-xl opacity-85"
+                                src={placeholderSrc}
+                                alt=""
+                                aria-hidden="true"
+                              />
+                            ) : null}
+                          </div>
                         );
                       }
                       return null;
@@ -1577,62 +1688,103 @@ export function PhotoGrid({
         >
           <button
             type="button"
-            className="btn btn-circle btn-sm btn-ghost absolute right-4 top-4 border border-white/20 bg-black/40 text-white"
-            aria-label="Close full screen"
+            className="btn btn-circle btn-sm btn-ghost absolute left-4 top-4 border border-white/15 bg-zinc-900 text-white"
+            aria-label="Back"
             onClick={(event) => {
               event.stopPropagation();
               closeLightbox();
               setIsPlayingLivePhoto(false);
             }}
           >
-            <X size={22} />
-          </button>
-
-          {activeAsset.livePhotoVideoId && isPlayingLivePhoto ? (
-            <button
-              type="button"
-              className="btn btn-circle btn-sm btn-ghost absolute right-16 top-4 border border-white/20 bg-black/40 text-white"
-              aria-label="Play live photo again"
-              onClick={(event) => {
-                event.stopPropagation();
-                setIsPlayingLivePhoto(false);
-              }}
-            >
-              <CirclePlay size={22} />
-            </button>
-          ) : null}
-
-          <button
-            type="button"
-            className="btn btn-circle btn-md btn-ghost absolute left-4 top-1/2 -translate-y-1/2 border border-white/20 bg-black/40 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
-            aria-label="Previous image"
-            onClick={(event) => {
-              event.stopPropagation();
-              goPrev();
-            }}
-            disabled={activeIndex === 0}
-          >
-            <ChevronLeft size={28} />
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-circle btn-md btn-ghost absolute right-4 top-1/2 -translate-y-1/2 border border-white/20 bg-black/40 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
-            aria-label="Next image"
-            onClick={(event) => {
-              event.stopPropagation();
-              goNext();
-            }}
-            disabled={activeIndex === displayAssets.length - 1}
-          >
-            <ChevronRight size={28} />
+            <ArrowLeft size={20} />
           </button>
 
           <div
-            className="pointer-events-none flex h-full w-full max-w-[min(96rem,calc(100vw-4rem))] flex-col items-center justify-center gap-2 py-2"
+            className="pointer-events-auto absolute top-4 left-1/2 z-40 max-w-[min(70vw,48rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-zinc-900 px-4 py-1.5 text-sm font-medium text-white/95 select-text"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12">
+            {activeAsset.originalFileName}
+          </div>
+
+          <div className="pointer-events-auto absolute right-4 top-4 z-40 flex items-center gap-2">
+            {activeAsset.livePhotoVideoId && isPlayingLivePhoto ? (
+              <button
+                type="button"
+                className="btn btn-circle btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
+                aria-label="Play live photo again"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setIsPlayingLivePhoto(false);
+                }}
+              >
+                <CirclePlay size={20} />
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleCopyImageToClipboard();
+              }}
+              disabled={isVideoAsset(activeAsset)}
+              aria-label="Copy image to clipboard"
+            >
+              {copyStatus === "success" ? <Check size={16} /> : <Copy size={16} />}
+              {copyStatus === "success"
+                ? "Copied"
+                : copyStatus === "error"
+                  ? "Copy failed"
+                  : "Copy"}
+            </button>
+
+            <button
+              type="button"
+              className={`btn btn-sm border border-white/15 bg-zinc-900 text-white ${showInfoPanel ? "btn-active" : "btn-ghost"}`}
+              aria-label="Toggle info panel"
+              onClick={(event) => {
+                event.stopPropagation();
+                setShowInfoPanel((current) => !current);
+              }}
+            >
+              <Info size={16} />
+              Info
+            </button>
+          </div>
+
+          <div
+            className="pointer-events-none flex h-full w-full items-stretch gap-4 pt-16"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+              <button
+                type="button"
+                className="pointer-events-auto btn btn-circle btn-md btn-ghost absolute left-2 top-1/2 z-30 -translate-y-1/2 border border-white/15 bg-zinc-900 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
+                aria-label="Previous image"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  goPrev();
+                }}
+                disabled={activeIndex === 0}
+              >
+                <ChevronLeft size={28} />
+              </button>
+
+              <button
+                type="button"
+                className="pointer-events-auto btn btn-circle btn-md btn-ghost absolute right-2 top-1/2 z-30 -translate-y-1/2 border border-white/15 bg-zinc-900 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
+                aria-label="Next image"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  goNext();
+                }}
+                disabled={activeIndex === displayAssets.length - 1}
+              >
+                <ChevronRight size={28} />
+              </button>
+
+              <div className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12">
               {isVideoAsset(activeAsset) ? (
                 activeSrc ? (
                   <video
@@ -1717,33 +1869,42 @@ export function PhotoGrid({
               )}
             </div>
 
-            <div className="pointer-events-auto w-full max-w-5xl">
-              <FullscreenMetadataBar
-                asset={activeAsset}
-                isUpdatingFavorite={favoriteUpdateId === activeAsset.id}
-                isUpdatingArchive={archiveUpdateId === activeAsset.id}
-                isUpdatingRating={ratingUpdateId === activeAsset.id}
-                onToggleFavorite={() => {
-                  void handleFavoriteToggle();
-                }}
-                onToggleArchive={() => {
-                  void handleArchiveToggle();
-                }}
-                onSetRating={(rating) => {
-                  void handleRatingChange(rating);
-                }}
-              />
+              <div className="pointer-events-auto mx-auto w-full max-w-5xl">
+                <FullscreenMetadataBar
+                  asset={activeAsset}
+                  isUpdatingFavorite={favoriteUpdateId === activeAsset.id}
+                  isUpdatingArchive={archiveUpdateId === activeAsset.id}
+                  isUpdatingRating={ratingUpdateId === activeAsset.id}
+                  onToggleFavorite={() => {
+                    void handleFavoriteToggle();
+                  }}
+                  onToggleArchive={() => {
+                    void handleArchiveToggle();
+                  }}
+                  onSetRating={(rating) => {
+                    void handleRatingChange(rating);
+                  }}
+                />
+              </div>
+
+              <div className="pointer-events-auto mx-auto w-full max-w-5xl rounded-2xl border border-white/15 bg-zinc-900 px-3 py-2">
+                <FullscreenThumbnailStrip
+                  assets={displayAssets}
+                  activeIndex={activeIndex ?? 0}
+                  onSelect={(index) => {
+                    showAssetAtIndex(index, true);
+                  }}
+                />
+              </div>
             </div>
 
-            <div className="pointer-events-auto w-full max-w-5xl rounded-2xl border border-white/10 bg-black/35 px-3 py-2 backdrop-blur-md">
-              <FullscreenThumbnailStrip
-                assets={displayAssets}
-                activeIndex={activeIndex ?? 0}
-                onSelect={(index) => {
-                  showAssetAtIndex(index, true);
-                }}
+            {showInfoPanel ? (
+              <FullscreenInfoPanel
+                asset={activeAsset}
+                details={cachedAssetDetails}
+                isLoading={isLoadingCachedDetails}
               />
-            </div>
+            ) : null}
           </div>
         </div>
       ) : null}

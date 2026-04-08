@@ -18,13 +18,16 @@ export type AssetSummary = {
 export type GridLayoutAssetInput = {
   id: string;
   fileCreatedAt: string | null;
+  type: string | null;
   width: number | null;
   height: number | null;
+  thumbhash: string | null;
 };
 
 export type GridLayoutItem = {
   id: string;
   width: number;
+  thumbhash: string | null;
 };
 
 export type GridLayoutRow = {
@@ -125,3 +128,22 @@ export type CacheStats = {
 };
 
 export type AssetVisibility = "timeline" | "archive" | "hidden" | "locked";
+
+export type AssetCacheDetails = {
+  id: string;
+  originalFileName: string;
+  originalPath: string | null;
+  fileCreatedAt: string | null;
+  checksum: string | null;
+  type: string | null;
+  duration: string | null;
+  width: number | null;
+  height: number | null;
+  camera: string | null;
+  lens: string | null;
+  fileSizeBytes: number | null;
+  fileExtension: string | null;
+  people: string | null;
+  tags: string | null;
+  exifInfoJson: string | null;
+};

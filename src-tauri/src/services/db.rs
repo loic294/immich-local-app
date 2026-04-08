@@ -673,6 +673,50 @@ impl Database {
         Ok(days)
     }
 
+    pub fn get_asset_details(&self, asset_id: &str) -> Result<Option<AssetSummaryExtended>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT
+                    id,
+                    original_file_name,
+                    original_path,
+                    file_created_at,
+                    checksum,
+                    asset_type,
+                    duration,
+                    is_favorite,
+                    is_archived,
+                    visibility,
+                    rating,
+                    width,
+                    height,
+                    thumbhash,
+                    camera,
+                    lens,
+                    file_size_bytes,
+                    file_extension,
+                    people,
+                    tags,
+                    exif_info_json
+                FROM assets
+                WHERE id = ?1
+                LIMIT 1
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let mut rows = stmt
+            .query_map(params![asset_id], map_asset_summary_extended)
+            .map_err(|err| err.to_string())?;
+
+        match rows.next() {
+            Some(result) => result.map(Some).map_err(|err| err.to_string()),
+            None => Ok(None),
+        }
+    }
+
     pub fn get_asset_jump_target_page(
         &self,
         date_key: &str,
@@ -1391,6 +1435,34 @@ fn map_asset_summary(row: &rusqlite::Row<'_>) -> Result<AssetSummary, rusqlite::
         width: row.get(11)?,
         height: row.get(12)?,
         thumbhash: row.get(13)?,
+    })
+}
+
+fn map_asset_summary_extended(
+    row: &rusqlite::Row<'_>,
+) -> Result<AssetSummaryExtended, rusqlite::Error> {
+    Ok(AssetSummaryExtended {
+        id: row.get(0)?,
+        original_file_name: row.get(1)?,
+        original_path: row.get(2)?,
+        file_created_at: row.get(3)?,
+        checksum: row.get(4)?,
+        r#type: row.get(5)?,
+        duration: row.get(6)?,
+        is_favorite: row.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0,
+        is_archived: row.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0,
+        visibility: row.get(9)?,
+        rating: row.get(10)?,
+        width: row.get(11)?,
+        height: row.get(12)?,
+        thumbhash: row.get(13)?,
+        camera: row.get(14)?,
+        lens: row.get(15)?,
+        file_size_bytes: row.get(16)?,
+        file_extension: row.get(17)?,
+        people: row.get(18)?,
+        tags: row.get(19)?,
+        exif_info_json: row.get(20)?,
     })
 }
 
