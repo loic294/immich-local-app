@@ -154,7 +154,7 @@ export function FullscreenInfoPanel({
               <iframe
                 title="Photo location map"
                 src={mapSrc}
-                className="h-32 w-full bg-zinc-950"
+                className="h-40 w-40 bg-zinc-950"
                 loading="lazy"
                 referrerPolicy="no-referrer-when-downgrade"
               />

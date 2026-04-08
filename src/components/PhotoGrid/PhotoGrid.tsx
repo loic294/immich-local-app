@@ -9,6 +9,7 @@ import {
   Film,
   Calendar,
   Info,
+  ZoomIn,
 } from "lucide-react";
 import { thumbHashToRGBA } from "thumbhash";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -17,6 +18,8 @@ import { FullscreenThumbnailStrip } from "./FullscreenThumbnailStrip";
 import { DatePickerModal } from "./DatePickerModal";
 import { VerticalTimeline } from "./VerticalTimeline";
 import { FullscreenInfoPanel } from "./FullscreenInfoPanel";
+import { CanvasImageViewer } from "./CanvasImageViewer";
+import { ZoomControl } from "./ZoomControl";
 import type {
   AssetCacheDetails,
   GridLayoutSection,
@@ -101,6 +104,7 @@ export function PhotoGrid({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const imageContainerRef = useRef<HTMLDivElement | null>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [activeSrc, setActiveSrc] = useState<string | null>(null);
   const [activeStillSrc, setActiveStillSrc] = useState<string | null>(null);
@@ -124,6 +128,9 @@ export function PhotoGrid({
   const [descriptionUpdateId, setDescriptionUpdateId] = useState<string | null>(
     null,
   );
+  const [zoom, setZoom] = useState(100);
+  const [imageContainerWidth, setImageContainerWidth] = useState(0);
+  const [imageContainerHeight, setImageContainerHeight] = useState(0);
   const [isTimelineScrubbing, setIsTimelineScrubbing] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showInfoPanel, setShowInfoPanel] = useState(() => {
@@ -1274,6 +1281,25 @@ export function PhotoGrid({
     }
   }, [activeAsset, isPlayingLivePhoto, shouldAutoplayLivePhoto]);
 
+  useEffect(() => {
+    if (!imageContainerRef.current) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (imageContainerRef.current) {
+        setImageContainerWidth(imageContainerRef.current.clientWidth);
+        setImageContainerHeight(imageContainerRef.current.clientHeight);
+      }
+    });
+
+    observer.observe(imageContainerRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   const activeAssetRatio = getAssetAspectRatio(activeAsset);
   const livePhotoFrameStyle = {
     aspectRatio: String(activeAssetRatio),
@@ -1294,6 +1320,7 @@ export function PhotoGrid({
     setActiveStillSrc(null);
     setIsPlayingLivePhoto(false);
     setShouldAutoplayLivePhoto(autoplayLivePhoto);
+    setZoom(100);
   };
 
   const showAssetAtIndex = (index: number, autoplayLivePhoto: boolean) => {
@@ -1741,7 +1768,6 @@ export function PhotoGrid({
           className="group fixed inset-0 z-9999 flex items-center justify-center bg-black/96 p-6"
           role="dialog"
           aria-modal="true"
-          onClick={closeLightbox}
         >
           <button
             type="button"
@@ -1777,6 +1803,17 @@ export function PhotoGrid({
                 <CirclePlay size={20} />
               </button>
             ) : null}
+
+            {!isVideoAsset(activeAsset) ? (
+              <>
+                <div className="w-px bg-white/10" />
+                <div onClick={(e) => e.stopPropagation()}>
+                  <ZoomControl zoomLevel={zoom} onZoomChange={setZoom} />
+                </div>
+              </>
+            ) : null}
+
+            <div className="h-4 border-l border-white/25" />
 
             <button
               type="button"
@@ -1845,7 +1882,10 @@ export function PhotoGrid({
                 <ChevronRight size={28} />
               </button>
 
-              <div className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12">
+              <div
+                ref={imageContainerRef}
+                className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12"
+              >
                 {isVideoAsset(activeAsset) ? (
                   activeSrc ? (
                     <video
@@ -1921,6 +1961,15 @@ export function PhotoGrid({
                       }}
                     />
                   </div>
+                ) : zoom !== 100 ? (
+                  <CanvasImageViewer
+                    src={activeStillSrc ?? activeSrc ?? ""}
+                    alt={activeAsset.originalFileName}
+                    zoom={zoom}
+                    onZoomChange={setZoom}
+                    containerWidth={imageContainerWidth}
+                    containerHeight={imageContainerHeight}
+                  />
                 ) : (
                   <img
                     className="max-h-full max-w-full object-contain"
