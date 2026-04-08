@@ -144,9 +144,7 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
                   assets={filteredAlbumAssets}
                   isFetching={albumAssetsQuery.isFetchingNextPage}
                   hasNextPage={Boolean(albumAssetsQuery.hasNextPage)}
-                  onLoadMore={() => {
-                    void albumAssetsQuery.fetchNextPage();
-                  }}
+                  onLoadMore={() => albumAssetsQuery.fetchNextPage().then(() => undefined)}
                 />
               )}
             </section>

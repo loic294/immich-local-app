@@ -204,9 +204,7 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
               availableDates={assetDaysQuery.data ?? []}
               hasNextPage={assetsWindow.hasNextPage}
               maxHeight={photoGridHeight}
-              onLoadMore={() => {
-                void assetsWindow.loadNextPage();
-              }}
+              onLoadMore={() => assetsWindow.loadNextPage()}
               onLoadPrevious={() => {
                 void assetsWindow.loadPreviousPage();
               }}

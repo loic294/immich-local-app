@@ -39,8 +39,8 @@ type PhotoGridProps = {
   isFetchingPrevious?: boolean;
   hasNextPage: boolean;
   hasPreviousPage?: boolean;
-  onLoadMore: () => void;
-  onLoadPrevious?: () => void;
+  onLoadMore: () => Promise<void> | void;
+  onLoadPrevious?: () => Promise<void> | void;
   availableDates?: string[];
   onJumpToDate?: (dateKey: string) => Promise<void> | void;
   loadTimelineLayout?: (
@@ -141,12 +141,30 @@ export function PhotoGrid({
 
   useEffect(() => {
     if (!sentinelRef.current) {
+      console.log("[PhotoGrid] Bottom sentinel: no sentinelRef, skipping observer setup");
       return;
     }
+
+    console.log("[PhotoGrid] Bottom sentinel: setting up observer", {
+      hasNextPage,
+      isFetching,
+      isLoadingNextRef: isLoadingNextRef.current,
+    });
 
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
+        console.log("[PhotoGrid] Bottom sentinel intersection", {
+          isIntersecting: entry?.isIntersecting,
+          hasNextPage,
+          isFetching,
+          isLoadingNext: isLoadingNextRef.current,
+          willLoadMore:
+            entry?.isIntersecting &&
+            hasNextPage &&
+            !isFetching &&
+            !isLoadingNextRef.current,
+        });
         if (
           entry?.isIntersecting &&
           hasNextPage &&
@@ -154,7 +172,12 @@ export function PhotoGrid({
           !isLoadingNextRef.current
         ) {
           isLoadingNextRef.current = true;
-          onLoadMore();
+          void Promise.resolve(onLoadMore()).finally(() => {
+            console.log(
+              "[PhotoGrid] onLoadMore settled -> resetting isLoadingNextRef",
+            );
+            isLoadingNextRef.current = false;
+          });
         }
       },
       {
@@ -166,6 +189,7 @@ export function PhotoGrid({
     observer.observe(sentinelRef.current);
 
     return () => {
+      console.log("[PhotoGrid] Bottom sentinel: disconnecting observer");
       observer.disconnect();
     };
   }, [hasNextPage, isFetching, onLoadMore]);
@@ -214,6 +238,7 @@ export function PhotoGrid({
 
   useEffect(() => {
     if (!isFetching) {
+      console.log("[PhotoGrid] isFetching became false → resetting isLoadingNextRef");
       isLoadingNextRef.current = false;
     }
   }, [isFetching]);
@@ -527,13 +552,16 @@ export function PhotoGrid({
   }, [gridSections, pendingJumpDateKey]);
 
   const handleJumpToDate = async (dateKey: string) => {
+    console.log("[PhotoGrid] handleJumpToDate", { dateKey });
     setPendingJumpDateKey(dateKey);
     if (viewportRef.current) {
       viewportRef.current.scrollTop = 0;
     }
 
     if (onJumpToDate) {
+      console.log("[PhotoGrid] calling onJumpToDate, hasNextPage before jump:", hasNextPage);
       await onJumpToDate(dateKey);
+      console.log("[PhotoGrid] onJumpToDate resolved, hasNextPage after jump:", hasNextPage, "isLoadingNextRef:", isLoadingNextRef.current);
       return;
     }
 

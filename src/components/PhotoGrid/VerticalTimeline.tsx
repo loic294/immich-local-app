@@ -260,7 +260,7 @@ export function VerticalTimeline({
             <button
               key={`year-${marker.year}`}
               type="button"
-              className="absolute right-8 -translate-y-1/2 p-0 text-[10px] font-semibold tabular-nums text-base-content/70 hover:text-primary"
+              className="absolute right-8 -translate-y-1/2 p-0 text-xs font-semibold tabular-nums text-base-content/70 hover:text-primary"
               style={{ top: `${marker.positionPercent}%` }}
               onClick={() => {
                 onJumpToDateKey(marker.jumpDateKey);

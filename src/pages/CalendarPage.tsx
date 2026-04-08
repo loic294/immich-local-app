@@ -214,9 +214,7 @@ function MonthView({
               assets={assets}
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
-              onLoadMore={() => {
-                void assetsQuery.fetchNextPage();
-              }}
+              onLoadMore={() => assetsQuery.fetchNextPage().then(() => undefined)}
             />
           )}
         </section>

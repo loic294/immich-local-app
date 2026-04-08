@@ -54,11 +54,17 @@ export function useAssetWindow(
 
   const replaceWithPage = useCallback(
     async (page: number) => {
+      console.log("[useAssetWindow] replaceWithPage start", { page });
       setIsInitialLoading(true);
       setError(null);
 
       try {
         const currentPage = await loadPage(page);
+        console.log("[useAssetWindow] replaceWithPage loaded", {
+          page,
+          itemCount: currentPage.items.length,
+          hasNextPage: currentPage.hasNextPage,
+        });
         setPages({ [page]: currentPage });
         setOrderedPages([page]);
       } catch (err) {
@@ -68,6 +74,7 @@ export function useAssetWindow(
           err instanceof Error ? err : new Error("Failed to load assets"),
         );
       } finally {
+        console.log("[useAssetWindow] replaceWithPage done, isInitialLoading -> false");
         setIsInitialLoading(false);
       }
     },
@@ -87,15 +94,26 @@ export function useAssetWindow(
 
   const loadNextPage = useCallback(async () => {
     if (isFetchingNextPage || orderedPages.length === 0) {
+      console.log("[useAssetWindow] loadNextPage: skipped", {
+        isFetchingNextPage,
+        orderedPagesLength: orderedPages.length,
+      });
       return;
     }
 
     const lastPageNumber = Math.max(...orderedPages);
     const lastPage = pages[lastPageNumber];
     if (!lastPage?.hasNextPage) {
+      console.log("[useAssetWindow] loadNextPage: no more pages", {
+        lastPageNumber,
+        hasNextPage: lastPage?.hasNextPage,
+      });
       return;
     }
 
+    console.log("[useAssetWindow] loadNextPage: loading", {
+      nextPage: lastPageNumber + 1,
+    });
     setIsFetchingNextPage(true);
     setError(null);
 

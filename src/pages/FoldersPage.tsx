@@ -141,9 +141,7 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
               assets={allAssets}
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
-              onLoadMore={() => {
-                void assetsQuery.fetchNextPage();
-              }}
+              onLoadMore={() => assetsQuery.fetchNextPage().then(() => undefined)}
             />
           ) : null}
 
