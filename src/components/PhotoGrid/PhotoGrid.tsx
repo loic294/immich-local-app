@@ -47,7 +47,9 @@ export function PhotoGrid({
   const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
   const [scrollThumbHeight, setScrollThumbHeight] = useState(28);
   const [scrollProgress, setScrollProgress] = useState(0);
-  const [pendingJumpProgress, setPendingJumpProgress] = useState<number | null>(null);
+  const [pendingJumpProgress, setPendingJumpProgress] = useState<number | null>(
+    null,
+  );
   const [isTimelineHovered, setIsTimelineHovered] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [hoverTimelineProgress, setHoverTimelineProgress] = useState<
@@ -500,7 +502,10 @@ export function PhotoGrid({
         prev === nextThumbHeight ? prev : nextThumbHeight,
       );
 
-      const maxScrollTop = Math.max(1, viewport.scrollHeight - viewport.clientHeight);
+      const maxScrollTop = Math.max(
+        1,
+        viewport.scrollHeight - viewport.clientHeight,
+      );
       const nextScrollProgress = Math.max(
         0,
         Math.min(1, viewport.scrollTop / maxScrollTop),
@@ -564,7 +569,8 @@ export function PhotoGrid({
   const currentMonthLabel = useMemo(() => {
     if (timelineBounds) {
       const targetMonthIndex = Math.round(
-        timelineBounds.newestIndex - timelineDisplayProgress * timelineBounds.range,
+        timelineBounds.newestIndex -
+          timelineDisplayProgress * timelineBounds.range,
       );
       return getMonthYearLabelFromMonthIndex(targetMonthIndex);
     }
@@ -1089,7 +1095,10 @@ export function PhotoGrid({
               {currentMonthLabel ? (
                 <div
                   className="absolute right-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-primary/40 bg-base-100 px-2 text-[11px] font-medium text-base-content shadow"
-                  style={{ height: `${scrollThumbHeight}px`, lineHeight: `${scrollThumbHeight}px` }}
+                  style={{
+                    height: `${scrollThumbHeight}px`,
+                    lineHeight: `${scrollThumbHeight}px`,
+                  }}
                 >
                   {currentMonthLabel}
                 </div>

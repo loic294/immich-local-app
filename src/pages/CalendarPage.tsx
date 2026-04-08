@@ -155,7 +155,13 @@ interface MonthViewProps {
   onBack: () => void;
 }
 
-function MonthView({ session, onNavigate, year, month, onBack }: MonthViewProps) {
+function MonthView({
+  session,
+  onNavigate,
+  year,
+  month,
+  onBack,
+}: MonthViewProps) {
   const assetsQuery = useCalendarAssets(true, year, month);
   const assets = useMemo(
     () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],

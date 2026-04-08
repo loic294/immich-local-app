@@ -97,7 +97,7 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
             </button>
           </div>
 
-            {folderPathsQuery.isError ? (
+          {folderPathsQuery.isError ? (
             <div role="alert" className="alert alert-error alert-soft text-sm">
               <span>
                 {(folderPathsQuery.error as Error | null)?.message ??

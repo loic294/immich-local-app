@@ -14,6 +14,6 @@ export function useFolderAssets(enabled: boolean, path: string) {
       if (!lastPage.hasNextPage) return undefined;
       return allPages.length;
     },
-    staleTime: 30_000
+    staleTime: 30_000,
   });
 }

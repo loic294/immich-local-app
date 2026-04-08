@@ -15,6 +15,6 @@ export function useAlbumAssets(enabled: boolean, albumId: string) {
       if (lastPage.items.length < PAGE_SIZE) return undefined;
       return allPages.length;
     },
-    staleTime: 60_000
+    staleTime: 60_000,
   });
 }

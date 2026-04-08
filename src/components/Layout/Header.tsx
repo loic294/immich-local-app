@@ -87,7 +87,11 @@ export function Header({
           {profileImage ? (
             <div className="avatar">
               <div className="w-8 rounded-full">
-                <img src={profileImage} alt="Profile" className="object-cover" />
+                <img
+                  src={profileImage}
+                  alt="Profile"
+                  className="object-cover"
+                />
               </div>
             </div>
           ) : (
@@ -98,7 +102,9 @@ export function Header({
             </div>
           )}
           <div>
-            <p className="m-0 text-xs font-semibold text-base-content">{userName}</p>
+            <p className="m-0 text-xs font-semibold text-base-content">
+              {userName}
+            </p>
             <p className="m-0 max-w-40 truncate text-[11px] text-base-content/60">
               {serverUrl}
             </p>

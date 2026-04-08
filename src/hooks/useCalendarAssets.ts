@@ -3,7 +3,11 @@ import { fetchCalendarAssetsPaged } from "../api/tauri";
 
 const PAGE_SIZE = 40;
 
-export function useCalendarAssets(enabled: boolean, year: number, month: number) {
+export function useCalendarAssets(
+  enabled: boolean,
+  year: number,
+  month: number,
+) {
   return useInfiniteQuery({
     queryKey: ["calendar-assets-paged", year, month],
     enabled,
@@ -15,6 +19,6 @@ export function useCalendarAssets(enabled: boolean, year: number, month: number)
       if (lastPage.items.length < PAGE_SIZE) return undefined;
       return allPages.length;
     },
-    staleTime: 60_000
+    staleTime: 60_000,
   });
 }
