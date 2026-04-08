@@ -65,6 +65,33 @@ pub struct AssetDateJumpTarget {
     pub page: u32,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineLayoutDay {
+    pub date_key: String,
+    pub year: i32,
+    pub month: u32,
+    pub row_count: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineLayoutMonth {
+    pub month_key: String,
+    pub jump_date_key: String,
+    pub year: i32,
+    pub month: u32,
+    pub row_count: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineLayoutResponse {
+    pub total_rows: u32,
+    pub days: Vec<TimelineLayoutDay>,
+    pub months: Vec<TimelineLayoutMonth>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAssetVisibilityPayload {
@@ -224,6 +251,84 @@ pub async fn get_cached_asset_jump_target(
         .map_err(|err| format!("asset jump target query failed: {err}"))?;
 
     Ok(page.map(|page| AssetDateJumpTarget { date_key, page }))
+}
+
+#[tauri::command]
+pub async fn get_cached_timeline_layout(
+    search: Option<String>,
+    container_width: f64,
+    state: tauri::State<'_, AppState>,
+) -> Result<TimelineLayoutResponse, String> {
+    if container_width <= 0.0 {
+        return Ok(TimelineLayoutResponse {
+            total_rows: 0,
+            days: Vec::new(),
+            months: Vec::new(),
+        });
+    }
+
+    let all_assets = state
+        .db
+        .get_all_assets(search.as_deref())
+        .map_err(|err| format!("timeline layout cache read failed: {err}"))?;
+
+    let layout_assets = all_assets
+        .into_iter()
+        .map(|asset| GridLayoutAssetInput {
+            id: asset.id,
+            file_created_at: asset.file_created_at,
+            width: asset.width,
+            height: asset.height,
+        })
+        .collect::<Vec<_>>();
+
+    let grouped_days = group_assets_by_day(&layout_assets);
+
+    let mut total_rows: u32 = 0;
+    let mut days: Vec<TimelineLayoutDay> = Vec::new();
+    let mut months: Vec<TimelineLayoutMonth> = Vec::new();
+
+    for (day_key, _label, items) in grouped_days {
+        let Some((year, month)) = parse_year_month_from_day_key(&day_key) else {
+            continue;
+        };
+
+        let row_count = build_justified_rows(items, container_width).len() as u32;
+        if row_count == 0 {
+            continue;
+        }
+
+        total_rows += row_count;
+
+        days.push(TimelineLayoutDay {
+            date_key: day_key.clone(),
+            year,
+            month,
+            row_count,
+        });
+
+        let month_key = format!("{:04}-{:02}", year, month);
+        if let Some(existing) = months.last_mut() {
+            if existing.month_key == month_key {
+                existing.row_count += row_count;
+                continue;
+            }
+        }
+
+        months.push(TimelineLayoutMonth {
+            month_key,
+            jump_date_key: day_key,
+            year,
+            month,
+            row_count,
+        });
+    }
+
+    Ok(TimelineLayoutResponse {
+        total_rows,
+        days,
+        months,
+    })
 }
 
 #[tauri::command]
@@ -500,4 +605,15 @@ fn get_asset_day(file_created_at: Option<&str>) -> (String, String) {
     };
 
     (key, label)
+}
+
+fn parse_year_month_from_day_key(day_key: &str) -> Option<(i32, u32)> {
+    let mut parts = day_key.split('-');
+    let year = parts.next()?.parse::<i32>().ok()?;
+    let month = parts.next()?.parse::<u32>().ok()?;
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+
+    Some((year, month))
 }

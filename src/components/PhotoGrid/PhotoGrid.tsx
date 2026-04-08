@@ -11,11 +11,15 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { FullscreenMetadataBar } from "./FullscreenMetadataBar";
 import { FullscreenThumbnailStrip } from "./FullscreenThumbnailStrip";
 import { DatePickerModal } from "./DatePickerModal";
+import { VerticalTimeline } from "./VerticalTimeline";
 import type {
   GridLayoutSection,
   AssetSummary,
   AssetVisibility,
   Settings,
+  TimelineLayoutDay,
+  TimelineLayoutMonth,
+  TimelineLayoutResponse,
 } from "../../types";
 import {
   calculateGridLayout,
@@ -38,6 +42,9 @@ type PhotoGridProps = {
   onLoadPrevious?: () => void;
   availableDates?: string[];
   onJumpToDate?: (dateKey: string) => Promise<void> | void;
+  loadTimelineLayout?: (
+    containerWidth: number,
+  ) => Promise<TimelineLayoutResponse>;
 };
 
 type VirtualEntry =
@@ -68,6 +75,7 @@ export function PhotoGrid({
   onLoadPrevious,
   availableDates: availableDatesProp,
   onJumpToDate,
+  loadTimelineLayout,
 }: PhotoGridProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -101,6 +109,8 @@ export function PhotoGrid({
   const isLoadingPreviousRef = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
   const latestScrollTopRef = useRef(0);
+  const [timelineLayout, setTimelineLayout] =
+    useState<TimelineLayoutResponse | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -279,45 +289,95 @@ export function PhotoGrid({
     [availableDatesProp, gridSections],
   );
 
-  const { virtualEntries, totalContentHeight } = useMemo(() => {
-    const entries: VirtualEntry[] = [];
-    const nextSectionTopMap = new Map<string, number>();
+  const { virtualEntries, totalContentHeight, loadedTimelineMonths } =
+    useMemo(() => {
+      const entries: VirtualEntry[] = [];
+      const nextSectionTopMap = new Map<string, number>();
+      const monthMap = new Map<string, TimelineLayoutMonth>();
 
-    const headerHeight = 52;
-    const rowGap = 4;
-    const sectionGap = 10;
-    let cursor = 0;
+      const headerHeight = 52;
+      const rowGap = 4;
+      const sectionGap = 10;
+      let cursor = 0;
 
-    for (const section of gridSections) {
-      nextSectionTopMap.set(section.key, cursor);
-      entries.push({
-        type: "header",
-        key: `header-${section.key}`,
-        sectionKey: section.key,
-        label: section.label,
-        top: cursor,
-        height: headerHeight,
-      });
-      cursor += headerHeight;
-
-      section.rows.forEach((row, rowIndex) => {
+      for (const section of gridSections) {
+        nextSectionTopMap.set(section.key, cursor);
         entries.push({
-          type: "row",
-          key: `${section.key}-${rowIndex}`,
+          type: "header",
+          key: `header-${section.key}`,
           sectionKey: section.key,
+          label: section.label,
           top: cursor,
-          height: row.height,
-          items: row.items,
+          height: headerHeight,
         });
-        cursor += row.height + rowGap;
-      });
+        cursor += headerHeight;
 
-      cursor += sectionGap;
+        section.rows.forEach((row, rowIndex) => {
+          entries.push({
+            type: "row",
+            key: `${section.key}-${rowIndex}`,
+            sectionKey: section.key,
+            top: cursor,
+            height: row.height,
+            items: row.items,
+          });
+          cursor += row.height + rowGap;
+        });
+
+        cursor += sectionGap;
+
+        const dayInfo = parseDayKey(section.key);
+        if (dayInfo) {
+          const monthKey = `${dayInfo.year}-${String(dayInfo.month).padStart(2, "0")}`;
+          const month = monthMap.get(monthKey);
+
+          if (month) {
+            month.rowCount += section.rows.length;
+          } else {
+            monthMap.set(monthKey, {
+              monthKey,
+              jumpDateKey: section.key,
+              year: dayInfo.year,
+              month: dayInfo.month,
+              rowCount: section.rows.length,
+            });
+          }
+        }
+      }
+
+      sectionTopMapRef.current = nextSectionTopMap;
+      return {
+        virtualEntries: entries,
+        totalContentHeight: cursor,
+        loadedTimelineMonths: [...monthMap.values()],
+      };
+    }, [gridSections]);
+
+  useEffect(() => {
+    if (!loadTimelineLayout || viewportWidth <= 0) {
+      setTimelineLayout(null);
+      return;
     }
 
-    sectionTopMapRef.current = nextSectionTopMap;
-    return { virtualEntries: entries, totalContentHeight: cursor };
-  }, [gridSections]);
+    let cancelled = false;
+
+    void loadTimelineLayout(viewportWidth)
+      .then((data) => {
+        if (!cancelled) {
+          setTimelineLayout(data);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to load timeline layout:", error);
+          setTimelineLayout(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTimelineLayout, viewportWidth]);
 
   const visibleEntries = useMemo(() => {
     if (virtualEntries.length === 0) {
@@ -352,6 +412,105 @@ export function PhotoGrid({
 
     return false;
   };
+
+  const resolveDateKeyForRatio = (
+    ratio: number,
+    days: TimelineLayoutDay[],
+  ): string | null => {
+    if (days.length === 0) {
+      return null;
+    }
+
+    const totalRows = days.reduce(
+      (sum, day) => sum + Math.max(1, day.rowCount),
+      0,
+    );
+    if (totalRows <= 0) {
+      return days[0]?.dateKey ?? null;
+    }
+
+    const target = Math.max(0, Math.min(1, ratio)) * totalRows;
+    let cursor = 0;
+
+    for (const day of days) {
+      cursor += Math.max(1, day.rowCount);
+      if (target <= cursor) {
+        return day.dateKey;
+      }
+    }
+
+    return days[days.length - 1]?.dateKey ?? null;
+  };
+
+  const handleTimelineSeekRatio = (ratio: number) => {
+    const dateKey = resolveDateKeyForRatio(ratio, timelineLayout?.days ?? []);
+    if (dateKey) {
+      void handleJumpToDate(dateKey);
+      return;
+    }
+
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const clamped = Math.max(0, Math.min(1, ratio));
+    const maxScroll = Math.max(
+      viewport.scrollHeight - viewport.clientHeight,
+      0,
+    );
+    viewport.scrollTo({
+      top: clamped * maxScroll,
+      behavior: "auto",
+    });
+  };
+
+  const timelineMonths = timelineLayout?.months ?? loadedTimelineMonths;
+
+  const timelineScrollRatio = useMemo(() => {
+    const days = timelineLayout?.days;
+    if (!days || days.length === 0) {
+      const maxScroll = Math.max(totalContentHeight - viewportHeight, 0);
+      if (maxScroll <= 0) {
+        return 0;
+      }
+
+      return Math.max(0, Math.min(1, scrollTop / maxScroll));
+    }
+
+    const topVisibleDate =
+      gridSections.find(
+        (section) => sectionTopMapRef.current.get(section.key)! >= scrollTop,
+      )?.key ?? gridSections[gridSections.length - 1]?.key;
+
+    if (!topVisibleDate) {
+      return 0;
+    }
+
+    const totalRows = days.reduce(
+      (sum, day) => sum + Math.max(1, day.rowCount),
+      0,
+    );
+    if (totalRows <= 0) {
+      return 0;
+    }
+
+    let cumulative = 0;
+    for (const day of days) {
+      if (day.dateKey === topVisibleDate) {
+        break;
+      }
+      cumulative += Math.max(1, day.rowCount);
+    }
+
+    return Math.max(0, Math.min(1, cumulative / totalRows));
+  }, [
+    gridSections,
+    scrollTop,
+    timelineLayout?.days,
+    totalContentHeight,
+    viewportHeight,
+  ]);
 
   useEffect(() => {
     if (!pendingJumpDateKey) {
@@ -834,10 +993,10 @@ export function PhotoGrid({
         ) : null}
       </div>
 
-      <div className="relative">
+      <div className="relative flex items-start gap-2">
         <div
           ref={viewportRef}
-          className="h-[calc(100vh-180px)] overflow-auto pr-2"
+          className="hide-scrollbar h-[calc(100vh-180px)] min-w-0 flex-1 overflow-auto pl-2 pr-2"
         >
           <div ref={topSentinelRef} className="h-px" />
           <div
@@ -925,6 +1084,15 @@ export function PhotoGrid({
             />
           </div>
         </div>
+
+        <VerticalTimeline
+          months={timelineMonths}
+          scrollRatio={timelineScrollRatio}
+          onSeekRatio={handleTimelineSeekRatio}
+          onJumpToDateKey={(dateKey) => {
+            void handleJumpToDate(dateKey);
+          }}
+        />
       </div>
 
       {isFetching ? (
@@ -1604,4 +1772,31 @@ function getAssetAspectRatio(asset: AssetSummary | null): number {
   }
 
   return 4 / 3;
+}
+
+function parseDayKey(
+  value: string,
+): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+
+  return { year, month, day };
 }

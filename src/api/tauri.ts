@@ -7,6 +7,7 @@ import type {
   AssetSummary,
   GridLayoutAssetInput,
   GridLayoutResponse,
+  TimelineLayoutResponse,
   MemorySummary,
   TimelineMonths,
   Settings,
@@ -99,6 +100,16 @@ export async function getCachedAssetJumpTarget(
     dateKey,
     pageSize,
     search,
+  });
+}
+
+export async function getCachedTimelineLayout(
+  search: string | null,
+  containerWidth: number,
+): Promise<TimelineLayoutResponse> {
+  return invoke<TimelineLayoutResponse>("get_cached_timeline_layout", {
+    search,
+    containerWidth,
   });
 }
 

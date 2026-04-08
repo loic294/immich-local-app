@@ -53,6 +53,27 @@ export type AssetDateJumpTarget = {
   page: number;
 };
 
+export type TimelineLayoutDay = {
+  dateKey: string;
+  year: number;
+  month: number;
+  rowCount: number;
+};
+
+export type TimelineLayoutMonth = {
+  monthKey: string;
+  jumpDateKey: string;
+  year: number;
+  month: number;
+  rowCount: number;
+};
+
+export type TimelineLayoutResponse = {
+  totalRows: number;
+  days: TimelineLayoutDay[];
+  months: TimelineLayoutMonth[];
+};
+
 export type MemorySummary = {
   id: string;
   title: string | null;

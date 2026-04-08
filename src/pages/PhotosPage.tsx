@@ -6,7 +6,10 @@ import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { MemoriesStrip } from "../components/Memories/MemoriesStrip";
 import { MemoryFullscreenViewer } from "../components/Memories/MemoryFullscreenViewer";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
-import { getCachedAssetJumpTarget } from "../api/tauri";
+import {
+  getCachedAssetJumpTarget,
+  getCachedTimelineLayout,
+} from "../api/tauri";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { toMemoryItem, type MemoryItem } from "../utils/memory";
 import type { Session } from "../hooks/useSession";
@@ -139,6 +142,12 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
 
                 await assetsWindow.jumpToPage(jumpTarget.page);
               }}
+              loadTimelineLayout={(containerWidth) =>
+                getCachedTimelineLayout(
+                  searchTerm.trim() || null,
+                  containerWidth,
+                )
+              }
             />
           )}
         </section>
