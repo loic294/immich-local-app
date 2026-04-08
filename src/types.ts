@@ -10,6 +10,35 @@ export type AssetSummary = {
   isArchived: boolean;
   visibility: string | null;
   rating: number | null;
+  width: number | null;
+  height: number | null;
+};
+
+export type GridLayoutAssetInput = {
+  id: string;
+  fileCreatedAt: string | null;
+  width: number | null;
+  height: number | null;
+};
+
+export type GridLayoutItem = {
+  id: string;
+  width: number;
+};
+
+export type GridLayoutRow = {
+  height: number;
+  items: GridLayoutItem[];
+};
+
+export type GridLayoutSection = {
+  key: string;
+  label: string;
+  rows: GridLayoutRow[];
+};
+
+export type GridLayoutResponse = {
+  sections: GridLayoutSection[];
 };
 
 export type AssetPage = {

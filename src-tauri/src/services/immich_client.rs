@@ -49,6 +49,10 @@ pub struct AssetSummary {
     pub visibility: Option<String>,
     #[serde(default)]
     pub rating: Option<i32>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -1338,6 +1342,38 @@ fn enrich_asset_summary_from_value(mut asset: AssetSummary, value: &Value) -> As
             });
     }
 
+    if asset.width.is_none() {
+        asset.width = value
+            .get("exifInfo")
+            .and_then(|v| v.get("imageWidth"))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("exifImageWidth"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            })
+            .or_else(|| value.get("width").and_then(Value::as_u64).map(|v| v as u32));
+    }
+
+    if asset.height.is_none() {
+        asset.height = value
+            .get("exifInfo")
+            .and_then(|v| v.get("imageHeight"))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("exifImageHeight"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            })
+            .or_else(|| value.get("height").and_then(Value::as_u64).map(|v| v as u32));
+    }
+
     normalize_asset_summary(asset)
 }
 
@@ -1411,6 +1447,32 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
             .and_then(|v| v.get("rating"))
             .and_then(Value::as_i64)
             .map(|rating| rating as i32),
+        width: value
+            .get("exifInfo")
+            .and_then(|v| v.get("imageWidth"))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("exifImageWidth"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            })
+            .or_else(|| value.get("width").and_then(Value::as_u64).map(|v| v as u32)),
+        height: value
+            .get("exifInfo")
+            .and_then(|v| v.get("imageHeight"))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+            .or_else(|| {
+                value
+                    .get("exifInfo")
+                    .and_then(|v| v.get("exifImageHeight"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            })
+            .or_else(|| value.get("height").and_then(Value::as_u64).map(|v| v as u32)),
     };
 
     asset = normalize_asset_summary(asset);

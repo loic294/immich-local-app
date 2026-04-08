@@ -4,6 +4,8 @@ import type {
   AssetVisibility,
   AssetPage,
   AssetSummary,
+  GridLayoutAssetInput,
+  GridLayoutResponse,
   MemorySummary,
   TimelineMonths,
   Settings,
@@ -198,4 +200,14 @@ export async function fetchAssetsByMonth(
   month: number,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("fetch_assets_by_month", { year, month });
+}
+
+export async function calculateGridLayout(
+  assets: GridLayoutAssetInput[],
+  containerWidth: number,
+): Promise<GridLayoutResponse> {
+  return invoke<GridLayoutResponse>("calculate_grid_layout", {
+    assets,
+    containerWidth,
+  });
 }

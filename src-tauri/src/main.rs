@@ -7,7 +7,7 @@ use commands::albums::{fetch_albums, get_album_assets_paged};
 use commands::assets::{
     fetch_assets, get_asset_playback, get_asset_thumbnail, get_cached_assets, get_timeline_months,
     refresh_asset, update_asset_favorite, update_asset_rating, update_asset_visibility, fetch_assets_by_month,
-    get_calendar_assets_paged,
+    get_calendar_assets_paged, calculate_grid_layout,
 };
 use commands::auth::{authenticate, restore_session, logout, get_profile_image};
 use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
@@ -56,6 +56,7 @@ pub fn main() {
             open_url,
             fetch_assets_by_month,
             get_calendar_assets_paged,
+            calculate_grid_layout,
             get_sync_status,
             start_asset_sync,
             check_for_new_assets

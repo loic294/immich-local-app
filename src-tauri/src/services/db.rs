@@ -73,6 +73,8 @@ impl Database {
                 is_archived BOOLEAN DEFAULT 0,
                 visibility TEXT,
                 rating INTEGER,
+                width INTEGER,
+                height INTEGER,
                 camera TEXT,
                 lens TEXT,
                 file_size_bytes INTEGER,
@@ -174,6 +176,8 @@ impl Database {
             ("file_extension", "TEXT"),
             ("people", "TEXT"),
             ("tags", "TEXT"),
+            ("width", "INTEGER"),
+            ("height", "INTEGER"),
         ];
         
         for (col_name, col_type) in required_columns {
@@ -248,9 +252,9 @@ impl Database {
                 "
                 INSERT INTO assets (
                     id, original_file_name, file_created_at, checksum, updated_at,
-                    asset_type, duration, is_favorite, is_archived, visibility, rating
+                    asset_type, duration, is_favorite, is_archived, visibility, rating, width, height
                 )
-                VALUES (?1, ?2, ?3, ?4, strftime('%s', 'now'), ?5, ?6, ?7, ?8, ?9, ?10)
+                VALUES (?1, ?2, ?3, ?4, strftime('%s', 'now'), ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                 ON CONFLICT(id) DO UPDATE SET
                     original_file_name = excluded.original_file_name,
                     file_created_at = excluded.file_created_at,
@@ -261,7 +265,9 @@ impl Database {
                     is_favorite = excluded.is_favorite,
                     is_archived = excluded.is_archived,
                     visibility = excluded.visibility,
-                    rating = excluded.rating
+                    rating = excluded.rating,
+                    width = excluded.width,
+                    height = excluded.height
                 ",
                 params![
                     asset.id,
@@ -273,7 +279,9 @@ impl Database {
                     asset.is_favorite as i32,
                     asset.is_archived as i32,
                     asset.visibility,
-                    asset.rating
+                    asset.rating,
+                    asset.width,
+                    asset.height
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -348,7 +356,19 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "
-                SELECT id, original_file_name, file_created_at, checksum
+                SELECT
+                    id,
+                    original_file_name,
+                    file_created_at,
+                    checksum,
+                    asset_type,
+                    duration,
+                    is_favorite,
+                    is_archived,
+                    visibility,
+                    rating,
+                    width,
+                    height
                 FROM assets
                 ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                 LIMIT ?1 OFFSET ?2
@@ -363,13 +383,15 @@ impl Database {
                     original_file_name: row.get(1)?,
                     file_created_at: row.get(2)?,
                     checksum: row.get(3)?,
-                    r#type: None,
-                    duration: None,
+                    r#type: row.get(4)?,
+                    duration: row.get(5)?,
                     live_photo_video_id: None,
-                    is_favorite: false,
-                    is_archived: false,
-                    visibility: Some("timeline".to_string()),
-                    rating: None,
+                    is_favorite: row.get::<_, Option<i32>>(6)?.unwrap_or(0) != 0,
+                    is_archived: row.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0,
+                    visibility: row.get(8)?,
+                    rating: row.get(9)?,
+                    width: row.get(10)?,
+                    height: row.get(11)?,
                 })
             })
             .map_err(|err| err.to_string())?;
