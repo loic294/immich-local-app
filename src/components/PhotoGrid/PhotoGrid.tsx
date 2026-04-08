@@ -15,6 +15,7 @@ import { DatePickerModal } from "./DatePickerModal";
 import { VerticalTimeline } from "./VerticalTimeline";
 import type {
   GridLayoutSection,
+  GridLayoutResponse,
   AssetSummary,
   AssetVisibility,
   Settings,
@@ -43,6 +44,7 @@ type PhotoGridProps = {
   onLoadPrevious?: () => Promise<void> | void;
   availableDates?: string[];
   onJumpToDate?: (dateKey: string) => Promise<void> | void;
+  loadFullLayout?: (containerWidth: number) => Promise<GridLayoutResponse>;
   loadTimelineLayout?: (
     containerWidth: number,
   ) => Promise<TimelineLayoutResponse>;
@@ -85,6 +87,7 @@ export function PhotoGrid({
   onLoadPrevious,
   availableDates: availableDatesProp,
   onJumpToDate,
+  loadFullLayout,
   loadTimelineLayout,
   maxHeight = 0,
 }: PhotoGridProps) {
@@ -126,12 +129,18 @@ export function PhotoGrid({
   const pendingScrollRestoreRef = useRef<ScrollRestoreAnchor | null>(null);
   const pendingRestoreAttemptsRef = useRef(0);
   const [layoutReadyAssetCount, setLayoutReadyAssetCount] = useState(0);
+  const [fullGridSections, setFullGridSections] = useState<GridLayoutSection[]>(
+    [],
+  );
+  const isUsingFullLayout = fullGridSections.length > 0;
   const [timelineLayout, setTimelineLayout] =
     useState<TimelineLayoutResponse | null>(null);
 
   const captureScrollRestoreAnchor = (
     direction: "prepend" | "append",
   ): ScrollRestoreAnchor | null => {
+    // With full layout, row positions are stable — no restoration needed
+    if (isUsingFullLayout) return null;
     const currentEntries = latestVirtualEntriesRef.current;
     const currentScrollTop = latestRenderScrollTopRef.current;
     const firstVisibleRow = currentEntries.find(
@@ -202,6 +211,10 @@ export function PhotoGrid({
   }, []);
 
   useEffect(() => {
+    if (isUsingFullLayout) {
+      // Full layout mode uses scroll-position-based load triggers instead
+      return;
+    }
     if (!sentinelRef.current) {
       console.log(
         "[PhotoGrid] Bottom sentinel: no sentinelRef, skipping observer setup",
@@ -259,10 +272,10 @@ export function PhotoGrid({
       console.log("[PhotoGrid] Bottom sentinel: disconnecting observer");
       observer.disconnect();
     };
-  }, [hasNextPage, isFetching, onLoadMore]);
+  }, [hasNextPage, isFetching, isUsingFullLayout, onLoadMore]);
 
   useEffect(() => {
-    if (!topSentinelRef.current || !onLoadPrevious) {
+    if (isUsingFullLayout || !topSentinelRef.current || !onLoadPrevious) {
       return;
     }
 
@@ -325,7 +338,13 @@ export function PhotoGrid({
     return () => {
       observer.disconnect();
     };
-  }, [hasPreviousPage, isFetchingPrevious, onLoadPrevious, pendingJumpDateKey]);
+  }, [
+    hasPreviousPage,
+    isFetchingPrevious,
+    isUsingFullLayout,
+    onLoadPrevious,
+    pendingJumpDateKey,
+  ]);
 
   useEffect(() => {
     if (!isFetching) {
@@ -407,8 +426,12 @@ export function PhotoGrid({
   );
 
   const availableDates = useMemo(
-    () => availableDatesProp ?? gridSections.map((section) => section.key),
-    [availableDatesProp, gridSections],
+    () =>
+      availableDatesProp ??
+      (fullGridSections.length > 0 ? fullGridSections : gridSections).map(
+        (section) => section.key,
+      ),
+    [availableDatesProp, fullGridSections, gridSections],
   );
 
   const { virtualEntries, totalContentHeight, loadedTimelineMonths } =
@@ -422,7 +445,11 @@ export function PhotoGrid({
       const sectionGap = 10;
       let cursor = 0;
 
-      for (const section of gridSections) {
+      // Use the pre-computed full layout when available so positions are stable
+      const sectionsForLayout =
+        fullGridSections.length > 0 ? fullGridSections : gridSections;
+
+      for (const section of sectionsForLayout) {
         nextSectionTopMap.set(section.key, cursor);
         entries.push({
           type: "header",
@@ -473,7 +500,7 @@ export function PhotoGrid({
         totalContentHeight: cursor,
         loadedTimelineMonths: [...monthMap.values()],
       };
-    }, [gridSections]);
+    }, [fullGridSections, gridSections]);
 
   useEffect(() => {
     if (!loadTimelineLayout || viewportWidth <= 0) {
@@ -533,7 +560,127 @@ export function PhotoGrid({
     latestRenderScrollTopRef.current = scrollTop;
   }, [scrollTop]);
 
+  // Absolute y-positions of the first and last loaded asset rows
+  const { loadedContentTop, loadedContentBottom } = useMemo(() => {
+    if (!isUsingFullLayout || displayAssets.length === 0) {
+      return { loadedContentTop: 0, loadedContentBottom: totalContentHeight };
+    }
+
+    const firstId = displayAssets[0]?.id;
+    const lastId = displayAssets[displayAssets.length - 1]?.id;
+    let top: number | null = null;
+    let bottom: number | null = null;
+
+    for (const entry of virtualEntries) {
+      if (entry.type !== "row") continue;
+      if (top === null && entry.items.some((item) => item.id === firstId)) {
+        top = entry.top;
+      }
+      if (entry.items.some((item) => item.id === lastId)) {
+        bottom = entry.top + entry.height;
+      }
+    }
+
+    return {
+      loadedContentTop: top ?? 0,
+      loadedContentBottom: bottom ?? totalContentHeight,
+    };
+  }, [displayAssets, isUsingFullLayout, totalContentHeight, virtualEntries]);
+
+  // Load the full layout for all assets upfront so the virtual canvas is stable
+  useEffect(() => {
+    if (!loadFullLayout || viewportWidth <= 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void loadFullLayout(viewportWidth)
+      .then((data) => {
+        if (!cancelled) {
+          console.log("[PhotoGrid] Full grid layout loaded", {
+            sectionCount: data.sections.length,
+            viewportWidth,
+          });
+          setFullGridSections(data.sections);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to load full grid layout:", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadFullLayout, viewportWidth]);
+
+  // Scroll-position-based load triggers used in full layout mode
+  // (IntersectionObserver sentinels are disabled in this mode)
+  const SCROLL_LOAD_TRIGGER_PX = 800;
+  useEffect(() => {
+    if (!isUsingFullLayout) return;
+
+    if (
+      onLoadPrevious &&
+      hasPreviousPage &&
+      !isFetchingPrevious &&
+      !isLoadingPreviousRef.current &&
+      scrollTop - loadedContentTop < SCROLL_LOAD_TRIGGER_PX
+    ) {
+      console.log("[PhotoGrid] Full layout: scroll trigger prepend", {
+        scrollTop,
+        loadedContentTop,
+        distance: scrollTop - loadedContentTop,
+      });
+      isLoadingPreviousRef.current = true;
+      void Promise.resolve(onLoadPrevious()).finally(() => {
+        console.log(
+          "[PhotoGrid] onLoadPrevious settled -> resetting isLoadingPreviousRef",
+        );
+        isLoadingPreviousRef.current = false;
+      });
+    }
+
+    if (
+      hasNextPage &&
+      !isFetching &&
+      !isLoadingNextRef.current &&
+      loadedContentBottom - scrollTop - viewportHeight < SCROLL_LOAD_TRIGGER_PX
+    ) {
+      console.log("[PhotoGrid] Full layout: scroll trigger append", {
+        scrollTop,
+        viewportHeight,
+        loadedContentBottom,
+        distance: loadedContentBottom - scrollTop - viewportHeight,
+      });
+      isLoadingNextRef.current = true;
+      void Promise.resolve(onLoadMore()).finally(() => {
+        console.log(
+          "[PhotoGrid] onLoadMore settled -> resetting isLoadingNextRef",
+        );
+        isLoadingNextRef.current = false;
+      });
+    }
+  }, [
+    isUsingFullLayout,
+    scrollTop,
+    loadedContentTop,
+    loadedContentBottom,
+    hasPreviousPage,
+    isFetchingPrevious,
+    hasNextPage,
+    isFetching,
+    onLoadPrevious,
+    onLoadMore,
+    viewportHeight,
+  ]);
+
   useLayoutEffect(() => {
+    // With full layout, row positions are stable — no scroll restoration needed
+    if (isUsingFullLayout) return;
+
     const pendingAnchor = pendingScrollRestoreRef.current;
     if (!pendingAnchor || isFetching || isFetchingPrevious) {
       return;
@@ -684,9 +831,13 @@ export function PhotoGrid({
     }
 
     const topVisibleDate =
-      gridSections.find(
+      (fullGridSections.length > 0 ? fullGridSections : gridSections).find(
         (section) => sectionTopMapRef.current.get(section.key)! >= scrollTop,
-      )?.key ?? gridSections[gridSections.length - 1]?.key;
+      )?.key ??
+      (fullGridSections.length > 0 ? fullGridSections : gridSections)[
+        (fullGridSections.length > 0 ? fullGridSections : gridSections).length -
+          1
+      ]?.key;
 
     if (!topVisibleDate) {
       return 0;
@@ -710,6 +861,7 @@ export function PhotoGrid({
 
     return Math.max(0, Math.min(1, cumulative / totalRows));
   }, [
+    fullGridSections,
     gridSections,
     scrollTop,
     timelineLayout?.days,
@@ -717,6 +869,7 @@ export function PhotoGrid({
     viewportHeight,
   ]);
 
+  // Fires when virtualEntries (and therefore sectionTopMapRef) updates
   useEffect(() => {
     if (!pendingJumpDateKey) {
       return;
@@ -725,7 +878,7 @@ export function PhotoGrid({
     if (scrollToDateKey(pendingJumpDateKey)) {
       setPendingJumpDateKey(null);
     }
-  }, [gridSections, pendingJumpDateKey]);
+  }, [pendingJumpDateKey, virtualEntries]);
 
   const handleJumpToDate = async (dateKey: string) => {
     console.log("[PhotoGrid] handleJumpToDate", { dateKey });
@@ -758,6 +911,11 @@ export function PhotoGrid({
     let cancelled = false;
 
     async function loadLayout() {
+      // Skip per-page layout when full layout from Tauri is available
+      if (fullGridSections.length > 0) {
+        return;
+      }
+
       const assetCountForLayout = displayAssets.length;
       if (viewportWidth <= 0 || displayAssets.length === 0) {
         setGridSections([]);
@@ -1232,11 +1390,19 @@ export function PhotoGrid({
             minHeight: 0,
           }}
         >
-          <div ref={topSentinelRef} className="h-px" />
           <div
             className="relative"
             style={{ height: `${Math.max(totalContentHeight, 1)}px` }}
           >
+            {/* Load-trigger sentinel for previous page, positioned at loaded content boundary */}
+            <div
+              ref={topSentinelRef}
+              className="absolute left-0 right-0 pointer-events-none"
+              style={{
+                top: `${isUsingFullLayout ? loadedContentTop : 0}px`,
+                height: "1px",
+              }}
+            />
             {visibleEntries.map((entry) => {
               if (entry.type === "header") {
                 return (
@@ -1263,6 +1429,17 @@ export function PhotoGrid({
                   {entry.items.map((rowItem) => {
                     const asset = assetsById.get(rowItem.id);
                     if (!asset) {
+                      // In full layout mode: render a placeholder so the virtual
+                      // canvas stays stable while this page hasn't loaded yet
+                      if (isUsingFullLayout) {
+                        return (
+                          <div
+                            key={rowItem.id}
+                            className="h-full shrink-0 bg-base-300"
+                            style={{ width: `${rowItem.width}px` }}
+                          />
+                        );
+                      }
                       return null;
                     }
 
@@ -1312,10 +1489,18 @@ export function PhotoGrid({
               );
             })}
 
+            {/* Load-trigger sentinel for next page, positioned at loaded content boundary */}
             <div
               ref={sentinelRef}
-              className="absolute left-0 right-0 h-px"
-              style={{ top: `${Math.max(totalContentHeight - 1, 0)}px` }}
+              className="absolute left-0 right-0 pointer-events-none"
+              style={{
+                top: `${
+                  isUsingFullLayout
+                    ? loadedContentBottom
+                    : Math.max(totalContentHeight - 1, 0)
+                }px`,
+                height: "1px",
+              }}
             />
           </div>
         </div>

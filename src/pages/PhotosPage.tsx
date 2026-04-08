@@ -9,6 +9,7 @@ import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import {
   getCachedAssetJumpTarget,
   getCachedTimelineLayout,
+  getFullGridLayout,
 } from "../api/tauri";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { toMemoryItem, type MemoryItem } from "../utils/memory";
@@ -219,6 +220,9 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
 
                 await assetsWindow.jumpToPage(jumpTarget.page);
               }}
+              loadFullLayout={(containerWidth) =>
+                getFullGridLayout(searchTerm.trim() || null, containerWidth)
+              }
               loadTimelineLayout={(containerWidth) =>
                 getCachedTimelineLayout(
                   searchTerm.trim() || null,

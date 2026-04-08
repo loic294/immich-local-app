@@ -113,6 +113,16 @@ export async function getCachedTimelineLayout(
   });
 }
 
+export async function getFullGridLayout(
+  search: string | null,
+  containerWidth: number,
+): Promise<GridLayoutResponse> {
+  return invoke<GridLayoutResponse>("get_cached_full_grid_layout", {
+    search,
+    containerWidth,
+  });
+}
+
 export async function getAssetThumbnail(assetId: string): Promise<string> {
   return invoke<string>("get_asset_thumbnail", {
     assetId,

@@ -332,6 +332,34 @@ pub async fn get_cached_timeline_layout(
 }
 
 #[tauri::command]
+pub async fn get_cached_full_grid_layout(
+    search: Option<String>,
+    container_width: f64,
+    state: tauri::State<'_, AppState>,
+) -> Result<GridLayoutResponse, String> {
+    if container_width <= 0.0 {
+        return Ok(GridLayoutResponse { sections: Vec::new() });
+    }
+
+    let all_assets = state
+        .db
+        .get_all_assets(search.as_deref())
+        .map_err(|err| format!("full grid layout cache read failed: {err}"))?;
+
+    let layout_assets = all_assets
+        .into_iter()
+        .map(|asset| GridLayoutAssetInput {
+            id: asset.id,
+            file_created_at: asset.file_created_at,
+            width: asset.width,
+            height: asset.height,
+        })
+        .collect();
+
+    calculate_grid_layout(layout_assets, container_width)
+}
+
+#[tauri::command]
 pub async fn get_asset_thumbnail(
     asset_id: String,
     state: tauri::State<'_, AppState>,
