@@ -74,7 +74,9 @@ export function useAssetWindow(
           err instanceof Error ? err : new Error("Failed to load assets"),
         );
       } finally {
-        console.log("[useAssetWindow] replaceWithPage done, isInitialLoading -> false");
+        console.log(
+          "[useAssetWindow] replaceWithPage done, isInitialLoading -> false",
+        );
         setIsInitialLoading(false);
       }
     },

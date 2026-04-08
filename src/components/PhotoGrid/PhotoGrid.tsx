@@ -141,7 +141,9 @@ export function PhotoGrid({
 
   useEffect(() => {
     if (!sentinelRef.current) {
-      console.log("[PhotoGrid] Bottom sentinel: no sentinelRef, skipping observer setup");
+      console.log(
+        "[PhotoGrid] Bottom sentinel: no sentinelRef, skipping observer setup",
+      );
       return;
     }
 
@@ -238,7 +240,9 @@ export function PhotoGrid({
 
   useEffect(() => {
     if (!isFetching) {
-      console.log("[PhotoGrid] isFetching became false → resetting isLoadingNextRef");
+      console.log(
+        "[PhotoGrid] isFetching became false → resetting isLoadingNextRef",
+      );
       isLoadingNextRef.current = false;
     }
   }, [isFetching]);
@@ -559,9 +563,17 @@ export function PhotoGrid({
     }
 
     if (onJumpToDate) {
-      console.log("[PhotoGrid] calling onJumpToDate, hasNextPage before jump:", hasNextPage);
+      console.log(
+        "[PhotoGrid] calling onJumpToDate, hasNextPage before jump:",
+        hasNextPage,
+      );
       await onJumpToDate(dateKey);
-      console.log("[PhotoGrid] onJumpToDate resolved, hasNextPage after jump:", hasNextPage, "isLoadingNextRef:", isLoadingNextRef.current);
+      console.log(
+        "[PhotoGrid] onJumpToDate resolved, hasNextPage after jump:",
+        hasNextPage,
+        "isLoadingNextRef:",
+        isLoadingNextRef.current,
+      );
       return;
     }
 
