@@ -13,6 +13,7 @@ interface VerticalTimelineProps {
   scrollRatio: number;
   onSeekRatio: (ratio: number) => void;
   onJumpToDateKey: (dateKey: string) => void;
+  onScrubStateChange?: (isScrubbing: boolean) => void;
 }
 
 type TimelinePoint = {
@@ -29,6 +30,7 @@ export function VerticalTimeline({
   scrollRatio,
   onSeekRatio,
   onJumpToDateKey,
+  onScrubStateChange,
 }: VerticalTimelineProps) {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -37,6 +39,15 @@ export function VerticalTimeline({
   const dragRafRef = useRef<number | null>(null);
   const pendingRatioRef = useRef<number | null>(null);
   const dragRatioRef = useRef<number | null>(null);
+  const seekDebounceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    onScrubStateChange?.(isDragging);
+
+    return () => {
+      onScrubStateChange?.(false);
+    };
+  }, [isDragging, onScrubStateChange]);
 
   useEffect(() => {
     if (!isDragging) {
@@ -66,6 +77,18 @@ export function VerticalTimeline({
         if (pendingRatioRef.current !== null) {
           dragRatioRef.current = pendingRatioRef.current;
           setDragRatio(pendingRatioRef.current);
+
+          if (seekDebounceRef.current !== null) {
+            window.clearTimeout(seekDebounceRef.current);
+          }
+
+          seekDebounceRef.current = window.setTimeout(() => {
+            seekDebounceRef.current = null;
+            if (dragRatioRef.current !== null) {
+              onSeekRatio(dragRatioRef.current);
+            }
+          }, 120);
+
           pendingRatioRef.current = null;
         }
       });
@@ -75,6 +98,10 @@ export function VerticalTimeline({
       if (dragRafRef.current !== null) {
         window.cancelAnimationFrame(dragRafRef.current);
         dragRafRef.current = null;
+      }
+      if (seekDebounceRef.current !== null) {
+        window.clearTimeout(seekDebounceRef.current);
+        seekDebounceRef.current = null;
       }
       const settled = pendingRatioRef.current ?? dragRatioRef.current;
       pendingRatioRef.current = null;
@@ -95,6 +122,10 @@ export function VerticalTimeline({
       if (dragRafRef.current !== null) {
         window.cancelAnimationFrame(dragRafRef.current);
         dragRafRef.current = null;
+      }
+      if (seekDebounceRef.current !== null) {
+        window.clearTimeout(seekDebounceRef.current);
+        seekDebounceRef.current = null;
       }
     };
   }, [isDragging, onSeekRatio]);
@@ -245,6 +276,8 @@ export function VerticalTimeline({
           style={{ top: `calc(${activeRatio * 100}% - 8px)` }}
           onMouseDown={(event) => {
             event.preventDefault();
+            dragRatioRef.current = activeRatio;
+            setDragRatio(activeRatio);
             setIsDragging(true);
           }}
         />

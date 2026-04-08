@@ -12,6 +12,7 @@ export type AssetSummary = {
   rating: number | null;
   width: number | null;
   height: number | null;
+  thumbhash: string | null;
 };
 
 export type GridLayoutAssetInput = {

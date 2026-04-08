@@ -376,6 +376,7 @@ fn to_enriched_asset_record(
             .as_ref()
             .and_then(|m| m.height)
             .or(asset.height),
+        thumbhash: asset.thumbhash,
         camera: metadata.as_ref().and_then(|m| m.camera.clone()),
         lens: metadata.as_ref().and_then(|m| m.lens.clone()),
         file_size_bytes: metadata.as_ref().and_then(|m| m.file_size_bytes),

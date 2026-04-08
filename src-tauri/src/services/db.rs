@@ -35,6 +35,7 @@ pub struct AssetSummaryExtended {
     pub rating: Option<i32>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub thumbhash: Option<String>,
     pub camera: Option<String>,
     pub lens: Option<String>,
     pub file_size_bytes: Option<i64>,
@@ -97,6 +98,7 @@ impl Database {
                 rating INTEGER,
                 width INTEGER,
                 height INTEGER,
+                thumbhash TEXT,
                 camera TEXT,
                 lens TEXT,
                 file_size_bytes INTEGER,
@@ -234,6 +236,7 @@ impl Database {
             ("tags", "TEXT"),
             ("width", "INTEGER"),
             ("height", "INTEGER"),
+            ("thumbhash", "TEXT"),
             ("exif_info_json", "TEXT"),
         ];
         
@@ -309,9 +312,9 @@ impl Database {
                 "
                 INSERT INTO assets (
                     id, original_file_name, original_path, file_created_at, checksum, updated_at,
-                    asset_type, duration, is_favorite, is_archived, visibility, rating, width, height
+                    asset_type, duration, is_favorite, is_archived, visibility, rating, width, height, thumbhash
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s', 'now'), ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s', 'now'), ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                 ON CONFLICT(id) DO UPDATE SET
                     original_file_name = excluded.original_file_name,
                     original_path = excluded.original_path,
@@ -325,7 +328,8 @@ impl Database {
                     visibility = excluded.visibility,
                     rating = excluded.rating,
                     width = excluded.width,
-                    height = excluded.height
+                    height = excluded.height,
+                    thumbhash = excluded.thumbhash
                 ",
                 params![
                     asset.id,
@@ -340,7 +344,8 @@ impl Database {
                     asset.visibility,
                     asset.rating,
                     asset.width,
-                    asset.height
+                    asset.height,
+                    asset.thumbhash
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -362,9 +367,9 @@ impl Database {
                 INSERT INTO assets (
                     id, original_file_name, original_path, file_created_at, checksum, updated_at,
                     asset_type, duration, is_favorite, is_archived, visibility, rating,
-                    width, height, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json
+                    width, height, thumbhash, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s', 'now'), ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s', 'now'), ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
                 ON CONFLICT(id) DO UPDATE SET
                     original_file_name = excluded.original_file_name,
                     original_path = excluded.original_path,
@@ -379,6 +384,7 @@ impl Database {
                     rating = excluded.rating,
                     width = excluded.width,
                     height = excluded.height,
+                    thumbhash = excluded.thumbhash,
                     camera = excluded.camera,
                     lens = excluded.lens,
                     file_size_bytes = excluded.file_size_bytes,
@@ -401,6 +407,7 @@ impl Database {
                     asset.rating,
                     asset.width,
                     asset.height,
+                    asset.thumbhash,
                     asset.camera,
                     asset.lens,
                     asset.file_size_bytes,
@@ -445,7 +452,8 @@ impl Database {
                         visibility,
                         rating,
                         width,
-                        height
+                        height,
+                        thumbhash
                     FROM assets
                     WHERE
                         original_file_name LIKE ?3 COLLATE NOCASE
@@ -487,7 +495,8 @@ impl Database {
                         visibility,
                         rating,
                         width,
-                        height
+                        height,
+                        thumbhash
                     FROM assets
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     LIMIT ?1 OFFSET ?2
@@ -536,7 +545,8 @@ impl Database {
                         visibility,
                         rating,
                         width,
-                        height
+                        height,
+                        thumbhash
                     FROM assets
                     WHERE
                         original_file_name LIKE ?1 COLLATE NOCASE
@@ -577,7 +587,8 @@ impl Database {
                         visibility,
                         rating,
                         width,
-                        height
+                        height,
+                        thumbhash
                     FROM assets
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     ",
@@ -954,7 +965,8 @@ impl Database {
                     a.visibility,
                     a.rating,
                     a.width,
-                    a.height
+                    a.height,
+                    a.thumbhash
                 FROM album_assets aa
                 JOIN assets a ON a.id = aa.asset_id
                 WHERE aa.album_id = ?1
@@ -1031,7 +1043,8 @@ impl Database {
                     visibility,
                     rating,
                     width,
-                    height
+                    height,
+                    thumbhash
                 FROM assets
                 WHERE original_path = ?1
                 ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
@@ -1084,7 +1097,8 @@ impl Database {
                     visibility,
                     rating,
                     width,
-                    height
+                    height,
+                    thumbhash
                 FROM assets
                 WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1
                 ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
@@ -1376,6 +1390,7 @@ fn map_asset_summary(row: &rusqlite::Row<'_>) -> Result<AssetSummary, rusqlite::
         rating: row.get(10)?,
         width: row.get(11)?,
         height: row.get(12)?,
+        thumbhash: row.get(13)?,
     })
 }
 

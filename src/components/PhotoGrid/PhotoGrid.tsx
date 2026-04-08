@@ -7,6 +7,7 @@ import {
   X,
   Calendar,
 } from "lucide-react";
+import { thumbHashToRGBA } from "thumbhash";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { FullscreenMetadataBar } from "./FullscreenMetadataBar";
 import { FullscreenThumbnailStrip } from "./FullscreenThumbnailStrip";
@@ -100,6 +101,7 @@ export function PhotoGrid({
   const [favoriteUpdateId, setFavoriteUpdateId] = useState<string | null>(null);
   const [archiveUpdateId, setArchiveUpdateId] = useState<string | null>(null);
   const [ratingUpdateId, setRatingUpdateId] = useState<string | null>(null);
+  const [isTimelineScrubbing, setIsTimelineScrubbing] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [pendingJumpDateKey, setPendingJumpDateKey] = useState<string | null>(
     null,
@@ -1069,6 +1071,7 @@ export function PhotoGrid({
                           livePhotoAutoplay={
                             settings?.livePhotoAutoplay ?? true
                           }
+                          suppressFullThumbnail={isTimelineScrubbing}
                         />
                       </article>
                     );
@@ -1092,6 +1095,7 @@ export function PhotoGrid({
           onJumpToDateKey={(dateKey) => {
             void handleJumpToDate(dateKey);
           }}
+          onScrubStateChange={setIsTimelineScrubbing}
         />
       </div>
 
@@ -1305,6 +1309,7 @@ function AssetThumbnail({
   onDimensions,
   showDebug,
   livePhotoAutoplay,
+  suppressFullThumbnail,
 }: {
   asset: AssetSummary;
   onOpen: () => void;
@@ -1313,6 +1318,7 @@ function AssetThumbnail({
   onDimensions: (width: number, height: number) => void;
   showDebug: boolean;
   livePhotoAutoplay: boolean;
+  suppressFullThumbnail: boolean;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
@@ -1325,10 +1331,18 @@ function AssetThumbnail({
   const [isPlayingLivePhoto, setIsPlayingLivePhoto] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const retryTimeoutRef = useRef<number | null>(null);
+  const thumbhashPlaceholderSrc = useMemo(
+    () => thumbhashToDataUrl(asset.thumbhash),
+    [asset.thumbhash],
+  );
   const isVideo = isVideoAsset(asset);
   const isLivePhoto = asset.livePhotoVideoId != null;
 
   useEffect(() => {
+    if (suppressFullThumbnail) {
+      return;
+    }
+
     let canceled = false;
 
     async function load() {
@@ -1349,10 +1363,16 @@ function AssetThumbnail({
     return () => {
       canceled = true;
     };
-  }, [asset.id]);
+  }, [asset.id, suppressFullThumbnail]);
 
   useEffect(() => {
-    if (!isVideo || !isHovering || videoSrc || isVideoLoading) {
+    if (
+      suppressFullThumbnail ||
+      !isVideo ||
+      !isHovering ||
+      videoSrc ||
+      isVideoLoading
+    ) {
       return;
     }
 
@@ -1382,11 +1402,19 @@ function AssetThumbnail({
     return () => {
       cancelled = true;
     };
-  }, [asset.id, isHovering, isVideo, isVideoLoading, videoSrc]);
+  }, [
+    asset.id,
+    isHovering,
+    isVideo,
+    isVideoLoading,
+    suppressFullThumbnail,
+    videoSrc,
+  ]);
 
   // Load live photo video when hovering (if autoplay enabled and not already loaded)
   useEffect(() => {
     if (
+      suppressFullThumbnail ||
       !isLivePhoto ||
       !isHovering ||
       livePhotoVideoSrc ||
@@ -1429,6 +1457,7 @@ function AssetThumbnail({
     livePhotoVideoSrc,
     isVideoLoading,
     livePhotoAutoplay,
+    suppressFullThumbnail,
   ]);
 
   useEffect(() => {
@@ -1487,8 +1516,41 @@ function AssetThumbnail({
   if (!src) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-base-300 text-xs text-base-content/60">
-        Loading preview...
+        {thumbhashPlaceholderSrc ? (
+          <img
+            className="h-full w-full object-cover scale-105 blur-lg opacity-90"
+            src={thumbhashPlaceholderSrc}
+            alt=""
+            aria-hidden="true"
+          />
+        ) : (
+          "Loading preview..."
+        )}
       </div>
+    );
+  }
+
+  if (suppressFullThumbnail) {
+    return (
+      <button
+        type="button"
+        className="relative block h-full w-full cursor-zoom-in"
+        onClick={onOpen}
+        aria-label={`Open ${asset.originalFileName} in full screen`}
+      >
+        {thumbhashPlaceholderSrc ? (
+          <img
+            className="h-full w-full object-cover scale-105 blur-lg opacity-90"
+            src={thumbhashPlaceholderSrc}
+            alt=""
+            aria-hidden="true"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-base-300 text-xs text-base-content/60">
+            Loading preview...
+          </div>
+        )}
+      </button>
     );
   }
 
@@ -1772,6 +1834,47 @@ function getAssetAspectRatio(asset: AssetSummary | null): number {
   }
 
   return 4 / 3;
+}
+
+const thumbhashDataUrlCache = new Map<string, string>();
+
+function thumbhashToDataUrl(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const cached = thumbhashDataUrlCache.get(value);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+
+    const decoded = thumbHashToRGBA(bytes);
+    const canvas = document.createElement("canvas");
+    canvas.width = decoded.w;
+    canvas.height = decoded.h;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+
+    const imageData = context.createImageData(decoded.w, decoded.h);
+    imageData.data.set(decoded.rgba);
+    context.putImageData(imageData, 0, 0);
+
+    const dataUrl = canvas.toDataURL("image/png");
+    thumbhashDataUrlCache.set(value, dataUrl);
+    return dataUrl;
+  } catch {
+    return null;
+  }
 }
 
 function parseDayKey(

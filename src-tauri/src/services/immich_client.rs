@@ -55,6 +55,8 @@ pub struct AssetSummary {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    #[serde(default)]
+    pub thumbhash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1537,6 +1539,14 @@ fn enrich_asset_summary_from_value(mut asset: AssetSummary, value: &Value) -> As
             .map(str::to_string);
     }
 
+    if asset.thumbhash.is_none() {
+        asset.thumbhash = value
+            .get("thumbhash")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("thumbHash").and_then(Value::as_str))
+            .map(str::to_string);
+    }
+
     normalize_asset_summary(asset)
 }
 
@@ -1640,6 +1650,11 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
                     .map(|v| v as u32)
             })
             .or_else(|| value.get("height").and_then(Value::as_u64).map(|v| v as u32)),
+            thumbhash: value
+                .get("thumbhash")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("thumbHash").and_then(Value::as_str))
+                .map(str::to_string),
     };
 
     asset = normalize_asset_summary(asset);
