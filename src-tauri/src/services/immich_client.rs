@@ -16,6 +16,20 @@ const IMMICH_API_KEY_HEADER: &str = "x-api-key";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssetStatistics {
+    pub total: i32,
+    #[serde(default)]
+    pub photos: Option<i32>,
+    #[serde(default)]
+    pub videos: Option<i32>,
+    #[serde(default)]
+    pub archived: Option<i32>,
+    #[serde(default)]
+    pub favorites: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssetSummary {
     pub id: String,
     pub original_file_name: String,
@@ -87,12 +101,15 @@ pub struct AuthSession {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub user_id: String,
+    pub user_name: Option<String>,
 }
 
 pub struct ImmichClient {
     client: reqwest::Client,
     session: Mutex<Option<AuthSession>>,
     playback_downloads: Arc<Mutex<HashSet<String>>>,
+    cached_album: Mutex<Option<(String, Vec<AssetSummary>)>>,
+    cached_folder: Mutex<Option<(String, Vec<AssetSummary>)>>,
 }
 
 impl ImmichClient {
@@ -101,6 +118,8 @@ impl ImmichClient {
             client: reqwest::Client::new(),
             session: Mutex::new(None),
             playback_downloads: Arc::new(Mutex::new(HashSet::new())),
+            cached_album: Mutex::new(None),
+            cached_folder: Mutex::new(None),
         }
     }
 
@@ -135,12 +154,18 @@ impl ImmichClient {
             .and_then(Value::as_str)
             .ok_or_else(|| "authentication response missing user id".to_string())?
             .to_string();
+        let user_name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
 
         let session = AuthSession {
             server_url: normalize_base(server_url),
             access_token: api_key.to_string(),
             refresh_token: None,
             user_id,
+            user_name,
         };
 
         let mut guard = self.session.lock().await;
@@ -152,6 +177,12 @@ impl ImmichClient {
     pub async fn clear_session(&self) {
         let mut guard = self.session.lock().await;
         *guard = None;
+
+        let mut album_cache = self.cached_album.lock().await;
+        *album_cache = None;
+
+        let mut folder_cache = self.cached_folder.lock().await;
+        *folder_cache = None;
     }
 
     pub async fn get_assets(
@@ -169,6 +200,210 @@ impl ImmichClient {
 
         self.fetch_assets_inner(&session, page, page_size, search_term)
             .await
+    }
+
+    pub async fn get_assets_by_month(&self, year: i32, month: u32) -> Result<Vec<AssetSummary>, String> {        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let (next_year, next_month) = if month == 12 {
+            (year + 1, 1u32)
+        } else {
+            (year, month + 1)
+        };
+        let taken_after = format!("{}-{:02}-01T00:00:00.000Z", year, month);
+        let taken_before = format!("{}-{:02}-01T00:00:00.000Z", next_year, next_month);
+
+        let search_url = format!("{}/api/search/metadata", session.server_url);
+        let mut all_items: Vec<AssetSummary> = Vec::new();
+        let page_size = 1000u32;
+        let mut current_page = 1u32;
+
+        loop {
+            let search_payload = serde_json::json!({
+                "page": current_page,
+                "size": page_size,
+                "withExif": true,
+                "takenAfter": taken_after,
+                "takenBefore": taken_before,
+            });
+
+            let response = self
+                .client
+                .post(&search_url)
+                .headers(headers.clone())
+                .json(&search_payload)
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+
+            if !status.is_success() {
+                return Err(format!(
+                    "fetch assets by month failed with status {} ({})",
+                    status,
+                    truncate_for_log(&body)
+                ));
+            }
+
+            let result = parse_asset_list(&body)?;
+            let has_more = result.has_next_page || result.items.len() >= page_size as usize;
+            all_items.extend(result.items);
+
+            if !has_more {
+                break;
+            }
+            current_page += 1;
+        }
+
+        Ok(all_items)
+    }
+
+    pub async fn get_album_assets_paged(
+        &self,
+        album_id: &str,
+        page: u32,
+        page_size: u32,
+    ) -> Result<AssetListResult, String> {
+        let needs_fetch = {
+            let cache = self.cached_album.lock().await;
+            cache.as_ref().map_or(true, |(cached_album_id, _)| cached_album_id != album_id)
+        };
+
+        if needs_fetch {
+            let assets = self.get_album_assets(album_id).await?;
+            let mut cache = self.cached_album.lock().await;
+            *cache = Some((album_id.to_string(), assets));
+        }
+
+        let cache = self.cached_album.lock().await;
+        let all_assets = &cache.as_ref().unwrap().1;
+        let total = all_assets.len();
+        let start = (page as usize) * (page_size as usize);
+        let items: Vec<AssetSummary> = all_assets
+            .iter()
+            .skip(start)
+            .take(page_size as usize)
+            .cloned()
+            .collect();
+        let has_next_page = start + items.len() < total;
+
+        Ok(AssetListResult {
+            items,
+            has_next_page,
+        })
+    }
+
+    pub async fn get_calendar_assets_paged(
+        &self,
+        year: i32,
+        month: u32,
+        page: u32,
+        page_size: u32,
+    ) -> Result<AssetListResult, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let (next_year, next_month) = if month == 12 {
+            (year + 1, 1u32)
+        } else {
+            (year, month + 1)
+        };
+        let taken_after = format!("{}-{:02}-01T00:00:00.000Z", year, month);
+        let taken_before = format!("{}-{:02}-01T00:00:00.000Z", next_year, next_month);
+
+        let page_number = page + 1;
+        let search_url = format!("{}/api/search/metadata", session.server_url);
+        let search_payload = serde_json::json!({
+            "takenAfter": taken_after,
+            "takenBefore": taken_before,
+            "page": page_number,
+            "size": page_size,
+            "withExif": true,
+        });
+
+        let response = self
+            .client
+            .post(&search_url)
+            .headers(headers)
+            .json(&search_payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+
+        if !status.is_success() {
+            return Err(format!(
+                "calendar asset search failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        let mut result = parse_asset_list(&body)?;
+        if !result.has_next_page {
+            result.has_next_page = result.items.len() >= page_size as usize;
+        }
+        Ok(result)
+    }
+
+    pub async fn get_folder_assets_paged(
+        &self,
+        path: &str,
+        page: u32,
+        page_size: u32,
+    ) -> Result<AssetListResult, String> {
+        // Check if we need to (re)fetch all folder assets
+        let needs_fetch = {
+            let cache = self.cached_folder.lock().await;
+            cache.as_ref().map_or(true, |(cached_path, _)| cached_path != path)
+        };
+
+        if needs_fetch {
+            let assets = self.get_assets_by_original_path(path).await?;
+            let mut cache = self.cached_folder.lock().await;
+            *cache = Some((path.to_string(), assets));
+        }
+
+        let cache = self.cached_folder.lock().await;
+        let all_assets = &cache.as_ref().unwrap().1;
+        let total = all_assets.len();
+        let start = (page as usize) * (page_size as usize);
+        let items: Vec<AssetSummary> = all_assets
+            .iter()
+            .skip(start)
+            .take(page_size as usize)
+            .cloned()
+            .collect();
+        let has_next_page = start + items.len() < total;
+
+        Ok(AssetListResult {
+            items,
+            has_next_page,
+        })
     }
 
     pub async fn get_asset(&self, asset_id: &str) -> Result<AssetSummary, String> {
@@ -426,6 +661,55 @@ impl ImmichClient {
         Ok(result.items)
     }
 
+    pub async fn get_profile_image_data_url(&self, user_id: &str) -> Result<Option<String>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/users/{}/profile-image", session.server_url, user_id);
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(format!(
+                "profile image request failed for {} with status {}",
+                user_id, status
+            ));
+        }
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("image/jpeg")
+            .to_string();
+
+        let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(to_data_url(&content_type, bytes.as_ref())))
+    }
+
     pub async fn get_asset_thumbnail_data_url(&self, asset_id: &str) -> Result<String, String> {
         let session = self
             .session
@@ -607,6 +891,61 @@ impl ImmichClient {
         });
 
         self.update_asset_inner(asset_id, payload).await
+    }
+
+    pub async fn get_asset_statistics(&self) -> Result<AssetStatistics, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/assets/statistics", session.server_url);
+        let response = self
+            .client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+
+        if !status.is_success() {
+            return Err(format!(
+                "get asset statistics failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        serde_json::from_str(&body).map_err(|err| {
+            format!("failed to parse asset statistics: {}", err)
+        })
+    }
+
+    pub async fn get_all_assets_paginated(
+        &self,
+        page: u32,
+        page_size: u32,
+    ) -> Result<AssetListResult, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        self.fetch_assets_inner(&session, page, page_size, None)
+            .await
     }
 
     async fn update_asset_inner(

@@ -1,11 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
-import { fetchAssetsByOriginalPath } from "../api/tauri";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { fetchFolderAssetsPaged } from "../api/tauri";
+
+const PAGE_SIZE = 40;
 
 export function useFolderAssets(enabled: boolean, path: string) {
-  return useQuery({
-    queryKey: ["folder-assets", path],
+  return useInfiniteQuery({
+    queryKey: ["folder-assets-paged", path],
     enabled,
-    queryFn: () => fetchAssetsByOriginalPath(path),
-    staleTime: 30_000,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      fetchFolderAssetsPaged(path, pageParam, PAGE_SIZE),
+    getNextPageParam: (lastPage, allPages) => {
+      if (!lastPage.hasNextPage) return undefined;
+      return allPages.length;
+    },
+    staleTime: 30_000
   });
 }

@@ -1,4 +1,4 @@
-use crate::services::immich_client::AssetSummary;
+use crate::commands::assets::AssetPage;
 use crate::AppState;
 
 #[tauri::command]
@@ -13,13 +13,27 @@ pub async fn get_unique_original_paths(
 }
 
 #[tauri::command]
-pub async fn get_assets_by_original_path(
+pub async fn get_folder_assets_paged(
     path: String,
+    page: u32,
+    page_size: u32,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<AssetSummary>, String> {
-    state
+) -> Result<AssetPage, String> {
+    let result = state
         .immich
-        .get_assets_by_original_path(&path)
+        .get_folder_assets_paged(&path, page, page_size)
         .await
-        .map_err(|err| format!("fetch folder assets failed: {err}"))
+        .map_err(|err| format!("fetch folder assets failed: {err}"))?;
+
+    state
+        .db
+        .upsert_assets(&result.items)
+        .map_err(|err| format!("cache write failed: {err}"))?;
+
+    Ok(AssetPage {
+        page,
+        page_size,
+        items: result.items,
+        has_next_page: result.has_next_page,
+    })
 }

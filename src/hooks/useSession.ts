@@ -5,6 +5,7 @@ export type Session = {
   serverUrl: string;
   apiKey: string;
   userId: string;
+  userName: string;
 };
 
 export type UseSessionReturn = {
@@ -34,6 +35,7 @@ export function useSession(): UseSessionReturn {
             serverUrl: response.serverUrl,
             apiKey: "",
             userId: response.userId,
+            userName: response.userName ?? response.userId,
           });
         }
       } catch {
@@ -62,6 +64,7 @@ export function useSession(): UseSessionReturn {
         serverUrl: input.serverUrl,
         apiKey: input.apiKey,
         userId: authResponse.userId,
+        userName: authResponse.userName ?? authResponse.userId,
       });
     } catch (err) {
       const message =

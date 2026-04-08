@@ -7,6 +7,7 @@ use crate::AppState;
 pub struct AuthResponse {
     pub access_token_preview: String,
     pub user_id: String,
+    pub user_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -14,6 +15,7 @@ pub struct AuthResponse {
 pub struct RestoreSessionResponse {
     pub access_token_preview: String,
     pub user_id: String,
+    pub user_name: Option<String>,
     pub server_url: String,
 }
 
@@ -43,6 +45,7 @@ pub async fn authenticate(
     Ok(AuthResponse {
         access_token_preview: preview,
         user_id: session.user_id,
+        user_name: session.user_name,
     })
 }
 
@@ -73,6 +76,7 @@ pub async fn restore_session(
     Ok(Some(RestoreSessionResponse {
         access_token_preview: preview,
         user_id: session.user_id,
+        user_name: session.user_name,
         server_url,
     }))
 }
@@ -85,4 +89,16 @@ pub async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
         .map_err(|err| format!("failed to clear credentials: {err}"))?;
     state.immich.clear_session().await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_profile_image(
+    user_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state
+        .immich
+        .get_profile_image_data_url(&user_id)
+        .await
+        .map_err(|err| format!("failed to get profile image: {err}"))
 }

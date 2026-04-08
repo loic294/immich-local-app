@@ -63,6 +63,8 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
           searchInput={searchInput}
           onSearchChange={setSearchInput}
           serverUrl={session.serverUrl}
+          userId={session.userId}
+          userName={session.userName}
         />
 
         <section className="p-2 sm:p-3 lg:p-4">

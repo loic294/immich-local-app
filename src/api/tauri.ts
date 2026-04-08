@@ -13,11 +13,13 @@ import type {
 export type AuthResponse = {
   accessTokenPreview: string;
   userId: string;
+  userName: string | null;
 };
 
 export type RestoreSessionResponse = {
   accessTokenPreview: string;
   userId: string;
+  userName: string | null;
   serverUrl: string;
 };
 
@@ -37,6 +39,12 @@ export async function restoreSession(): Promise<RestoreSessionResponse | null> {
 
 export async function logoutFromServer(): Promise<void> {
   return invoke<void>("logout");
+}
+
+export async function getProfileImage(userId: string): Promise<string | null> {
+  return invoke<string | null>("get_profile_image", {
+    userId,
+  });
 }
 
 export async function fetchAssets(
@@ -95,19 +103,41 @@ export async function fetchUniqueOriginalPaths(): Promise<string[]> {
   return invoke<string[]>("get_unique_original_paths");
 }
 
-export async function fetchAssetsByOriginalPath(
-  path: string,
-): Promise<AssetSummary[]> {
-  return invoke<AssetSummary[]>("get_assets_by_original_path", {
-    path,
+export async function fetchAlbumAssetsPaged(
+  albumId: string,
+  page: number,
+  pageSize: number,
+): Promise<AssetPage> {
+  return invoke<AssetPage>("get_album_assets_paged", {
+    albumId,
+    page,
+    pageSize,
   });
 }
 
-export async function fetchAlbumAssets(
-  albumId: string,
-): Promise<AssetSummary[]> {
-  return invoke<AssetSummary[]>("get_album_assets", {
-    albumId,
+export async function fetchFolderAssetsPaged(
+  path: string,
+  page: number,
+  pageSize: number,
+): Promise<AssetPage> {
+  return invoke<AssetPage>("get_folder_assets_paged", {
+    path,
+    page,
+    pageSize,
+  });
+}
+
+export async function fetchCalendarAssetsPaged(
+  year: number,
+  month: number,
+  page: number,
+  pageSize: number,
+): Promise<AssetPage> {
+  return invoke<AssetPage>("get_calendar_assets_paged", {
+    year,
+    month,
+    page,
+    pageSize,
   });
 }
 
@@ -161,4 +191,11 @@ export async function updateAssetRating(
 
 export async function openUrl(url: string): Promise<void> {
   return invoke<void>("open_url", { url });
+}
+
+export async function fetchAssetsByMonth(
+  year: number,
+  month: number,
+): Promise<AssetPage> {
+  return invoke<AssetPage>("fetch_assets_by_month", { year, month });
 }

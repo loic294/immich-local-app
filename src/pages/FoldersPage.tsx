@@ -1,8 +1,8 @@
 import { ChevronRight, Folder, House, MoveUpLeft } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { FolderAssetTile } from "../components/Folders/FolderAssetTile";
 import { Header } from "../components/Layout/Header";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
+import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useFolderAssets } from "../hooks/useFolderAssets";
 import { useFolderPaths } from "../hooks/useFolderPaths";
 import type { Session } from "../hooks/useSession";
@@ -37,26 +37,18 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
 
   const assetsQuery = useFolderAssets(!folderPathsQuery.isLoading, currentPath);
 
+  const allAssets = useMemo(
+    () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [assetsQuery.data?.pages],
+  );
+
   const subfolders = useMemo(
     () => getDirectChildFolders(paths, currentPath),
     [currentPath, paths],
   );
 
-  const visibleAssets = useMemo(() => {
-    const term = searchInput.trim().toLowerCase();
-    const assets = assetsQuery.data ?? [];
-    if (!term) {
-      return assets;
-    }
-
-    return assets.filter((asset) =>
-      asset.originalFileName.toLowerCase().includes(term),
-    );
-  }, [assetsQuery.data, searchInput]);
-
   const breadcrumbs = useMemo(() => getBreadcrumbs(currentPath), [currentPath]);
   const hasSubfolders = subfolders.length > 0;
-  const hasPhotos = visibleAssets.length > 0;
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -67,6 +59,8 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
           searchInput={searchInput}
           onSearchChange={setSearchInput}
           serverUrl={session.serverUrl}
+          userId={session.userId}
+          userName={session.userName}
           searchPlaceholder="Search folder photos"
         />
 
@@ -103,7 +97,7 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
             </button>
           </div>
 
-          {folderPathsQuery.isError ? (
+            {folderPathsQuery.isError ? (
             <div role="alert" className="alert alert-error alert-soft text-sm">
               <span>
                 {(folderPathsQuery.error as Error | null)?.message ??
@@ -142,30 +136,21 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
             </div>
           ) : null}
 
-          {assetsQuery.isLoading ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-base-content/70">
-              <span className="loading loading-spinner loading-sm" />
-              Loading photos...
-            </div>
-          ) : null}
-
-          {!assetsQuery.isLoading && hasPhotos ? (
-            <section>
-              <h2 className="mb-2 mt-0 text-sm font-semibold uppercase tracking-wide text-base-content/60">
-                Photos
-              </h2>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-                {visibleAssets.map((asset) => (
-                  <FolderAssetTile key={asset.id} asset={asset} />
-                ))}
-              </div>
-            </section>
+          {!assetsQuery.isError ? (
+            <PhotoGrid
+              assets={allAssets}
+              isFetching={assetsQuery.isFetchingNextPage}
+              hasNextPage={Boolean(assetsQuery.hasNextPage)}
+              onLoadMore={() => {
+                void assetsQuery.fetchNextPage();
+              }}
+            />
           ) : null}
 
           {!assetsQuery.isLoading &&
           !assetsQuery.isError &&
           !hasSubfolders &&
-          !hasPhotos ? (
+          allAssets.length === 0 ? (
             <div className="rounded-xl bg-base-100 px-3 py-4 text-sm text-base-content/60 ring-1 ring-base-300/80">
               This folder is empty.
             </div>

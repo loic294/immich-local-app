@@ -43,3 +43,7 @@ yarn-error.log*
 
 # Local app data
 ~/.config/immich-client/
+
+# Misc
+next-prompts.md
+login.txt

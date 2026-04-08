@@ -54,6 +54,58 @@ pub async fn fetch_assets(
 }
 
 #[tauri::command]
+pub async fn fetch_assets_by_month(
+    year: i32,
+    month: u32,
+    state: tauri::State<'_, AppState>,
+) -> Result<AssetPage, String> {
+    let result = state
+        .immich
+        .get_assets_by_month(year, month)
+        .await
+        .map_err(|err| format!("fetch assets by month failed: {err}"))?;
+
+    state
+        .db
+        .upsert_assets(&result)
+        .map_err(|err| format!("cache write failed: {err}"))?;
+
+    Ok(AssetPage {
+        page: 0,
+        page_size: result.len() as u32,
+        items: result,
+        has_next_page: false,
+    })
+}
+
+#[tauri::command]
+pub async fn get_calendar_assets_paged(
+    year: i32,
+    month: u32,
+    page: u32,
+    page_size: u32,
+    state: tauri::State<'_, AppState>,
+) -> Result<AssetPage, String> {
+    let result = state
+        .immich
+        .get_calendar_assets_paged(year, month, page, page_size)
+        .await
+        .map_err(|err| format!("fetch calendar assets failed: {err}"))?;
+
+    state
+        .db
+        .upsert_assets(&result.items)
+        .map_err(|err| format!("cache write failed: {err}"))?;
+
+    Ok(AssetPage {
+        page,
+        page_size,
+        items: result.items,
+        has_next_page: result.has_next_page,
+    })
+}
+
+#[tauri::command]
 pub async fn get_cached_assets(
     page: u32,
     page_size: u32,

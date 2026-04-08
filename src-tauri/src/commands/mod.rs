@@ -5,3 +5,4 @@ pub mod folders;
 pub mod memories;
 pub mod settings;
 pub mod shell;
+pub mod sync;

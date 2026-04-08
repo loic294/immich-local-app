@@ -35,7 +35,8 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
 
   const filteredAlbumAssets = useMemo(() => {
     const term = searchInput.trim().toLowerCase();
-    const assets = albumAssetsQuery.data ?? [];
+    const assets =
+      albumAssetsQuery.data?.pages.flatMap((page) => page.items) ?? [];
     if (!term) {
       return assets;
     }
@@ -43,7 +44,7 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
     return assets.filter((asset) =>
       asset.originalFileName.toLowerCase().includes(term),
     );
-  }, [albumAssetsQuery.data, searchInput]);
+  }, [albumAssetsQuery.data?.pages, searchInput]);
 
   const filteredAlbums = useMemo(() => {
     const allAlbums = albumsQuery.data ?? [];
@@ -96,6 +97,8 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
           searchInput={searchInput}
           onSearchChange={setSearchInput}
           serverUrl={session.serverUrl}
+          userId={session.userId}
+          userName={session.userName}
           searchPlaceholder={
             selectedAlbumId ? "Search photos in this album" : "Search albums"
           }
@@ -121,7 +124,9 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
               </div>
 
               {selectedAlbum.description ? (
-                <AlbumDescriptionSection description={selectedAlbum.description} />
+                <AlbumDescriptionSection
+                  description={selectedAlbum.description}
+                />
               ) : null}
 
               {albumAssetsQuery.isError ? (
@@ -137,9 +142,11 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
               ) : (
                 <PhotoGrid
                   assets={filteredAlbumAssets}
-                  isFetching={albumAssetsQuery.isLoading}
-                  hasNextPage={false}
-                  onLoadMore={() => {}}
+                  isFetching={albumAssetsQuery.isFetchingNextPage}
+                  hasNextPage={Boolean(albumAssetsQuery.hasNextPage)}
+                  onLoadMore={() => {
+                    void albumAssetsQuery.fetchNextPage();
+                  }}
                 />
               )}
             </section>
@@ -305,14 +312,20 @@ interface AlbumDescriptionSectionProps {
   description: string;
 }
 
-function AlbumDescriptionSection({ description }: AlbumDescriptionSectionProps) {
+function AlbumDescriptionSection({
+  description,
+}: AlbumDescriptionSectionProps) {
   const url = extractFirstUrl(description);
-  const textWithoutUrl = url ? description.replace(url, "").trim() : description;
+  const textWithoutUrl = url
+    ? description.replace(url, "").trim()
+    : description;
 
   return (
     <div className="mb-4 space-y-3">
       {textWithoutUrl ? (
-        <p className="text-sm text-base-content/80 whitespace-pre-wrap">{textWithoutUrl}</p>
+        <p className="text-sm text-base-content/80 whitespace-pre-wrap">
+          {textWithoutUrl}
+        </p>
       ) : null}
       {url ? (
         <button
