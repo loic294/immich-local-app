@@ -19,12 +19,20 @@ export type UseSyncStatusReturn = {
   progress: number; // 0-100
   error: string | null;
   startSync: () => Promise<void>;
+  forceFullSync: () => Promise<void>;
   checkForNewAssets: () => Promise<boolean>; // Returns true if new assets found
+};
+
+type UseSyncStatusOptions = {
+  enableAutoCheck?: boolean;
 };
 
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes in milliseconds
 
-export function useSyncStatus(): UseSyncStatusReturn {
+export function useSyncStatus(
+  options: UseSyncStatusOptions = {},
+): UseSyncStatusReturn {
+  const { enableAutoCheck = true } = options;
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,6 +68,29 @@ export function useSyncStatus(): UseSyncStatusReturn {
         message = String((err as any).message);
       }
       console.error("Sync error:", err);
+      setError(message);
+    }
+  }, [fetchSyncStatus]);
+
+  const forceFullSync = useCallback(async () => {
+    try {
+      setError(null);
+      console.info("[useSyncStatus] invoking force_full_asset_sync");
+      await invoke<SyncStatus>("force_full_asset_sync");
+      console.info(
+        "[useSyncStatus] force_full_asset_sync invoked successfully",
+      );
+      await fetchSyncStatus();
+    } catch (err) {
+      let message = "Unknown error forcing full sync";
+      if (err instanceof Error) {
+        message = err.message;
+      } else if (typeof err === "string") {
+        message = err;
+      } else if (typeof err === "object" && err !== null && "message" in err) {
+        message = String((err as any).message);
+      }
+      console.error("Force full sync error:", err);
       setError(message);
     }
   }, [fetchSyncStatus]);
@@ -109,7 +140,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
 
   // Set up periodic checks every 15 minutes
   useEffect(() => {
-    if (!syncStatus) {
+    if (!syncStatus || !enableAutoCheck) {
       return;
     }
 
@@ -118,7 +149,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
     }, CHECK_INTERVAL);
 
     return () => clearTimeout(checkTimer);
-  }, [syncStatus?.lastCheckedAt, checkForNewAssets]);
+  }, [enableAutoCheck, syncStatus?.lastCheckedAt, checkForNewAssets]);
 
   const progress =
     syncStatus && syncStatus.totalAssets > 0
@@ -134,6 +165,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
     progress,
     error,
     startSync,
+    forceFullSync,
     checkForNewAssets,
   };
 }

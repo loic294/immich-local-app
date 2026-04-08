@@ -33,6 +33,8 @@ pub struct AssetStatistics {
 pub struct AssetSummary {
     pub id: String,
     pub original_file_name: String,
+    #[serde(default)]
+    pub original_path: Option<String>,
     pub file_created_at: Option<String>,
     pub checksum: Option<String>,
     #[serde(default)]
@@ -53,6 +55,47 @@ pub struct AssetSummary {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetMetadata {
+    #[serde(default)]
+    pub original_path: Option<String>,
+    #[serde(default)]
+    pub rating: Option<i32>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub camera: Option<String>,
+    #[serde(default)]
+    pub lens: Option<String>,
+    #[serde(default)]
+    pub file_size_bytes: Option<i64>,
+    #[serde(default)]
+    pub file_extension: Option<String>,
+    #[serde(default)]
+    pub people: Option<String>,
+    #[serde(default)]
+    pub tags: Option<String>,
+    #[serde(default)]
+    pub exif_info_json: Option<String>,
+    #[serde(default)]
+    pub person_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonSummary {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub is_hidden: bool,
+    #[serde(default)]
+    pub thumbnail_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -411,6 +454,16 @@ impl ImmichClient {
     }
 
     pub async fn get_asset(&self, asset_id: &str) -> Result<AssetSummary, String> {
+        let value = self.get_asset_value(asset_id).await?;
+        parse_asset_summary_from_value(&value)
+    }
+
+    pub async fn get_asset_metadata(&self, asset_id: &str) -> Result<AssetMetadata, String> {
+        let value = self.get_asset_value(asset_id).await?;
+        Ok(parse_asset_metadata_from_value(&value))
+    }
+
+    async fn get_asset_value(&self, asset_id: &str) -> Result<Value, String> {
         let session = self
             .session
             .lock()
@@ -424,29 +477,38 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        let url = format!("{}/api/asset/{}", session.server_url, asset_id);
-        let response = self
-            .client
-            .get(&url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
+        let endpoints = [
+            format!("{}/api/assets/{}", session.server_url, asset_id),
+            format!("{}/api/asset/{}", session.server_url, asset_id),
+        ];
 
-        let status = response.status();
-        let body = response.text().await.map_err(|err| err.to_string())?;
+        let mut last_error: Option<String> = None;
 
-        if !status.is_success() {
-            return Err(format!(
-                "fetch asset failed with status {} ({})",
+        for url in endpoints {
+            let response = self
+                .client
+                .get(&url)
+                .headers(headers.clone())
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+
+            if status.is_success() {
+                return serde_json::from_str::<Value>(&body).map_err(|err| err.to_string());
+            }
+
+            last_error = Some(format!(
+                "fetch asset failed: {} -> {} ({})",
+                url,
                 status,
                 truncate_for_log(&body)
             ));
         }
 
-        parse_asset_summary_from_value(
-            &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
-        )
+        Err(last_error.unwrap_or_else(|| "fetch asset failed".to_string()))
     }
 
     pub async fn get_memories(&self) -> Result<Vec<MemorySummary>, String> {
@@ -588,6 +650,100 @@ impl ImmichClient {
         }
 
         serde_json::from_str::<Vec<String>>(&body).map_err(|err| err.to_string())
+    }
+
+    pub async fn get_all_people(&self) -> Result<Vec<PersonSummary>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/people", session.server_url);
+        let mut page = 1u32;
+        let page_size = 1000u32;
+        let mut all_people: Vec<PersonSummary> = Vec::new();
+
+        loop {
+            let response = self
+                .client
+                .get(&url)
+                .headers(headers.clone())
+                .query(&[
+                    ("page", page.to_string()),
+                    ("size", page_size.to_string()),
+                    ("withHidden", "true".to_string()),
+                ])
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+
+            if !status.is_success() {
+                return Err(format!(
+                    "get all people failed with status {} ({})",
+                    status,
+                    truncate_for_log(&body)
+                ));
+            }
+
+            let value: Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
+            let people_items = value
+                .get("people")
+                .and_then(Value::as_array)
+                .map(|items| items.as_slice())
+                .unwrap_or(&[]);
+
+            let mut parsed_page: Vec<PersonSummary> = Vec::new();
+            for person in people_items {
+                let id = person
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "person missing id".to_string())?
+                    .to_string();
+
+                parsed_page.push(PersonSummary {
+                    id,
+                    name: person
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    is_hidden: person
+                        .get("isHidden")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    thumbnail_path: person
+                        .get("thumbnailPath")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                });
+            }
+
+            let parsed_count = parsed_page.len();
+            all_people.extend(parsed_page);
+
+            let has_next = value
+                .get("hasNextPage")
+                .and_then(Value::as_bool)
+                .unwrap_or(parsed_count >= page_size as usize);
+
+            if !has_next || parsed_count == 0 {
+                break;
+            }
+
+            page += 1;
+        }
+
+        Ok(all_people)
     }
 
     pub async fn get_album_assets(&self, album_id: &str) -> Result<Vec<AssetSummary>, String> {
@@ -1374,6 +1530,13 @@ fn enrich_asset_summary_from_value(mut asset: AssetSummary, value: &Value) -> As
             .or_else(|| value.get("height").and_then(Value::as_u64).map(|v| v as u32));
     }
 
+    if asset.original_path.is_none() {
+        asset.original_path = value
+            .get("originalPath")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+
     normalize_asset_summary(asset)
 }
 
@@ -1404,6 +1567,10 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
     let mut asset = AssetSummary {
         id,
         original_file_name,
+        original_path: value
+            .get("originalPath")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         file_created_at,
         checksum,
         r#type: value
@@ -1494,6 +1661,212 @@ fn normalize_asset_summary(mut asset: AssetSummary) -> AssetSummary {
     }
 
     asset
+}
+
+fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
+    let exif_info = value.get("exifInfo");
+    let original_path = value
+        .get("originalPath")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let file_extension = original_path
+        .as_deref()
+        .and_then(|path| Path::new(path).extension().and_then(|ext| ext.to_str()))
+        .or_else(|| {
+            value
+                .get("originalFileName")
+                .and_then(Value::as_str)
+                .and_then(|name| Path::new(name).extension().and_then(|ext| ext.to_str()))
+        })
+        .map(|ext| ext.to_ascii_lowercase());
+
+    let people_items = extract_items_array(value.get("people"));
+    let tags_items = extract_items_array(value.get("tags"));
+    let (people, person_ids) = extract_people_data(people_items);
+
+    AssetMetadata {
+        original_path,
+        rating: exif_info
+            .and_then(|v| v.get("rating"))
+            .and_then(Value::as_i64)
+            .map(|v| v as i32)
+            .or_else(|| value.get("rating").and_then(Value::as_i64).map(|v| v as i32)),
+        width: value
+            .get("width")
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+            .or_else(|| {
+                exif_info
+                    .and_then(|v| v.get("imageWidth"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            })
+            .or_else(|| {
+                exif_info
+                    .and_then(|v| v.get("exifImageWidth"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            }),
+        height: value
+            .get("height")
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+            .or_else(|| {
+                exif_info
+                    .and_then(|v| v.get("imageHeight"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            })
+            .or_else(|| {
+                exif_info
+                    .and_then(|v| v.get("exifImageHeight"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            }),
+        camera: exif_info
+            .and_then(|v| v.get("model"))
+            .and_then(Value::as_str)
+            .or_else(|| exif_info.and_then(|v| v.get("cameraModel")).and_then(Value::as_str))
+            .map(str::to_string),
+        lens: exif_info
+            .and_then(|v| v.get("lensModel"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        file_size_bytes: exif_info
+            .and_then(|v| v.get("fileSizeInByte"))
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                exif_info
+                    .and_then(|v| v.get("fileSizeInByte"))
+                    .and_then(Value::as_u64)
+                    .map(|v| v as i64)
+            })
+            .or_else(|| value.get("sizeInBytes").and_then(Value::as_i64))
+            .or_else(|| value.get("sizeInBytes").and_then(Value::as_u64).map(|v| v as i64)),
+        file_extension,
+        people,
+        tags: extract_name_list(tags_items, &["name", "value"], &[]),
+        exif_info_json: exif_info.and_then(|data| {
+            if data.is_null() {
+                None
+            } else {
+                serde_json::to_string(data).ok()
+            }
+        }),
+        person_ids,
+    }
+}
+
+fn extract_people_data(items: &[Value]) -> (Option<String>, Vec<String>) {
+    let mut names: Vec<String> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+
+    for item in items {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            let trimmed_id = id.trim();
+            if !trimmed_id.is_empty() {
+                ids.push(trimmed_id.to_string());
+            }
+        }
+
+        if let Some(name) = item.get("name").and_then(Value::as_str) {
+            let trimmed_name = name.trim();
+            if !trimmed_name.is_empty() {
+                names.push(trimmed_name.to_string());
+            }
+        }
+
+        if let Some(person) = item.get("person") {
+            if let Some(id) = person.get("id").and_then(Value::as_str) {
+                let trimmed_id = id.trim();
+                if !trimmed_id.is_empty() {
+                    ids.push(trimmed_id.to_string());
+                }
+            }
+
+            if let Some(name) = person.get("name").and_then(Value::as_str) {
+                let trimmed_name = name.trim();
+                if !trimmed_name.is_empty() {
+                    names.push(trimmed_name.to_string());
+                }
+            }
+        }
+    }
+
+    names.sort_unstable();
+    names.dedup();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let people = if names.is_empty() {
+        None
+    } else {
+        Some(names.join(", "))
+    };
+
+    (people, ids)
+}
+
+fn extract_items_array<'a>(value: Option<&'a Value>) -> &'a [Value] {
+    if let Some(items) = value.and_then(Value::as_array) {
+        return items.as_slice();
+    }
+
+    if let Some(items) = value
+        .and_then(|v| v.get("items"))
+        .and_then(Value::as_array)
+    {
+        return items.as_slice();
+    }
+
+    &[]
+}
+
+fn extract_name_list(items: &[Value], direct_keys: &[&str], nested_object_keys: &[&str]) -> Option<String> {
+    let mut names: Vec<String> = Vec::new();
+
+    for item in items {
+        if let Some(name) = item.as_str() {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                names.push(trimmed.to_string());
+                continue;
+            }
+        }
+
+        for key in direct_keys {
+            if let Some(name) = item.get(*key).and_then(Value::as_str) {
+                let trimmed = name.trim();
+                if !trimmed.is_empty() {
+                    names.push(trimmed.to_string());
+                    break;
+                }
+            }
+        }
+
+        for nested_key in nested_object_keys {
+            if let Some(obj) = item.get(*nested_key) {
+                for key in direct_keys {
+                    if let Some(name) = obj.get(*key).and_then(Value::as_str) {
+                        let trimmed = name.trim();
+                        if !trimmed.is_empty() {
+                            names.push(trimmed.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if names.is_empty() {
+        return None;
+    }
+
+    names.sort_unstable();
+    names.dedup();
+    Some(names.join(", "))
 }
 
 fn value_to_string(value: &Value) -> Option<String> {

@@ -48,6 +48,11 @@ export type AssetPage = {
   hasNextPage: boolean;
 };
 
+export type AssetDateJumpTarget = {
+  dateKey: string;
+  page: number;
+};
+
 export type MemorySummary = {
   id: string;
   title: string | null;

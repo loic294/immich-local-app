@@ -1,6 +1,8 @@
 use serde::Serialize;
 use crate::services::db::SyncState;
 use crate::AppState;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +40,21 @@ pub async fn get_sync_status(state: tauri::State<'_, AppState>) -> Result<SyncSt
 
 #[tauri::command]
 pub async fn start_asset_sync(state: tauri::State<'_, crate::AppState>) -> Result<SyncStatusResponse, String> {
+    eprintln!("start_asset_sync invoked");
+    start_asset_sync_internal(state, false).await
+}
+
+#[tauri::command]
+pub async fn force_full_asset_sync(state: tauri::State<'_, crate::AppState>) -> Result<SyncStatusResponse, String> {
+    eprintln!("force_full_asset_sync invoked");
+    start_asset_sync_internal(state, true).await
+}
+
+async fn start_asset_sync_internal(
+    state: tauri::State<'_, crate::AppState>,
+    force_full_sync: bool,
+) -> Result<SyncStatusResponse, String> {
+    eprintln!("start_asset_sync_internal(force_full_sync={})", force_full_sync);
     // Get total asset count from Immich
     let statistics = state
         .immich
@@ -56,7 +73,8 @@ pub async fn start_asset_sync(state: tauri::State<'_, crate::AppState>) -> Resul
             format!("Failed to get sync state: {}", err)
         })?;
 
-    let is_partial_sync = current_state.processed_assets > 0
+    let is_partial_sync = !force_full_sync
+        && current_state.processed_assets > 0
         && current_state.processed_assets < statistics.total;
 
     // Initialize or resume sync state in database
@@ -103,6 +121,15 @@ async fn sync_all_assets_background(
     start_page: u32,
     initial_processed_count: i32,
 ) -> Result<(), String> {
+    match immich.get_all_people().await {
+        Ok(people) => {
+            if let Err(err) = db.upsert_people(&people) {
+                eprintln!("Failed to cache people list: {}", err);
+            }
+        }
+        Err(err) => eprintln!("Failed to fetch people list: {}", err),
+    }
+
     let mut page = start_page;
     let page_size = 100u32;
     let mut processed_count = initial_processed_count;
@@ -126,28 +153,15 @@ async fn sync_all_assets_background(
 
         eprintln!("Got {} assets in page {}", result.items.len(), page);
 
-        // Convert to extended assets with metadata and save
-        let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = result
-            .items
+        // Hydrate each asset with full metadata from asset detail endpoint.
+        let enriched_assets = enrich_assets_with_full_metadata(immich.clone(), result.items).await;
+        let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = enriched_assets
             .iter()
-            .map(|asset| crate::services::db::AssetSummaryExtended {
-                id: asset.id.clone(),
-                original_file_name: asset.original_file_name.clone(),
-                file_created_at: asset.file_created_at.clone(),
-                checksum: asset.checksum.clone(),
-                r#type: asset.r#type.clone(),
-                duration: asset.duration.clone(),
-                is_favorite: asset.is_favorite,
-                is_archived: asset.is_archived,
-                visibility: asset.visibility.clone(),
-                rating: asset.rating,
-                camera: None,
-                lens: None,
-                file_size_bytes: None,
-                file_extension: None,
-                people: None,
-                tags: None,
-            })
+            .map(|value| value.asset.clone())
+            .collect();
+        let asset_people_links: Vec<(String, Vec<String>)> = enriched_assets
+            .iter()
+            .map(|value| (value.asset.id.clone(), value.person_ids.clone()))
             .collect();
 
         // Save assets to database
@@ -155,6 +169,12 @@ async fn sync_all_assets_background(
             .map_err(|err| {
                 eprintln!("Failed to save assets: {}", err);
                 format!("Failed to save assets: {}", err)
+            })?;
+
+        db.replace_asset_people(&asset_people_links)
+            .map_err(|err| {
+                eprintln!("Failed to save asset-people links: {}", err);
+                format!("Failed to save asset-people links: {}", err)
             })?;
 
         processed_count += extended_assets.len() as i32;
@@ -219,6 +239,10 @@ pub async fn check_for_new_assets(state: tauri::State<'_, AppState>) -> Result<S
 
     // New assets detected - fetch them in the background
     // Sync new assets in the foreground for now to keep it simple
+    if let Ok(people) = state.immich.get_all_people().await {
+        let _ = state.db.upsert_people(&people);
+    }
+
     let mut page = 0u32;
     let page_size = 100u32;
 
@@ -236,28 +260,15 @@ pub async fn check_for_new_assets(state: tauri::State<'_, AppState>) -> Result<S
             break;
         }
 
-        // Convert to extended assets with metadata and save
-        let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = result
-            .items
+        // Hydrate each asset with full metadata from asset detail endpoint.
+        let enriched_assets = enrich_assets_with_full_metadata(state.immich.clone(), result.items).await;
+        let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = enriched_assets
             .iter()
-            .map(|asset| crate::services::db::AssetSummaryExtended {
-                id: asset.id.clone(),
-                original_file_name: asset.original_file_name.clone(),
-                file_created_at: asset.file_created_at.clone(),
-                checksum: asset.checksum.clone(),
-                r#type: asset.r#type.clone(),
-                duration: asset.duration.clone(),
-                is_favorite: asset.is_favorite,
-                is_archived: asset.is_archived,
-                visibility: asset.visibility.clone(),
-                rating: asset.rating,
-                camera: None,
-                lens: None,
-                file_size_bytes: None,
-                file_extension: None,
-                people: None,
-                tags: None,
-            })
+            .map(|value| value.asset.clone())
+            .collect();
+        let asset_people_links: Vec<(String, Vec<String>)> = enriched_assets
+            .iter()
+            .map(|value| (value.asset.id.clone(), value.person_ids.clone()))
             .collect();
 
         // Save assets to database
@@ -265,6 +276,12 @@ pub async fn check_for_new_assets(state: tauri::State<'_, AppState>) -> Result<S
             .map_err(|err| {
                 let _ = state.db.fail_check();
                 format!("Failed to save assets: {}", err)
+            })?;
+
+        state.db.replace_asset_people(&asset_people_links)
+            .map_err(|err| {
+                let _ = state.db.fail_check();
+                format!("Failed to save asset-people links: {}", err)
             })?;
 
         if !result.has_next_page {
@@ -277,4 +294,99 @@ pub async fn check_for_new_assets(state: tauri::State<'_, AppState>) -> Result<S
     // Complete the check
     let updated_state = state.db.complete_check(statistics.total)?;
     Ok(SyncStatusResponse::from(updated_state))
+}
+
+async fn enrich_assets_with_full_metadata(
+    immich: std::sync::Arc<crate::services::immich_client::ImmichClient>,
+    assets: Vec<crate::services::immich_client::AssetSummary>,
+) -> Vec<EnrichedAssetRecord> {
+    const MAX_CONCURRENT_METADATA_REQUESTS: usize = 8;
+
+    let total_assets = assets.len();
+    let semaphore = std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_METADATA_REQUESTS));
+    let mut join_set = JoinSet::new();
+
+    for asset in assets {
+        let immich_client = immich.clone();
+        let semaphore_ref = semaphore.clone();
+
+        join_set.spawn(async move {
+            let _permit = semaphore_ref.acquire_owned().await.ok();
+
+            let metadata = match immich_client.get_asset_metadata(&asset.id).await {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!(
+                        "Failed to fetch metadata for asset {}: {}. Falling back to summary fields.",
+                        asset.id, err
+                    );
+                    return to_enriched_asset_record(asset, None);
+                }
+            };
+
+            to_enriched_asset_record(asset, Some(metadata))
+        });
+    }
+
+    let mut enriched_assets = Vec::with_capacity(total_assets);
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
+            Ok(asset) => enriched_assets.push(asset),
+            Err(err) => eprintln!("Metadata enrichment task join failed: {}", err),
+        }
+    }
+
+    enriched_assets
+}
+
+#[derive(Debug, Clone)]
+struct EnrichedAssetRecord {
+    asset: crate::services::db::AssetSummaryExtended,
+    person_ids: Vec<String>,
+}
+
+fn to_enriched_asset_record(
+    asset: crate::services::immich_client::AssetSummary,
+    metadata: Option<crate::services::immich_client::AssetMetadata>,
+) -> EnrichedAssetRecord {
+    EnrichedAssetRecord {
+        asset: crate::services::db::AssetSummaryExtended {
+        id: asset.id,
+        original_file_name: asset.original_file_name.clone(),
+        original_path: metadata
+            .as_ref()
+            .and_then(|m| m.original_path.clone())
+            .or(asset.original_path),
+        file_created_at: asset.file_created_at,
+        checksum: asset.checksum,
+        r#type: asset.r#type,
+        duration: asset.duration,
+        is_favorite: asset.is_favorite,
+        is_archived: asset.is_archived,
+        visibility: asset.visibility,
+        rating: metadata
+            .as_ref()
+            .and_then(|m| m.rating)
+            .or(asset.rating),
+        width: metadata
+            .as_ref()
+            .and_then(|m| m.width)
+            .or(asset.width),
+        height: metadata
+            .as_ref()
+            .and_then(|m| m.height)
+            .or(asset.height),
+        camera: metadata.as_ref().and_then(|m| m.camera.clone()),
+        lens: metadata.as_ref().and_then(|m| m.lens.clone()),
+        file_size_bytes: metadata.as_ref().and_then(|m| m.file_size_bytes),
+        file_extension: metadata.as_ref().and_then(|m| m.file_extension.clone()),
+        people: metadata.as_ref().and_then(|m| m.people.clone()),
+        tags: metadata.as_ref().and_then(|m| m.tags.clone()),
+        exif_info_json: metadata.as_ref().and_then(|m| m.exif_info_json.clone()),
+        },
+        person_ids: metadata
+            .as_ref()
+            .map(|m| m.person_ids.clone())
+            .unwrap_or_default(),
+    }
 }

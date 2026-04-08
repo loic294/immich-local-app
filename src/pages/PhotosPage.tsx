@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAssets } from "../hooks/useAssets";
+import { useAssetDays } from "../hooks/useAssetDays";
 import { useMemories } from "../hooks/useMemories";
 import { Header } from "../components/Layout/Header";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { MemoriesStrip } from "../components/Memories/MemoriesStrip";
 import { MemoryFullscreenViewer } from "../components/Memories/MemoryFullscreenViewer";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
+import { getCachedAssetJumpTarget } from "../api/tauri";
+import { useSyncStatus } from "../hooks/useSyncStatus";
 import { toMemoryItem, type MemoryItem } from "../utils/memory";
 import type { Session } from "../hooks/useSession";
+import { ASSET_PAGE_SIZE, useAssetWindow } from "../hooks/useAssetWindow";
 
 interface PhotosPageProps {
   session: Session;
@@ -21,14 +24,14 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
     memoryIndex: number;
     assetIndex: number;
   } | null>(null);
+  const { syncStatus } = useSyncStatus();
+  const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}`;
 
-  const assetsQuery = useAssets(true, searchTerm);
+  const assetsWindow = useAssetWindow(true, searchTerm, refreshToken);
+  const assetDaysQuery = useAssetDays(true, searchTerm, refreshToken);
   const memoriesQuery = useMemories(true);
 
-  const assets = useMemo(
-    () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
-    [assetsQuery.data],
-  );
+  const assets = assetsWindow.assets;
 
   const memoryItems = useMemo(
     () =>
@@ -101,10 +104,10 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
             </div>
           ) : null}
 
-          {assetsQuery.isError || memoriesQuery.isError ? (
+          {assetsWindow.error || memoriesQuery.isError ? (
             <div role="alert" className="alert alert-error alert-soft text-sm">
               <span>
-                {(assetsQuery.error as Error | null)?.message ??
+                {assetsWindow.error?.message ??
                   (memoriesQuery.error as Error | null)?.message ??
                   "An error occurred"}
               </span>
@@ -112,10 +115,29 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
           ) : (
             <PhotoGrid
               assets={assets}
-              isFetching={assetsQuery.isFetchingNextPage}
-              hasNextPage={Boolean(assetsQuery.hasNextPage)}
+              isFetching={assetsWindow.isFetchingNextPage}
+              isFetchingPrevious={assetsWindow.isFetchingPreviousPage}
+              hasPreviousPage={assetsWindow.hasPreviousPage}
+              availableDates={assetDaysQuery.data ?? []}
+              hasNextPage={assetsWindow.hasNextPage}
               onLoadMore={() => {
-                void assetsQuery.fetchNextPage();
+                void assetsWindow.loadNextPage();
+              }}
+              onLoadPrevious={() => {
+                void assetsWindow.loadPreviousPage();
+              }}
+              onJumpToDate={async (dateKey) => {
+                const jumpTarget = await getCachedAssetJumpTarget(
+                  dateKey,
+                  ASSET_PAGE_SIZE,
+                  searchTerm.trim() || null,
+                );
+
+                if (!jumpTarget) {
+                  return;
+                }
+
+                await assetsWindow.jumpToPage(jumpTarget.page);
               }}
             />
           )}

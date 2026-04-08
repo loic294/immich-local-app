@@ -31,22 +31,53 @@ import {
 type PhotoGridProps = {
   assets: AssetSummary[];
   isFetching: boolean;
+  isFetchingPrevious?: boolean;
   hasNextPage: boolean;
+  hasPreviousPage?: boolean;
   onLoadMore: () => void;
+  onLoadPrevious?: () => void;
+  availableDates?: string[];
+  onJumpToDate?: (dateKey: string) => Promise<void> | void;
 };
+
+type VirtualEntry =
+  | {
+      type: "header";
+      key: string;
+      sectionKey: string;
+      label: string;
+      top: number;
+      height: number;
+    }
+  | {
+      type: "row";
+      key: string;
+      sectionKey: string;
+      top: number;
+      height: number;
+      items: { id: string; width: number }[];
+    };
 
 export function PhotoGrid({
   assets,
   isFetching,
+  isFetchingPrevious = false,
   hasNextPage,
+  hasPreviousPage = false,
   onLoadMore,
+  onLoadPrevious,
+  availableDates: availableDatesProp,
+  onJumpToDate,
 }: PhotoGridProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [activeSrc, setActiveSrc] = useState<string | null>(null);
   const [activeStillSrc, setActiveStillSrc] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [scrollTop, setScrollTop] = useState(0);
   const [gridSections, setGridSections] = useState<GridLayoutSection[]>([]);
   const [videoDurations, setVideoDurations] = useState<Record<string, number>>(
     {},
@@ -62,7 +93,14 @@ export function PhotoGrid({
   const [archiveUpdateId, setArchiveUpdateId] = useState<string | null>(null);
   const [ratingUpdateId, setRatingUpdateId] = useState<string | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const sectionRefsMap = useRef<Map<string, HTMLElement | null>>(new Map());
+  const [pendingJumpDateKey, setPendingJumpDateKey] = useState<string | null>(
+    null,
+  );
+  const sectionTopMapRef = useRef<Map<string, number>>(new Map());
+  const isLoadingNextRef = useRef(false);
+  const isLoadingPreviousRef = useRef(false);
+  const scrollRafRef = useRef<number | null>(null);
+  const latestScrollTopRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -95,7 +133,13 @@ export function PhotoGrid({
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
-        if (entry?.isIntersecting && hasNextPage && !isFetching) {
+        if (
+          entry?.isIntersecting &&
+          hasNextPage &&
+          !isFetching &&
+          !isLoadingNextRef.current
+        ) {
+          isLoadingNextRef.current = true;
           onLoadMore();
         }
       },
@@ -113,22 +157,99 @@ export function PhotoGrid({
   }, [hasNextPage, isFetching, onLoadMore]);
 
   useEffect(() => {
+    if (!topSentinelRef.current || !onLoadPrevious) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (
+          entry?.isIntersecting &&
+          hasPreviousPage &&
+          !isFetchingPrevious &&
+          !isLoadingPreviousRef.current
+        ) {
+          const viewport = viewportRef.current;
+          const previousHeight = viewport?.scrollHeight ?? 0;
+          isLoadingPreviousRef.current = true;
+
+          void Promise.resolve(onLoadPrevious()).then(() => {
+            requestAnimationFrame(() => {
+              const nextViewport = viewportRef.current;
+              if (nextViewport) {
+                nextViewport.scrollTop +=
+                  nextViewport.scrollHeight - previousHeight;
+              }
+            });
+          });
+        }
+      },
+      {
+        root: viewportRef.current,
+        rootMargin: "600px 0px",
+      },
+    );
+
+    observer.observe(topSentinelRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [hasPreviousPage, isFetchingPrevious, onLoadPrevious]);
+
+  useEffect(() => {
+    if (!isFetching) {
+      isLoadingNextRef.current = false;
+    }
+  }, [isFetching]);
+
+  useEffect(() => {
+    if (!isFetchingPrevious) {
+      isLoadingPreviousRef.current = false;
+    }
+  }, [isFetchingPrevious]);
+
+  useEffect(() => {
     const element = viewportRef.current;
     if (!element) {
       return;
     }
 
-    const updateWidth = () => {
+    const updateViewport = () => {
       setViewportWidth(element.clientWidth);
+      setViewportHeight(element.clientHeight);
     };
 
-    updateWidth();
+    updateViewport();
 
-    const observer = new ResizeObserver(updateWidth);
+    const observer = new ResizeObserver(updateViewport);
     observer.observe(element);
 
+    const handleScroll = () => {
+      latestScrollTopRef.current = element.scrollTop;
+      if (scrollRafRef.current !== null) {
+        return;
+      }
+
+      scrollRafRef.current = window.requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        setScrollTop((current) => {
+          const next = latestScrollTopRef.current;
+          return current === next ? current : next;
+        });
+      });
+    };
+    element.addEventListener("scroll", handleScroll, { passive: true });
+    setScrollTop(element.scrollTop);
+
     return () => {
+      element.removeEventListener("scroll", handleScroll);
       observer.disconnect();
+      if (scrollRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
     };
   }, []);
 
@@ -154,19 +275,107 @@ export function PhotoGrid({
   );
 
   const availableDates = useMemo(
-    () => gridSections.map((section) => section.key),
-    [gridSections],
+    () => availableDatesProp ?? gridSections.map((section) => section.key),
+    [availableDatesProp, gridSections],
   );
 
-  const jumpToDate = (date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    const targetKey = `${year}-${month}-${day}`;
+  const { virtualEntries, totalContentHeight } = useMemo(() => {
+    const entries: VirtualEntry[] = [];
+    const nextSectionTopMap = new Map<string, number>();
 
-    const sectionRef = sectionRefsMap.current.get(targetKey);
-    if (sectionRef && viewportRef.current) {
-      sectionRef.scrollIntoView({ behavior: "smooth", block: "start" });
+    const headerHeight = 52;
+    const rowGap = 4;
+    const sectionGap = 10;
+    let cursor = 0;
+
+    for (const section of gridSections) {
+      nextSectionTopMap.set(section.key, cursor);
+      entries.push({
+        type: "header",
+        key: `header-${section.key}`,
+        sectionKey: section.key,
+        label: section.label,
+        top: cursor,
+        height: headerHeight,
+      });
+      cursor += headerHeight;
+
+      section.rows.forEach((row, rowIndex) => {
+        entries.push({
+          type: "row",
+          key: `${section.key}-${rowIndex}`,
+          sectionKey: section.key,
+          top: cursor,
+          height: row.height,
+          items: row.items,
+        });
+        cursor += row.height + rowGap;
+      });
+
+      cursor += sectionGap;
+    }
+
+    sectionTopMapRef.current = nextSectionTopMap;
+    return { virtualEntries: entries, totalContentHeight: cursor };
+  }, [gridSections]);
+
+  const visibleEntries = useMemo(() => {
+    if (virtualEntries.length === 0) {
+      return [];
+    }
+
+    const overscan = Math.max(500, viewportHeight);
+    const start = Math.max(0, scrollTop - overscan);
+    const end = scrollTop + viewportHeight + overscan;
+
+    const startIndex = Math.max(
+      0,
+      findFirstEntryAtOrAfter(virtualEntries, start) - 2,
+    );
+    const endIndex = Math.min(
+      virtualEntries.length,
+      findFirstEntryAtOrAfter(virtualEntries, end + 1) + 2,
+    );
+
+    return virtualEntries.slice(startIndex, endIndex).filter((entry) => {
+      const entryBottom = entry.top + entry.height;
+      return entryBottom >= start && entry.top <= end;
+    });
+  }, [virtualEntries, scrollTop, viewportHeight]);
+
+  const scrollToDateKey = (targetKey: string) => {
+    const targetTop = sectionTopMapRef.current.get(targetKey);
+    if (typeof targetTop === "number" && viewportRef.current) {
+      viewportRef.current.scrollTo({ top: targetTop, behavior: "smooth" });
+      return true;
+    }
+
+    return false;
+  };
+
+  useEffect(() => {
+    if (!pendingJumpDateKey) {
+      return;
+    }
+
+    if (scrollToDateKey(pendingJumpDateKey)) {
+      setPendingJumpDateKey(null);
+    }
+  }, [gridSections, pendingJumpDateKey]);
+
+  const handleJumpToDate = async (dateKey: string) => {
+    setPendingJumpDateKey(dateKey);
+    if (viewportRef.current) {
+      viewportRef.current.scrollTop = 0;
+    }
+
+    if (onJumpToDate) {
+      await onJumpToDate(dateKey);
+      return;
+    }
+
+    if (scrollToDateKey(dateKey)) {
+      setPendingJumpDateKey(null);
     }
   };
 
@@ -560,19 +769,69 @@ export function PhotoGrid({
     }
   };
 
+  const handleAssetDimensions = (
+    assetId: string,
+    width: number,
+    height: number,
+  ) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height)) {
+      return;
+    }
+
+    const safeWidth = Math.round(width);
+    const safeHeight = Math.round(height);
+    if (safeWidth <= 0 || safeHeight <= 0) {
+      return;
+    }
+
+    setAssetOverrides((current) => {
+      const existingOverride = current[assetId] ?? {};
+      const existingAsset = assetsById.get(assetId);
+      const existingWidth =
+        existingOverride.width ?? existingAsset?.width ?? null;
+      const existingHeight =
+        existingOverride.height ?? existingAsset?.height ?? null;
+
+      const hasKnownDimensions =
+        Number.isFinite(existingWidth) &&
+        Number.isFinite(existingHeight) &&
+        Number(existingWidth) > 0 &&
+        Number(existingHeight) > 0;
+
+      if (hasKnownDimensions) {
+        return current;
+      }
+
+      if (existingWidth === safeWidth && existingHeight === safeHeight) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [assetId]: {
+          ...existingOverride,
+          width: safeWidth,
+          height: safeHeight,
+        },
+      };
+    });
+  };
+
   return (
     <section>
       <div className="mb-1 flex items-center justify-between text-xs text-base-content/60">
         <span>{loadedCountText}</span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm gap-1"
-          onClick={() => setShowDatePicker(true)}
-          aria-label="Jump to date"
-        >
-          <Calendar size={16} />
-          Jump to Date
-        </button>
+        {availableDates.length > 0 ? (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm gap-1"
+            onClick={() => setShowDatePicker(true)}
+            aria-label="Jump to date"
+          >
+            <Calendar size={16} />
+            Jump to Date
+          </button>
+        ) : null}
       </div>
 
       <div className="relative">
@@ -580,81 +839,91 @@ export function PhotoGrid({
           ref={viewportRef}
           className="h-[calc(100vh-180px)] overflow-auto pr-2"
         >
-          <div className="flex flex-col gap-2.5">
-            {gridSections.map((section) => (
-              <section
-                key={section.key}
-                ref={(el) => {
-                  if (el) {
-                    sectionRefsMap.current.set(section.key, el);
-                  }
-                }}
-                className="flex flex-col gap-1"
-              >
-                <div className="sticky top-0 z-10 flex items-center gap-2 bg-base-200 pt-5 pb-3 text-sm font-semibold text-base-content/80">
-                  <span>{section.label}</span>
-                  <div className="h-px flex-1 bg-base-300" />
-                </div>
+          <div ref={topSentinelRef} className="h-px" />
+          <div
+            className="relative"
+            style={{ height: `${Math.max(totalContentHeight, 1)}px` }}
+          >
+            {visibleEntries.map((entry) => {
+              if (entry.type === "header") {
+                return (
+                  <div
+                    key={entry.key}
+                    className="absolute left-0 right-0 z-10 flex items-center gap-2 bg-base-200 pt-5 pb-3 text-sm font-semibold text-base-content/80"
+                    style={{
+                      top: `${entry.top}px`,
+                      height: `${entry.height}px`,
+                    }}
+                  >
+                    <span>{entry.label}</span>
+                    <div className="h-px flex-1 bg-base-300" />
+                  </div>
+                );
+              }
 
-                <div className="flex flex-col gap-1">
-                  {section.rows.map((row, rowIndex) => (
-                    <div
-                      key={`${section.key}-${rowIndex}`}
-                      className="flex gap-1"
-                      style={{ height: `${row.height}px` }}
-                    >
-                      {row.items.map((rowItem) => {
-                        const asset = assetsById.get(rowItem.id);
-                        if (!asset) {
-                          return null;
-                        }
+              return (
+                <div
+                  key={entry.key}
+                  className="absolute left-0 right-0 flex gap-1"
+                  style={{ top: `${entry.top}px`, height: `${entry.height}px` }}
+                >
+                  {entry.items.map((rowItem) => {
+                    const asset = assetsById.get(rowItem.id);
+                    if (!asset) {
+                      return null;
+                    }
 
-                        return (
-                          <article
-                            key={asset.id}
-                            className="overflow-hidden bg-base-300"
-                            style={{
-                              width: `${rowItem.width}px`,
-                            }}
-                          >
-                            <AssetThumbnail
-                              asset={asset}
-                              onOpen={() => {
-                                openLightbox(asset.id);
-                              }}
-                              durationSeconds={videoDurations[asset.id]}
-                              onDuration={(seconds) => {
-                                setVideoDurations((current) => {
-                                  const existing = current[asset.id];
-                                  if (
-                                    typeof existing === "number" &&
-                                    Math.abs(existing - seconds) < 0.2
-                                  ) {
-                                    return current;
-                                  }
-
-                                  return {
-                                    ...current,
-                                    [asset.id]: seconds,
-                                  };
-                                });
-                              }}
-                              showDebug={showVideoDebug}
-                              livePhotoAutoplay={
-                                settings?.livePhotoAutoplay ?? true
+                    return (
+                      <article
+                        key={asset.id}
+                        className="overflow-hidden bg-base-300 flex-none"
+                        style={{
+                          width: `${rowItem.width}px`,
+                        }}
+                      >
+                        <AssetThumbnail
+                          asset={asset}
+                          onOpen={() => {
+                            openLightbox(asset.id);
+                          }}
+                          durationSeconds={videoDurations[asset.id]}
+                          onDuration={(seconds) => {
+                            setVideoDurations((current) => {
+                              const existing = current[asset.id];
+                              if (
+                                typeof existing === "number" &&
+                                Math.abs(existing - seconds) < 0.2
+                              ) {
+                                return current;
                               }
-                            />
-                          </article>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
 
-          <div ref={sentinelRef} className="h-px" />
+                              return {
+                                ...current,
+                                [asset.id]: seconds,
+                              };
+                            });
+                          }}
+                          onDimensions={(width, height) => {
+                            handleAssetDimensions(asset.id, width, height);
+                          }}
+                          showDebug={showVideoDebug}
+                          livePhotoAutoplay={
+                            settings?.livePhotoAutoplay ?? true
+                          }
+                        />
+                      </article>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+            <div
+              ref={sentinelRef}
+              className="absolute left-0 right-0 h-px"
+              style={{ top: `${Math.max(totalContentHeight - 1, 0)}px` }}
+            />
+          </div>
         </div>
       </div>
 
@@ -851,7 +1120,9 @@ export function PhotoGrid({
       <DatePickerModal
         isOpen={showDatePicker}
         onClose={() => setShowDatePicker(false)}
-        onSelectDate={jumpToDate}
+        onSelectDate={(dateKey) => {
+          void handleJumpToDate(dateKey);
+        }}
         availableDates={availableDates}
       />
     </section>
@@ -863,6 +1134,7 @@ function AssetThumbnail({
   onOpen,
   durationSeconds,
   onDuration,
+  onDimensions,
   showDebug,
   livePhotoAutoplay,
 }: {
@@ -870,6 +1142,7 @@ function AssetThumbnail({
   onOpen: () => void;
   durationSeconds?: number;
   onDuration: (seconds: number) => void;
+  onDimensions: (width: number, height: number) => void;
   showDebug: boolean;
   livePhotoAutoplay: boolean;
 }) {
@@ -1126,6 +1399,9 @@ function AssetThumbnail({
           }}
           onLoadedMetadata={(event) => {
             const video = event.currentTarget;
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              onDimensions(video.videoWidth, video.videoHeight);
+            }
             if (Number.isFinite(video.duration) && video.duration > 0) {
               onDuration(video.duration);
             }
@@ -1158,6 +1434,12 @@ function AssetThumbnail({
           src={src}
           alt={asset.originalFileName}
           loading="lazy"
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+              onDimensions(image.naturalWidth, image.naturalHeight);
+            }
+          }}
           onClick={() => {
             if (isLivePhoto && !livePhotoAutoplay) {
               setIsPlayingLivePhoto(true);
@@ -1208,6 +1490,22 @@ function AssetThumbnail({
       ) : null}
     </button>
   );
+}
+
+function findFirstEntryAtOrAfter(entries: VirtualEntry[], top: number): number {
+  let left = 0;
+  let right = entries.length;
+
+  while (left < right) {
+    const mid = Math.floor((left + right) / 2);
+    if (entries[mid].top < top) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+
+  return left;
 }
 
 function isVideoAsset(asset: AssetSummary): boolean {

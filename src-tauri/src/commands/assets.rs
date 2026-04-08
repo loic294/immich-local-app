@@ -58,6 +58,13 @@ pub struct GridLayoutResponse {
     pub sections: Vec<GridLayoutSection>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetDateJumpTarget {
+    pub date_key: String,
+    pub page: u32,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAssetVisibilityPayload {
@@ -124,6 +131,20 @@ pub async fn get_calendar_assets_paged(
     page_size: u32,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
+    let (cached_items, cached_has_next_page) = state
+        .db
+        .get_calendar_assets(year, month, page, page_size)
+        .map_err(|err| format!("calendar cache read failed: {err}"))?;
+
+    if page > 0 || !cached_items.is_empty() {
+        return Ok(AssetPage {
+            page,
+            page_size,
+            items: cached_items,
+            has_next_page: cached_has_next_page,
+        });
+    }
+
     let result = state
         .immich
         .get_calendar_assets_paged(year, month, page, page_size)
@@ -135,11 +156,16 @@ pub async fn get_calendar_assets_paged(
         .upsert_assets(&result.items)
         .map_err(|err| format!("cache write failed: {err}"))?;
 
+    let (items, has_next_page) = state
+        .db
+        .get_calendar_assets(year, month, page, page_size)
+        .map_err(|err| format!("calendar cache read failed: {err}"))?;
+
     Ok(AssetPage {
         page,
         page_size,
-        items: result.items,
-        has_next_page: result.has_next_page,
+        items,
+        has_next_page,
     })
 }
 
@@ -147,19 +173,57 @@ pub async fn get_calendar_assets_paged(
 pub async fn get_cached_assets(
     page: u32,
     page_size: u32,
+    search: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
-    let items = state
+    let (items, has_next_page) = state
         .db
-        .get_assets(page, page_size)
+        .get_assets(page, page_size, search.as_deref())
         .map_err(|err| format!("cache read failed: {err}"))?;
 
     Ok(AssetPage {
         page,
         page_size,
         items,
-        has_next_page: false,
+        has_next_page,
     })
+}
+
+#[tauri::command]
+pub async fn get_all_cached_assets(
+    search: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AssetSummary>, String> {
+    state
+        .db
+        .get_all_assets(search.as_deref())
+        .map_err(|err| format!("cache read failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn get_cached_asset_days(
+    search: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    state
+        .db
+        .get_asset_days(search.as_deref())
+        .map_err(|err| format!("asset day query failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn get_cached_asset_jump_target(
+    date_key: String,
+    page_size: u32,
+    search: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<AssetDateJumpTarget>, String> {
+    let page = state
+        .db
+        .get_asset_jump_target_page(&date_key, page_size, search.as_deref())
+        .map_err(|err| format!("asset jump target query failed: {err}"))?;
+
+    Ok(page.map(|page| AssetDateJumpTarget { date_key, page }))
 }
 
 #[tauri::command]

@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 type DatePickerModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSelectDate: (date: Date) => void;
-  availableDates: string[]; // Dates in YYYY-MM-DD format
+  onSelectDate: (dateKey: string) => void;
+  availableDates: string[];
 };
 
 export function DatePickerModal({
@@ -65,8 +65,7 @@ export function DatePickerModal({
   ).sort((a, b) => b - a); // Newest first
 
   const handleDateClick = (dateStr: string) => {
-    const [year, month, day] = dateStr.split("-").map(Number);
-    onSelectDate(new Date(year, month - 1, day));
+    onSelectDate(dateStr);
     onClose();
   };
 

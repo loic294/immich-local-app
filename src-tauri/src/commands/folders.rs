@@ -5,6 +5,15 @@ use crate::AppState;
 pub async fn get_unique_original_paths(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
+    let cached_paths = state
+        .db
+        .get_unique_original_paths()
+        .map_err(|err| format!("folder path cache read failed: {err}"))?;
+
+    if !cached_paths.is_empty() {
+        return Ok(cached_paths);
+    }
+
     state
         .immich
         .get_unique_original_paths()
@@ -19,6 +28,20 @@ pub async fn get_folder_assets_paged(
     page_size: u32,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
+    let (cached_items, cached_has_next_page) = state
+        .db
+        .get_folder_assets(&path, page, page_size)
+        .map_err(|err| format!("folder asset cache read failed: {err}"))?;
+
+    if page > 0 || !cached_items.is_empty() {
+        return Ok(AssetPage {
+            page,
+            page_size,
+            items: cached_items,
+            has_next_page: cached_has_next_page,
+        });
+    }
+
     let result = state
         .immich
         .get_folder_assets_paged(&path, page, page_size)
@@ -30,10 +53,15 @@ pub async fn get_folder_assets_paged(
         .upsert_assets(&result.items)
         .map_err(|err| format!("cache write failed: {err}"))?;
 
+    let (items, has_next_page) = state
+        .db
+        .get_folder_assets(&path, page, page_size)
+        .map_err(|err| format!("folder asset cache read failed: {err}"))?;
+
     Ok(AssetPage {
         page,
         page_size,
-        items: result.items,
-        has_next_page: result.has_next_page,
+        items,
+        has_next_page,
     })
 }

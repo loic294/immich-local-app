@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { Trash2, FolderOpen, LogOut } from "lucide-react";
+import {
+  Trash2,
+  FolderOpen,
+  LogOut,
+  ArrowLeft,
+  RefreshCcw,
+  Check,
+} from "lucide-react";
 import {
   getCacheStats,
   getCachePath,
@@ -8,6 +15,7 @@ import {
 } from "../api/tauri";
 import type { CacheStats, Settings } from "../types";
 import type { AppPage } from "../components/Layout/Sidebar";
+import { useSyncStatus } from "../hooks/useSyncStatus";
 
 interface SettingsPageProps {
   onNavigate?: (page: AppPage) => void;
@@ -20,6 +28,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [cachePath, setCachePath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isForcingFullSync, setIsForcingFullSync] = useState(false);
+  const { forceFullSync, syncStatus, isSyncing, isChecking, progress, error } =
+    useSyncStatus({ enableAutoCheck: false });
 
   useEffect(() => {
     const loadData = async () => {
@@ -72,6 +83,17 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     console.log("Cache clearing not yet implemented");
   };
 
+  const handleForceFullSync = async () => {
+    try {
+      setIsForcingFullSync(true);
+      await forceFullSync();
+    } catch (error) {
+      console.error("Failed to force full sync:", error);
+    } finally {
+      setIsForcingFullSync(false);
+    }
+  };
+
   const formatBytes = (bytes: number): string => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -79,6 +101,26 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
   };
+
+  const formatDate = (dateString: string | null): string => {
+    if (!dateString) return "";
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return dateString;
+    }
+  };
+
+  const isSyncComplete =
+    syncStatus?.lastSyncCompletedAt !== null &&
+    syncStatus?.lastSyncCompletedAt !== undefined;
 
   if (isLoading) {
     return (
@@ -92,10 +134,91 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     <div className="min-h-screen bg-base-100 pt-24">
       <div className="mx-auto max-w-2xl px-4 pb-12">
         <div className="mb-8">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost gap-2 mb-3"
+            onClick={() => onNavigate?.("photos")}
+          >
+            <ArrowLeft size={16} />
+            Exit Settings
+          </button>
           <h1 className="text-3xl font-bold text-base-content">Settings</h1>
           <p className="text-base-content/60">
             Manage your app preferences and cache
           </p>
+        </div>
+
+        <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
+          <div className="card-body">
+            <h2 className="card-title">Sync</h2>
+            <p className="text-sm text-base-content/70 mb-4">
+              Restart synchronization from the beginning and refresh all local
+              metadata.
+            </p>
+
+            {isForcingFullSync && !isSyncing ? (
+              <>
+                <progress className="progress progress-primary progress-sm mb-2"></progress>
+                <div className="text-xs text-base-content/70 mb-3">
+                  Starting full sync...
+                </div>
+              </>
+            ) : isSyncing && syncStatus ? (
+              <>
+                <progress
+                  className="progress progress-primary progress-sm mb-2"
+                  value={progress}
+                  max="100"
+                ></progress>
+                <div className="text-xs text-base-content/70 mb-3">
+                  {syncStatus.processedAssets} / {syncStatus.totalAssets} photos
+                  synced
+                </div>
+              </>
+            ) : isChecking ? (
+              <div className="flex items-center gap-2 mb-3">
+                <span className="loading loading-spinner loading-xs"></span>
+                <span className="text-xs text-base-content/70">
+                  Checking for new assets...
+                </span>
+              </div>
+            ) : isSyncComplete && syncStatus ? (
+              <div className="flex items-center gap-2 mb-3">
+                <Check size={16} className="text-success" />
+                <span className="text-xs font-medium text-success">
+                  Last full sync: {formatDate(syncStatus.lastSyncCompletedAt)}
+                </span>
+              </div>
+            ) : (
+              <div className="text-xs text-base-content/70 mb-3">
+                Ready to start full sync
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                void handleForceFullSync();
+              }}
+              disabled={isForcingFullSync || isSyncing}
+              className="btn btn-outline btn-warning gap-2"
+            >
+              <RefreshCcw size={16} />
+              {isForcingFullSync && "Starting Full Sync..."}
+              {isSyncing && !isForcingFullSync && "Syncing..."}
+              {isChecking && !isForcingFullSync && !isSyncing && "Checking..."}
+              {!isForcingFullSync &&
+                !isSyncing &&
+                !isChecking &&
+                "Force Full Sync"}
+            </button>
+
+            {error && (
+              <div className="alert alert-error alert-sm mt-3">
+                <span className="text-xs">{error}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Live Photo Settings */}

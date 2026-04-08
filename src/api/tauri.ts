@@ -3,6 +3,7 @@ import type {
   AlbumSummary,
   AssetVisibility,
   AssetPage,
+  AssetDateJumpTarget,
   AssetSummary,
   GridLayoutAssetInput,
   GridLayoutResponse,
@@ -64,10 +65,40 @@ export async function fetchAssets(
 export async function getCachedAssets(
   page: number,
   pageSize: number,
+  search: string | null,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("get_cached_assets", {
     page,
     pageSize,
+    search,
+  });
+}
+
+export async function getAllCachedAssets(
+  search: string | null,
+): Promise<AssetSummary[]> {
+  return invoke<AssetSummary[]>("get_all_cached_assets", {
+    search,
+  });
+}
+
+export async function getCachedAssetDays(
+  search: string | null,
+): Promise<string[]> {
+  return invoke<string[]>("get_cached_asset_days", {
+    search,
+  });
+}
+
+export async function getCachedAssetJumpTarget(
+  dateKey: string,
+  pageSize: number,
+  search: string | null,
+): Promise<AssetDateJumpTarget | null> {
+  return invoke<AssetDateJumpTarget | null>("get_cached_asset_jump_target", {
+    dateKey,
+    pageSize,
+    search,
   });
 }
 
