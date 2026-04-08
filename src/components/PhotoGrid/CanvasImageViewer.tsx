@@ -7,6 +7,7 @@ interface CanvasImageViewerProps {
   onZoomChange: (zoom: number) => void;
   containerWidth: number;
   containerHeight: number;
+  onNavigate?: (direction: "prev" | "next") => void;
 }
 
 export function CanvasImageViewer({
@@ -16,6 +17,7 @@ export function CanvasImageViewer({
   onZoomChange,
   containerWidth,
   containerHeight,
+  onNavigate,
 }: CanvasImageViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -26,9 +28,13 @@ export function CanvasImageViewer({
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchDistanceRef = useRef<number | null>(null);
   const touchZoomStartRef = useRef<number | null>(null);
+  const touchStartXRef = useRef<number | null>(null);
 
   // Calculate distance between two touch points
-  const getTouchDistance = (touch1: React.Touch, touch2: React.Touch): number => {
+  const getTouchDistance = (
+    touch1: React.Touch,
+    touch2: React.Touch,
+  ): number => {
     const dx = touch1.clientX - touch2.clientX;
     const dy = touch1.clientY - touch2.clientY;
     return Math.sqrt(dx * dx + dy * dy);
@@ -59,14 +65,14 @@ export function CanvasImageViewer({
     if (!ctx) return;
 
     const img = imageRef.current;
-    
+
     // Calculate base fit (100% means image fits within canvas)
     const imageAspectRatio = img.width / img.height;
     const canvasAspectRatio = canvas.width / canvas.height;
-    
+
     let baseWidth = canvas.width;
     let baseHeight = canvas.height;
-    
+
     if (imageAspectRatio > canvasAspectRatio) {
       // Image is wider, fit to width
       baseHeight = canvas.width / imageAspectRatio;
@@ -74,7 +80,7 @@ export function CanvasImageViewer({
       // Image is taller or square, fit to height
       baseWidth = canvas.height * imageAspectRatio;
     }
-    
+
     // Apply zoom to the base fit dimensions
     const zoomedWidth = (baseWidth * zoom) / 100;
     const zoomedHeight = (baseHeight * zoom) / 100;
@@ -83,14 +89,9 @@ export function CanvasImageViewer({
     ctx.fillStyle = "rgb(0, 0, 0)";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Center the image when zoom is 100%
-    let drawX = panX;
-    let drawY = panY;
-
-    if (zoom === 100) {
-      drawX = (canvas.width - zoomedWidth) / 2;
-      drawY = (canvas.height - zoomedHeight) / 2;
-    }
+    // Always center at 100% zoom, otherwise use pan
+    const drawX = zoom === 100 ? (canvas.width - zoomedWidth) / 2 : panX;
+    const drawY = zoom === 100 ? (canvas.height - zoomedHeight) / 2 : panY;
 
     // Draw image
     ctx.drawImage(img, drawX, drawY, zoomedWidth, zoomedHeight);
@@ -136,29 +137,55 @@ export function CanvasImageViewer({
       const distance = getTouchDistance(e.touches[0], e.touches[1]);
       touchDistanceRef.current = distance;
       touchZoomStartRef.current = zoom;
+        touchStartXRef.current = (e.touches[0].clientX + e.touches[1].clientX) / 2;
       setIsDragging(true);
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    if (e.touches.length === 2 && touchDistanceRef.current !== null && touchZoomStartRef.current !== null) {
+    if (
+      e.touches.length === 2 &&
+      touchDistanceRef.current !== null &&
+      touchZoomStartRef.current !== null
+    ) {
       e.preventDefault();
       const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
       const distanceDelta = currentDistance - touchDistanceRef.current;
-      
+
       // Convert distance change to zoom change (adjust sensitivity as needed)
       const zoomDelta = (distanceDelta / 100) * 50;
-      const newZoom = Math.max(5, Math.min(200, touchZoomStartRef.current + zoomDelta));
-      
+      const newZoom = Math.max(
+        5,
+        Math.min(200, touchZoomStartRef.current + zoomDelta),
+      );
+
       onZoomChange(newZoom);
     }
   };
 
   const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
     if (e.touches.length < 2) {
+            // Two-finger swipe detection
+            if (touchStartXRef.current !== null && e.changedTouches.length >= 2) {
+              const endX = (e.changedTouches[0].clientX + e.changedTouches[1].clientX) / 2;
+              const swipeDelta = touchStartXRef.current - endX;
+        
+              // If swipe is significant (at least 50px)
+              if (Math.abs(swipeDelta) > 50 && onNavigate) {
+                if (swipeDelta > 0) {
+                  // Swiped left, go to next photo
+                  onNavigate("next");
+                } else {
+                  // Swiped right, go to previous photo
+                  onNavigate("prev");
+                }
+              }
+            }
+      
       setIsDragging(false);
       touchDistanceRef.current = null;
       touchZoomStartRef.current = null;
+      touchStartXRef.current = null;
     }
   };
 

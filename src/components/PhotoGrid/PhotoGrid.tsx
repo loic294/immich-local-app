@@ -1281,24 +1281,27 @@ export function PhotoGrid({
     }
   }, [activeAsset, isPlayingLivePhoto, shouldAutoplayLivePhoto]);
 
-  useEffect(() => {
-    if (!imageContainerRef.current) {
+  useLayoutEffect(() => {
+    const element = imageContainerRef.current;
+    if (!element || !hasActive) {
       return;
     }
 
-    const observer = new ResizeObserver(() => {
-      if (imageContainerRef.current) {
-        setImageContainerWidth(imageContainerRef.current.clientWidth);
-        setImageContainerHeight(imageContainerRef.current.clientHeight);
-      }
-    });
+    const updateImageContainerSize = () => {
+      setImageContainerWidth(element.clientWidth);
+      setImageContainerHeight(element.clientHeight);
+    };
 
-    observer.observe(imageContainerRef.current);
+    // Measure immediately when fullscreen image container appears.
+    updateImageContainerSize();
+
+    const observer = new ResizeObserver(updateImageContainerSize);
+    observer.observe(element);
 
     return () => {
       observer.disconnect();
     };
-  }, []);
+  }, [hasActive, activeAsset?.id]);
 
   const activeAssetRatio = getAssetAspectRatio(activeAsset);
   const livePhotoFrameStyle = {
@@ -1961,7 +1964,7 @@ export function PhotoGrid({
                       }}
                     />
                   </div>
-                ) : zoom !== 100 ? (
+                ) : (
                   <CanvasImageViewer
                     src={activeStillSrc ?? activeSrc ?? ""}
                     alt={activeAsset.originalFileName}
@@ -1969,12 +1972,13 @@ export function PhotoGrid({
                     onZoomChange={setZoom}
                     containerWidth={imageContainerWidth}
                     containerHeight={imageContainerHeight}
-                  />
-                ) : (
-                  <img
-                    className="max-h-full max-w-full object-contain"
-                    src={activeStillSrc ?? activeSrc ?? ""}
-                    alt={activeAsset.originalFileName}
+                    onNavigate={(direction) => {
+                      if (direction === "next") {
+                        goNext();
+                      } else {
+                        goPrev();
+                      }
+                    }}
                   />
                 )}
               </div>
