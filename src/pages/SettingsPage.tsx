@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Trash2, FolderOpen } from "lucide-react";
+import { Trash2, FolderOpen, LogOut } from "lucide-react";
 import {
   getCacheStats,
   getCachePath,
@@ -11,9 +11,10 @@ import type { AppPage } from "../components/Layout/Sidebar";
 
 interface SettingsPageProps {
   onNavigate?: (page: AppPage) => void;
+  onLogout?: () => void;
 }
 
-export function SettingsPage({ onNavigate }: SettingsPageProps) {
+export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [cachePath, setCachePath] = useState<string | null>(null);
@@ -224,6 +225,25 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
               Clearing the cache will not affect your photos. They will be
               re-downloaded as needed.
             </p>
+          </div>
+        </div>
+
+        {/* Account */}
+        <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
+          <div className="card-body">
+            <h2 className="card-title">Account</h2>
+            <p className="text-sm text-base-content/70 mb-4">
+              Sign out to connect to a different Immich server or change your
+              API key.
+            </p>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="btn btn-outline btn-error gap-2"
+            >
+              <LogOut size={16} />
+              Sign Out
+            </button>
           </div>
         </div>
 

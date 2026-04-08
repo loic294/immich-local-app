@@ -51,6 +51,7 @@ export type AlbumSummary = {
   endDate: string | null;
   assetCount: number | null;
   owner: AlbumOwnerSummary | null;
+  description: string | null;
 };
 
 export type Settings = {

@@ -4,3 +4,4 @@ pub mod auth;
 pub mod folders;
 pub mod memories;
 pub mod settings;
+pub mod shell;

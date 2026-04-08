@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { authenticate } from "../api/tauri";
+import { authenticate, restoreSession, logoutFromServer } from "../api/tauri";
 
 export type Session = {
   serverUrl: string;
@@ -7,48 +7,8 @@ export type Session = {
   userId: string;
 };
 
-const AUTH_STORAGE_KEY = "immichLocalApp.auth";
-
-function readStoredSession(): Session | null {
-  try {
-    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-
-    const parsed = JSON.parse(raw) as Partial<Session>;
-    if (
-      typeof parsed.serverUrl !== "string" ||
-      typeof parsed.apiKey !== "string"
-    ) {
-      return null;
-    }
-
-    if (!parsed.serverUrl || !parsed.apiKey) {
-      return null;
-    }
-
-    return {
-      serverUrl: parsed.serverUrl,
-      apiKey: parsed.apiKey,
-      userId: typeof parsed.userId === "string" ? parsed.userId : "",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function persistSession(session: Session) {
-  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
-}
-
-function clearPersistedSession() {
-  localStorage.removeItem(AUTH_STORAGE_KEY);
-}
-
 export type UseSessionReturn = {
   session: Session | null;
-  storedSession: Session | null;
   error: string | null;
   isAuthenticating: boolean;
   isRestoringSession: boolean;
@@ -58,54 +18,39 @@ export type UseSessionReturn = {
 
 export function useSession(): UseSessionReturn {
   const [session, setSession] = useState<Session | null>(null);
-  const [storedSession] = useState<Session | null>(() => readStoredSession());
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [isRestoringSession, setIsRestoringSession] = useState(
-    Boolean(storedSession),
-  );
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
 
-  // Restore session on mount
+  // Restore session from DB on mount
   useEffect(() => {
-    if (!storedSession) {
-      return;
-    }
-
-    const sessionToRestore = storedSession;
     let cancelled = false;
 
-    async function restoreSession() {
-      setIsAuthenticating(true);
-      setError(null);
-
+    async function tryRestoreSession() {
       try {
-        const authResponse = await authenticate(
-          sessionToRestore.serverUrl,
-          sessionToRestore.apiKey,
-        );
-        if (!cancelled) {
+        const response = await restoreSession();
+        if (!cancelled && response) {
           setSession({
-            serverUrl: sessionToRestore.serverUrl,
-            apiKey: sessionToRestore.apiKey,
-            userId: authResponse.userId,
+            serverUrl: response.serverUrl,
+            apiKey: "",
+            userId: response.userId,
           });
         }
       } catch {
-        clearPersistedSession();
+        // No stored session or restore failed — stay on login screen
       } finally {
         if (!cancelled) {
-          setIsAuthenticating(false);
           setIsRestoringSession(false);
         }
       }
     }
 
-    void restoreSession();
+    void tryRestoreSession();
 
     return () => {
       cancelled = true;
     };
-  }, [storedSession]);
+  }, []);
 
   async function login(input: { serverUrl: string; apiKey: string }) {
     setError(null);
@@ -113,19 +58,16 @@ export function useSession(): UseSessionReturn {
 
     try {
       const authResponse = await authenticate(input.serverUrl, input.apiKey);
-      const nextSession = {
+      setSession({
         serverUrl: input.serverUrl,
         apiKey: input.apiKey,
         userId: authResponse.userId,
-      };
-      persistSession(nextSession);
-      setSession(nextSession);
+      });
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Unknown authentication error";
       setError(message);
       setSession(null);
-      clearPersistedSession();
     } finally {
       setIsAuthenticating(false);
     }
@@ -133,13 +75,14 @@ export function useSession(): UseSessionReturn {
 
   function logout() {
     setSession(null);
-    clearPersistedSession();
     setError(null);
+    logoutFromServer().catch((err) =>
+      console.error("Failed to clear server session:", err),
+    );
   }
 
   return {
     session,
-    storedSession,
     error,
     isAuthenticating,
     isRestoringSession,

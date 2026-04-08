@@ -15,6 +15,12 @@ export type AuthResponse = {
   userId: string;
 };
 
+export type RestoreSessionResponse = {
+  accessTokenPreview: string;
+  userId: string;
+  serverUrl: string;
+};
+
 export async function authenticate(
   serverUrl: string,
   apiKey: string,
@@ -23,6 +29,14 @@ export async function authenticate(
     serverUrl,
     apiKey,
   });
+}
+
+export async function restoreSession(): Promise<RestoreSessionResponse | null> {
+  return invoke<RestoreSessionResponse | null>("restore_session");
+}
+
+export async function logoutFromServer(): Promise<void> {
+  return invoke<void>("logout");
 }
 
 export async function fetchAssets(
@@ -143,4 +157,8 @@ export async function updateAssetRating(
     assetId,
     rating,
   });
+}
+
+export async function openUrl(url: string): Promise<void> {
+  return invoke<void>("open_url", { url });
 }

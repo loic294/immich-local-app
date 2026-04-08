@@ -77,6 +77,8 @@ pub struct AlbumSummary {
     pub end_date: Option<String>,
     pub asset_count: Option<u32>,
     pub owner: Option<AlbumOwnerSummary>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +147,11 @@ impl ImmichClient {
         *guard = Some(session.clone());
 
         Ok(session)
+    }
+
+    pub async fn clear_session(&self) {
+        let mut guard = self.session.lock().await;
+        *guard = None;
     }
 
     pub async fn get_assets(

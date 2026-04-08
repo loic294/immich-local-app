@@ -53,6 +53,47 @@ impl Database {
         Ok(())
     }
 
+    pub fn save_auth_credentials(&self, server_url: &str, api_key: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('server_url', ?1)",
+            params![server_url],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('api_key', ?1)",
+            params![api_key],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_auth_credentials(&self) -> Result<Option<(String, String)>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")
+            .map_err(|err| err.to_string())?;
+
+        let server_url = stmt
+            .query_row(params!["server_url"], |row| row.get::<_, String>(0))
+            .ok();
+        let api_key = stmt
+            .query_row(params!["api_key"], |row| row.get::<_, String>(0))
+            .ok();
+
+        match (server_url, api_key) {
+            (Some(url), Some(key)) if !url.is_empty() && !key.is_empty() => Ok(Some((url, key))),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn clear_auth_credentials(&self) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute("DELETE FROM settings WHERE key IN ('server_url', 'api_key')", [])
+            .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
     fn open(&self) -> Result<Connection, String> {
         Connection::open(&self.db_path).map_err(|err| err.to_string())
     }

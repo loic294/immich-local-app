@@ -12,11 +12,11 @@ export function App() {
   const [activePage, setActivePage] = useState<AppPage>("photos");
   const {
     session,
-    storedSession,
     error,
     isAuthenticating,
     isRestoringSession,
     login,
+    logout,
   } = useSession();
 
   if (isRestoringSession) {
@@ -28,8 +28,6 @@ export function App() {
       <main className="min-h-screen bg-base-200 p-6">
         <LoginScreen
           onSubmit={login}
-          initialServerUrl={storedSession?.serverUrl}
-          initialApiKey={storedSession?.apiKey}
           isLoading={isAuthenticating}
           error={error}
         />
@@ -46,7 +44,7 @@ export function App() {
   }
 
   if (activePage === "settings") {
-    return <SettingsPage onNavigate={setActivePage} />;
+    return <SettingsPage onNavigate={setActivePage} onLogout={logout} />;
   }
 
   return <PhotosPage session={session} onNavigate={setActivePage} />;

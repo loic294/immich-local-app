@@ -7,6 +7,7 @@ import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
 import type { Session } from "../hooks/useSession";
 import type { AlbumSummary } from "../types";
+import { openUrl } from "../api/tauri";
 
 interface AlbumsPageProps {
   session: Session;
@@ -118,6 +119,10 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
                   {selectedAlbum.albumName}
                 </h1>
               </div>
+
+              {selectedAlbum.description ? (
+                <AlbumDescriptionSection description={selectedAlbum.description} />
+              ) : null}
 
               {albumAssetsQuery.isError ? (
                 <div
@@ -277,4 +282,70 @@ function formatMonthYear(value: string | null): string | null {
     month: "short",
     year: "numeric",
   });
+}
+
+const URL_REGEX = /https?:\/\/[^\s]+/g;
+const ADOBE_HOSTNAME_REGEX = /adobe\.ly|lightroom\.adobe\.com|lightroom\.app/i;
+
+function extractFirstUrl(text: string): string | null {
+  const matches = text.match(URL_REGEX);
+  return matches?.[0] ?? null;
+}
+
+function isAdobeUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return ADOBE_HOSTNAME_REGEX.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+interface AlbumDescriptionSectionProps {
+  description: string;
+}
+
+function AlbumDescriptionSection({ description }: AlbumDescriptionSectionProps) {
+  const url = extractFirstUrl(description);
+  const textWithoutUrl = url ? description.replace(url, "").trim() : description;
+
+  return (
+    <div className="mb-4 space-y-3">
+      {textWithoutUrl ? (
+        <p className="text-sm text-base-content/80 whitespace-pre-wrap">{textWithoutUrl}</p>
+      ) : null}
+      {url ? (
+        <button
+          type="button"
+          onClick={() => void openUrl(url)}
+          className="card card-sm card-border bg-base-100 block w-full text-left no-underline hover:-translate-y-0.5 transition shadow-sm hover:shadow-md cursor-pointer"
+        >
+          <div className="card-body p-3 flex-row items-center gap-3">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="size-5 shrink-0 text-base-content/50"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+              />
+            </svg>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-base-content">
+                {isAdobeUrl(url) ? "View more photos on Lightroom" : url}
+              </p>
+              {isAdobeUrl(url) ? (
+                <p className="text-xs text-base-content/50 truncate">{url}</p>
+              ) : null}
+            </div>
+          </div>
+        </button>
+      ) : null}
+    </div>
+  );
 }
