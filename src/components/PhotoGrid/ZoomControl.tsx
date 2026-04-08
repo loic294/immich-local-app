@@ -49,7 +49,7 @@ export function ZoomControl({ zoomLevel, onZoomChange }: ZoomControlProps) {
           <input
             type="range"
             min="5"
-            max="200"
+            max="800"
             value={zoomLevel}
             onChange={(e) => onZoomChange(Number(e.target.value))}
             className="range range-sm w-50 m-0 p-0"

@@ -89,9 +89,11 @@ export function CanvasImageViewer({
     ctx.fillStyle = "rgb(0, 0, 0)";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Always center at 100% zoom, otherwise use pan
-    const drawX = zoom === 100 ? (canvas.width - zoomedWidth) / 2 : panX;
-    const drawY = zoom === 100 ? (canvas.height - zoomedHeight) / 2 : panY;
+    // Keep image centered by default at every zoom level; pan values are offsets.
+    const centerX = (canvas.width - zoomedWidth) / 2;
+    const centerY = (canvas.height - zoomedHeight) / 2;
+    const drawX = centerX + panX;
+    const drawY = centerY + panY;
 
     // Draw image
     ctx.drawImage(img, drawX, drawY, zoomedWidth, zoomedHeight);
@@ -101,6 +103,13 @@ export function CanvasImageViewer({
   useEffect(() => {
     drawCanvas();
   }, [zoom, panX, panY, containerWidth, containerHeight]);
+
+  useEffect(() => {
+    if (zoom === 100) {
+      setPanX(0);
+      setPanY(0);
+    }
+  }, [zoom]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsDragging(true);
@@ -127,8 +136,12 @@ export function CanvasImageViewer({
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const scrollDelta = e.deltaY > 0 ? -5 : 5;
-    const newZoom = Math.max(5, Math.min(200, zoom + scrollDelta));
+    const newZoom = Math.max(5, Math.min(800, zoom + scrollDelta));
     onZoomChange(newZoom);
+  };
+
+  const handleDoubleClick = () => {
+    onZoomChange(zoom === 100 ? 200 : 100);
   };
 
   const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
@@ -137,7 +150,8 @@ export function CanvasImageViewer({
       const distance = getTouchDistance(e.touches[0], e.touches[1]);
       touchDistanceRef.current = distance;
       touchZoomStartRef.current = zoom;
-        touchStartXRef.current = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      touchStartXRef.current =
+        (e.touches[0].clientX + e.touches[1].clientX) / 2;
       setIsDragging(true);
     }
   };
@@ -156,7 +170,7 @@ export function CanvasImageViewer({
       const zoomDelta = (distanceDelta / 100) * 50;
       const newZoom = Math.max(
         5,
-        Math.min(200, touchZoomStartRef.current + zoomDelta),
+        Math.min(800, touchZoomStartRef.current + zoomDelta),
       );
 
       onZoomChange(newZoom);
@@ -165,23 +179,24 @@ export function CanvasImageViewer({
 
   const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
     if (e.touches.length < 2) {
-            // Two-finger swipe detection
-            if (touchStartXRef.current !== null && e.changedTouches.length >= 2) {
-              const endX = (e.changedTouches[0].clientX + e.changedTouches[1].clientX) / 2;
-              const swipeDelta = touchStartXRef.current - endX;
-        
-              // If swipe is significant (at least 50px)
-              if (Math.abs(swipeDelta) > 50 && onNavigate) {
-                if (swipeDelta > 0) {
-                  // Swiped left, go to next photo
-                  onNavigate("next");
-                } else {
-                  // Swiped right, go to previous photo
-                  onNavigate("prev");
-                }
-              }
-            }
-      
+      // Two-finger swipe detection
+      if (touchStartXRef.current !== null && e.changedTouches.length >= 2) {
+        const endX =
+          (e.changedTouches[0].clientX + e.changedTouches[1].clientX) / 2;
+        const swipeDelta = touchStartXRef.current - endX;
+
+        // If swipe is significant (at least 50px)
+        if (Math.abs(swipeDelta) > 50 && onNavigate) {
+          if (swipeDelta > 0) {
+            // Swiped left, go to next photo
+            onNavigate("next");
+          } else {
+            // Swiped right, go to previous photo
+            onNavigate("prev");
+          }
+        }
+      }
+
       setIsDragging(false);
       touchDistanceRef.current = null;
       touchZoomStartRef.current = null;
@@ -199,6 +214,7 @@ export function CanvasImageViewer({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onDoubleClick={handleDoubleClick}
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}

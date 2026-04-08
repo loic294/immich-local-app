@@ -1233,30 +1233,16 @@ export function PhotoGrid({
       }
 
       if (event.key === "ArrowLeft") {
-        setActiveSrc(null);
-        setActiveStillSrc(null);
-        setIsPlayingLivePhoto(false);
-        setShouldAutoplayLivePhoto(true);
-        setActiveIndex((current) => {
-          if (current === null) {
-            return current;
-          }
-          return Math.max(0, current - 1);
-        });
+        if (activeIndex !== null) {
+          showAssetAtIndex(Math.max(0, activeIndex - 1), true);
+        }
         return;
       }
 
       if (event.key === "ArrowRight") {
-        setActiveSrc(null);
-        setActiveStillSrc(null);
-        setIsPlayingLivePhoto(false);
-        setShouldAutoplayLivePhoto(true);
-        setActiveIndex((current) => {
-          if (current === null) {
-            return current;
-          }
-          return Math.min(displayAssets.length - 1, current + 1);
-        });
+        if (activeIndex !== null) {
+          showAssetAtIndex(Math.min(displayAssets.length - 1, activeIndex + 1), true);
+        }
       }
     };
 
@@ -1264,7 +1250,7 @@ export function PhotoGrid({
     return () => {
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [displayAssets.length, hasActive]);
+  }, [activeIndex, displayAssets.length, hasActive]);
 
   useEffect(() => {
     if (!activeAsset) {
