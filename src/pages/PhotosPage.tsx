@@ -208,17 +208,57 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
               onLoadMore={() => assetsWindow.loadNextPage()}
               onLoadPrevious={() => assetsWindow.loadPreviousPage()}
               onJumpToDate={async (dateKey) => {
+                const trimmedSearch = searchTerm.trim() || null;
+                const jumpId = `jump-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const jumpStartedAt = performance.now();
+                console.log("[PhotosPage] jump start", {
+                  jumpId,
+                  dateKey,
+                  pageSize: ASSET_PAGE_SIZE,
+                  search: trimmedSearch,
+                });
+
+                const jumpTargetStartedAt = performance.now();
                 const jumpTarget = await getCachedAssetJumpTarget(
                   dateKey,
                   ASSET_PAGE_SIZE,
-                  searchTerm.trim() || null,
+                  trimmedSearch,
                 );
 
+                console.log("[PhotosPage] jump target resolved", {
+                  jumpId,
+                  dateKey,
+                  found: Boolean(jumpTarget),
+                  page: jumpTarget?.page ?? null,
+                  durationMs: Math.round(
+                    performance.now() - jumpTargetStartedAt,
+                  ),
+                });
+
                 if (!jumpTarget) {
+                  console.log("[PhotosPage] jump aborted (no target)", {
+                    jumpId,
+                    dateKey,
+                    totalDurationMs: Math.round(
+                      performance.now() - jumpStartedAt,
+                    ),
+                  });
                   return;
                 }
 
+                const replaceStartedAt = performance.now();
                 await assetsWindow.jumpToPage(jumpTarget.page);
+                console.log("[PhotosPage] jump page loaded", {
+                  jumpId,
+                  dateKey,
+                  page: jumpTarget.page,
+                  replaceDurationMs: Math.round(
+                    performance.now() - replaceStartedAt,
+                  ),
+                  totalDurationMs: Math.round(
+                    performance.now() - jumpStartedAt,
+                  ),
+                });
               }}
               loadFullLayout={(containerWidth) =>
                 getFullGridLayout(searchTerm.trim() || null, containerWidth)

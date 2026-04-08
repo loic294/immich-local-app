@@ -128,6 +128,11 @@ export function PhotoGrid({
   const latestRenderScrollTopRef = useRef(0);
   const pendingScrollRestoreRef = useRef<ScrollRestoreAnchor | null>(null);
   const pendingRestoreAttemptsRef = useRef(0);
+  const jumpMetricsRef = useRef<{
+    jumpId: string;
+    dateKey: string;
+    startedAtMs: number;
+  } | null>(null);
   const [layoutReadyAssetCount, setLayoutReadyAssetCount] = useState(0);
   const [fullGridSections, setFullGridSections] = useState<GridLayoutSection[]>(
     [],
@@ -235,18 +240,21 @@ export function PhotoGrid({
           isIntersecting: entry?.isIntersecting,
           hasNextPage,
           isFetching,
+          pendingJumpDateKey,
           isLoadingNext: isLoadingNextRef.current,
           willLoadMore:
             entry?.isIntersecting &&
             hasNextPage &&
             !isFetching &&
-            !isLoadingNextRef.current,
+            !isLoadingNextRef.current &&
+            !pendingJumpDateKey,
         });
         if (
           entry?.isIntersecting &&
           hasNextPage &&
           !isFetching &&
-          !isLoadingNextRef.current
+          !isLoadingNextRef.current &&
+          !pendingJumpDateKey
         ) {
           const anchor = captureScrollRestoreAnchor("append");
           pendingScrollRestoreRef.current = anchor;
@@ -272,7 +280,13 @@ export function PhotoGrid({
       console.log("[PhotoGrid] Bottom sentinel: disconnecting observer");
       observer.disconnect();
     };
-  }, [hasNextPage, isFetching, isUsingFullLayout, onLoadMore]);
+  }, [
+    hasNextPage,
+    isFetching,
+    isUsingFullLayout,
+    onLoadMore,
+    pendingJumpDateKey,
+  ]);
 
   useEffect(() => {
     if (isUsingFullLayout || !topSentinelRef.current || !onLoadPrevious) {
@@ -621,6 +635,9 @@ export function PhotoGrid({
   const SCROLL_LOAD_TRIGGER_PX = 800;
   useEffect(() => {
     if (!isUsingFullLayout) return;
+    if (pendingJumpDateKey) {
+      return;
+    }
 
     if (
       onLoadPrevious &&
@@ -675,6 +692,7 @@ export function PhotoGrid({
     onLoadPrevious,
     onLoadMore,
     viewportHeight,
+    pendingJumpDateKey,
   ]);
 
   useLayoutEffect(() => {
@@ -881,10 +899,21 @@ export function PhotoGrid({
   }, [pendingJumpDateKey, virtualEntries]);
 
   const handleJumpToDate = async (dateKey: string) => {
-    console.log("[PhotoGrid] handleJumpToDate", { dateKey });
+    const jumpId = `grid-jump-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const startedAtMs = performance.now();
+    jumpMetricsRef.current = {
+      jumpId,
+      dateKey,
+      startedAtMs,
+    };
+    console.log("[PhotoGrid] handleJumpToDate start", { jumpId, dateKey });
+
     setPendingJumpDateKey(dateKey);
     if (viewportRef.current) {
       viewportRef.current.scrollTop = 0;
+      latestScrollTopRef.current = 0;
+      latestRenderScrollTopRef.current = 0;
+      setScrollTop(0);
     }
 
     if (onJumpToDate) {
@@ -893,6 +922,11 @@ export function PhotoGrid({
         hasNextPage,
       );
       await onJumpToDate(dateKey);
+      console.log("[PhotoGrid] handleJumpToDate data phase done", {
+        jumpId,
+        dateKey,
+        durationMs: Math.round(performance.now() - startedAtMs),
+      });
       console.log(
         "[PhotoGrid] onJumpToDate resolved, hasNextPage after jump:",
         hasNextPage,
@@ -904,6 +938,11 @@ export function PhotoGrid({
 
     if (scrollToDateKey(dateKey)) {
       setPendingJumpDateKey(null);
+      console.log("[PhotoGrid] handleJumpToDate scroll phase done", {
+        jumpId,
+        dateKey,
+        durationMs: Math.round(performance.now() - startedAtMs),
+      });
     }
   };
 
@@ -1481,6 +1520,7 @@ export function PhotoGrid({
                             settings?.livePhotoAutoplay ?? true
                           }
                           suppressFullThumbnail={isTimelineScrubbing}
+                          jumpMetrics={jumpMetricsRef.current}
                         />
                       </article>
                     );
@@ -1728,6 +1768,7 @@ function AssetThumbnail({
   showDebug,
   livePhotoAutoplay,
   suppressFullThumbnail,
+  jumpMetrics,
 }: {
   asset: AssetSummary;
   onOpen: () => void;
@@ -1737,6 +1778,11 @@ function AssetThumbnail({
   showDebug: boolean;
   livePhotoAutoplay: boolean;
   suppressFullThumbnail: boolean;
+  jumpMetrics: {
+    jumpId: string;
+    dateKey: string;
+    startedAtMs: number;
+  } | null;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
@@ -1755,6 +1801,12 @@ function AssetThumbnail({
   );
   const isVideo = isVideoAsset(asset);
   const isLivePhoto = asset.livePhotoVideoId != null;
+  const thumbnailFetchStartedAtRef = useRef<number | null>(null);
+  const fullImageReadyLoggedRef = useRef(false);
+
+  useEffect(() => {
+    fullImageReadyLoggedRef.current = false;
+  }, [asset.id, src]);
 
   useEffect(() => {
     if (suppressFullThumbnail) {
@@ -1765,13 +1817,38 @@ function AssetThumbnail({
 
     async function load() {
       try {
+        thumbnailFetchStartedAtRef.current = performance.now();
         const value = await getAssetThumbnail(asset.id);
         if (!canceled) {
           setSrc(value);
+          const fetchDurationMs = Math.round(
+            performance.now() -
+              (thumbnailFetchStartedAtRef.current ?? performance.now()),
+          );
+
+          if (fetchDurationMs >= 150 || jumpMetrics) {
+            console.log("[AssetThumbnail] fetch done", {
+              assetId: asset.id,
+              fileName: asset.originalFileName,
+              fetchDurationMs,
+              duringJump: Boolean(jumpMetrics),
+              jumpId: jumpMetrics?.jumpId ?? null,
+              jumpDateKey: jumpMetrics?.dateKey ?? null,
+              jumpElapsedMs: jumpMetrics
+                ? Math.round(performance.now() - jumpMetrics.startedAtMs)
+                : null,
+            });
+          }
         }
       } catch {
         if (!canceled) {
           setSrc(null);
+          console.warn("[AssetThumbnail] fetch failed", {
+            assetId: asset.id,
+            fileName: asset.originalFileName,
+            duringJump: Boolean(jumpMetrics),
+            jumpId: jumpMetrics?.jumpId ?? null,
+          });
         }
       }
     }
@@ -2086,6 +2163,22 @@ function AssetThumbnail({
             const image = event.currentTarget;
             if (image.naturalWidth > 0 && image.naturalHeight > 0) {
               onDimensions(image.naturalWidth, image.naturalHeight);
+            }
+
+            if (!fullImageReadyLoggedRef.current) {
+              fullImageReadyLoggedRef.current = true;
+              console.log("[AssetThumbnail] image rendered", {
+                assetId: asset.id,
+                fileName: asset.originalFileName,
+                width: image.naturalWidth,
+                height: image.naturalHeight,
+                duringJump: Boolean(jumpMetrics),
+                jumpId: jumpMetrics?.jumpId ?? null,
+                jumpDateKey: jumpMetrics?.dateKey ?? null,
+                jumpElapsedMs: jumpMetrics
+                  ? Math.round(performance.now() - jumpMetrics.startedAtMs)
+                  : null,
+              });
             }
           }}
           onClick={() => {

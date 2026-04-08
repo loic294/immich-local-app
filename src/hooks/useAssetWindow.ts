@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCachedAssets } from "../api/tauri";
 import type { AssetSummary } from "../types";
 
@@ -34,14 +34,32 @@ export function useAssetWindow(
   const [isFetchingPreviousPage, setIsFetchingPreviousPage] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const requestVersionRef = useRef(0);
+  const isReplacingRef = useRef(false);
 
   const loadPage = useCallback(
     async (page: number): Promise<AssetPageWindow> => {
+      const trimmedSearch = searchTerm.trim() || null;
+      const startedAt = performance.now();
+      console.log("[useAssetWindow] loadPage start", {
+        page,
+        pageSize: ASSET_PAGE_SIZE,
+        search: trimmedSearch,
+      });
+
       const result = await getCachedAssets(
         page,
         ASSET_PAGE_SIZE,
-        searchTerm.trim() || null,
+        trimmedSearch,
       );
+
+      const durationMs = Math.round(performance.now() - startedAt);
+      console.log("[useAssetWindow] loadPage done", {
+        page,
+        itemCount: result.items.length,
+        hasNextPage: result.hasNextPage,
+        durationMs,
+      });
 
       return {
         page,
@@ -55,6 +73,10 @@ export function useAssetWindow(
   const replaceWithPage = useCallback(
     async (page: number) => {
       console.log("[useAssetWindow] replaceWithPage start", { page });
+      const version = requestVersionRef.current + 1;
+      requestVersionRef.current = version;
+      isReplacingRef.current = true;
+
       setIsInitialLoading(true);
       setError(null);
 
@@ -77,6 +99,7 @@ export function useAssetWindow(
         console.log(
           "[useAssetWindow] replaceWithPage done, isInitialLoading -> false",
         );
+        isReplacingRef.current = false;
         setIsInitialLoading(false);
       }
     },
@@ -95,6 +118,11 @@ export function useAssetWindow(
   }, [enabled, replaceWithPage, refreshToken]);
 
   const loadNextPage = useCallback(async () => {
+    if (isReplacingRef.current) {
+      console.log("[useAssetWindow] loadNextPage: skipped during replace");
+      return;
+    }
+
     if (isFetchingNextPage || orderedPages.length === 0) {
       console.log("[useAssetWindow] loadNextPage: skipped", {
         isFetchingNextPage,
@@ -120,8 +148,19 @@ export function useAssetWindow(
     setError(null);
 
     try {
+      const requestVersion = requestVersionRef.current;
       const nextPageNumber = lastPageNumber + 1;
       const nextPage = await loadPage(nextPageNumber);
+
+      if (requestVersion !== requestVersionRef.current) {
+        console.log("[useAssetWindow] loadNextPage: stale result ignored", {
+          nextPageNumber,
+          requestVersion,
+          currentVersion: requestVersionRef.current,
+        });
+        return;
+      }
+
       setPages((current) => ({
         ...current,
         [nextPageNumber]: nextPage,
@@ -141,6 +180,11 @@ export function useAssetWindow(
   }, [isFetchingNextPage, loadPage, orderedPages, pages]);
 
   const loadPreviousPage = useCallback(async () => {
+    if (isReplacingRef.current) {
+      console.log("[useAssetWindow] loadPreviousPage: skipped during replace");
+      return;
+    }
+
     if (isFetchingPreviousPage || orderedPages.length === 0) {
       console.log("[useAssetWindow] loadPreviousPage: skipped", {
         isFetchingPreviousPage,
@@ -164,8 +208,19 @@ export function useAssetWindow(
     setError(null);
 
     try {
+      const requestVersion = requestVersionRef.current;
       const previousPageNumber = firstPageNumber - 1;
       const previousPage = await loadPage(previousPageNumber);
+
+      if (requestVersion !== requestVersionRef.current) {
+        console.log("[useAssetWindow] loadPreviousPage: stale result ignored", {
+          previousPageNumber,
+          requestVersion,
+          currentVersion: requestVersionRef.current,
+        });
+        return;
+      }
+
       console.log("[useAssetWindow] loadPreviousPage: loaded", {
         previousPageNumber,
         itemCount: previousPage.items.length,

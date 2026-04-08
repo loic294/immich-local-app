@@ -9,7 +9,24 @@ export function useAssetDays(
   return useQuery({
     queryKey: ["asset-days", searchTerm, refreshToken],
     enabled,
-    queryFn: () => getCachedAssetDays(searchTerm.trim() || null),
+    queryFn: async () => {
+      const trimmedSearch = searchTerm.trim() || null;
+      const startedAt = performance.now();
+      console.log("[useAssetDays] query start", {
+        search: trimmedSearch,
+      });
+
+      const result = await getCachedAssetDays(trimmedSearch);
+      const durationMs = Math.round(performance.now() - startedAt);
+
+      console.log("[useAssetDays] query done", {
+        search: trimmedSearch,
+        dayCount: result.length,
+        durationMs,
+      });
+
+      return result;
+    },
     staleTime: 60_000,
   });
 }

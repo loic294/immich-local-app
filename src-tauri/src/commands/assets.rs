@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Datelike, Local, Utc};
+use std::time::Instant;
 
 use crate::services::immich_client::AssetSummary;
 use crate::AppState;
@@ -203,10 +204,21 @@ pub async fn get_cached_assets(
     search: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
+    let started_at = Instant::now();
     let (items, has_next_page) = state
         .db
         .get_assets(page, page_size, search.as_deref())
         .map_err(|err| format!("cache read failed: {err}"))?;
+
+    eprintln!(
+        "[assets.get_cached_assets] page={} page_size={} search={:?} item_count={} has_next_page={} duration_ms={}",
+        page,
+        page_size,
+        search,
+        items.len(),
+        has_next_page,
+        started_at.elapsed().as_millis()
+    );
 
     Ok(AssetPage {
         page,
@@ -232,10 +244,20 @@ pub async fn get_cached_asset_days(
     search: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
-    state
+    let started_at = Instant::now();
+    let result = state
         .db
         .get_asset_days(search.as_deref())
-        .map_err(|err| format!("asset day query failed: {err}"))
+        .map_err(|err| format!("asset day query failed: {err}"))?;
+
+    eprintln!(
+        "[assets.get_cached_asset_days] search={:?} day_count={} duration_ms={}",
+        search,
+        result.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -245,10 +267,20 @@ pub async fn get_cached_asset_jump_target(
     search: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<AssetDateJumpTarget>, String> {
+    let started_at = Instant::now();
     let page = state
         .db
         .get_asset_jump_target_page(&date_key, page_size, search.as_deref())
         .map_err(|err| format!("asset jump target query failed: {err}"))?;
+
+    eprintln!(
+        "[assets.get_cached_asset_jump_target] date_key={} page_size={} search={:?} page={:?} duration_ms={}",
+        date_key,
+        page_size,
+        search,
+        page,
+        started_at.elapsed().as_millis()
+    );
 
     Ok(page.map(|page| AssetDateJumpTarget { date_key, page }))
 }
@@ -259,6 +291,7 @@ pub async fn get_cached_timeline_layout(
     container_width: f64,
     state: tauri::State<'_, AppState>,
 ) -> Result<TimelineLayoutResponse, String> {
+    let started_at = Instant::now();
     if container_width <= 0.0 {
         return Ok(TimelineLayoutResponse {
             total_rows: 0,
@@ -324,11 +357,23 @@ pub async fn get_cached_timeline_layout(
         });
     }
 
-    Ok(TimelineLayoutResponse {
+    let response = TimelineLayoutResponse {
         total_rows,
         days,
         months,
-    })
+    };
+
+    eprintln!(
+        "[assets.get_cached_timeline_layout] search={:?} container_width={} days={} months={} total_rows={} duration_ms={}",
+        search,
+        container_width,
+        response.days.len(),
+        response.months.len(),
+        response.total_rows,
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(response)
 }
 
 #[tauri::command]
@@ -337,6 +382,7 @@ pub async fn get_cached_full_grid_layout(
     container_width: f64,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
+    let started_at = Instant::now();
     if container_width <= 0.0 {
         return Ok(GridLayoutResponse { sections: Vec::new() });
     }
@@ -356,7 +402,17 @@ pub async fn get_cached_full_grid_layout(
         })
         .collect();
 
-    calculate_grid_layout(layout_assets, container_width)
+    let response = calculate_grid_layout(layout_assets, container_width)?;
+
+    eprintln!(
+        "[assets.get_cached_full_grid_layout] search={:?} container_width={} sections={} duration_ms={}",
+        search,
+        container_width,
+        response.sections.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(response)
 }
 
 #[tauri::command]
@@ -364,11 +420,23 @@ pub async fn get_asset_thumbnail(
     asset_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    state
+    let started_at = Instant::now();
+    let result = state
         .immich
         .get_asset_thumbnail_data_url(&asset_id)
         .await
-        .map_err(|err| format!("thumbnail load failed: {err}"))
+        .map_err(|err| format!("thumbnail load failed: {err}"))?;
+
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if elapsed_ms >= 150 {
+        eprintln!(
+            "[assets.get_asset_thumbnail] asset_id={} duration_ms={}",
+            asset_id,
+            elapsed_ms
+        );
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]
