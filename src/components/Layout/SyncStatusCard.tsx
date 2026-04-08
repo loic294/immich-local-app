@@ -44,7 +44,7 @@ export function SyncStatusCard() {
 
   return (
     <div className="card card-compact bg-base-200 shadow">
-      <div className="card-body gap-3">
+      <div className="card-body p-3 gap-3">
         {isSyncing && syncStatus ? (
           <>
             <progress

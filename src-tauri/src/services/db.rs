@@ -24,6 +24,7 @@ pub struct SyncState {
 pub struct AssetSummaryExtended {
     pub id: String,
     pub original_file_name: String,
+    pub description: Option<String>,
     pub original_path: Option<String>,
     pub file_created_at: Option<String>,
     pub checksum: Option<String>,
@@ -86,6 +87,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS assets (
                 id TEXT PRIMARY KEY,
                 original_file_name TEXT NOT NULL,
+                description TEXT,
                 original_path TEXT,
                 file_created_at TEXT,
                 checksum TEXT,
@@ -227,6 +229,7 @@ impl Database {
         // List of columns that might be missing
         let required_columns = vec![
             ("asset_type", "TEXT"),
+            ("description", "TEXT"),
             ("original_path", "TEXT"),
             ("camera", "TEXT"),
             ("lens", "TEXT"),
@@ -365,13 +368,14 @@ impl Database {
             tx.execute(
                 "
                 INSERT INTO assets (
-                    id, original_file_name, original_path, file_created_at, checksum, updated_at,
+                    id, original_file_name, description, original_path, file_created_at, checksum, updated_at,
                     asset_type, duration, is_favorite, is_archived, visibility, rating,
                     width, height, thumbhash, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s', 'now'), ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
                 ON CONFLICT(id) DO UPDATE SET
                     original_file_name = excluded.original_file_name,
+                    description = excluded.description,
                     original_path = excluded.original_path,
                     file_created_at = excluded.file_created_at,
                     checksum = excluded.checksum,
@@ -396,6 +400,7 @@ impl Database {
                 params![
                     asset.id,
                     asset.original_file_name,
+                    asset.description,
                     asset.original_path,
                     asset.file_created_at,
                     asset.checksum,
@@ -421,6 +426,17 @@ impl Database {
         }
 
         tx.commit().map_err(|err| err.to_string())
+    }
+
+    pub fn update_asset_description(&self, asset_id: &str, description: Option<&str>) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE assets SET description = ?2, updated_at = strftime('%s', 'now') WHERE id = ?1",
+            params![asset_id, description],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
     }
 
     pub fn get_assets(
@@ -681,6 +697,7 @@ impl Database {
                 SELECT
                     id,
                     original_file_name,
+                    description,
                     original_path,
                     file_created_at,
                     checksum,
@@ -1444,25 +1461,26 @@ fn map_asset_summary_extended(
     Ok(AssetSummaryExtended {
         id: row.get(0)?,
         original_file_name: row.get(1)?,
-        original_path: row.get(2)?,
-        file_created_at: row.get(3)?,
-        checksum: row.get(4)?,
-        r#type: row.get(5)?,
-        duration: row.get(6)?,
-        is_favorite: row.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0,
-        is_archived: row.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0,
-        visibility: row.get(9)?,
-        rating: row.get(10)?,
-        width: row.get(11)?,
-        height: row.get(12)?,
-        thumbhash: row.get(13)?,
-        camera: row.get(14)?,
-        lens: row.get(15)?,
-        file_size_bytes: row.get(16)?,
-        file_extension: row.get(17)?,
-        people: row.get(18)?,
-        tags: row.get(19)?,
-        exif_info_json: row.get(20)?,
+        description: row.get(2)?,
+        original_path: row.get(3)?,
+        file_created_at: row.get(4)?,
+        checksum: row.get(5)?,
+        r#type: row.get(6)?,
+        duration: row.get(7)?,
+        is_favorite: row.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0,
+        is_archived: row.get::<_, Option<i32>>(9)?.unwrap_or(0) != 0,
+        visibility: row.get(10)?,
+        rating: row.get(11)?,
+        width: row.get(12)?,
+        height: row.get(13)?,
+        thumbhash: row.get(14)?,
+        camera: row.get(15)?,
+        lens: row.get(16)?,
+        file_size_bytes: row.get(17)?,
+        file_extension: row.get(18)?,
+        people: row.get(19)?,
+        tags: row.get(20)?,
+        exif_info_json: row.get(21)?,
     })
 }
 

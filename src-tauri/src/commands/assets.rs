@@ -101,6 +101,7 @@ pub struct TimelineLayoutResponse {
 pub struct CachedAssetDetails {
     pub id: String,
     pub original_file_name: String,
+    pub description: Option<String>,
     pub original_path: Option<String>,
     pub file_created_at: Option<String>,
     pub checksum: Option<String>,
@@ -122,6 +123,13 @@ pub struct CachedAssetDetails {
 pub struct UpdateAssetVisibilityPayload {
     pub asset_id: String,
     pub visibility: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAssetDescriptionPayload {
+    pub asset_id: String,
+    pub description: Option<String>,
 }
 
 #[tauri::command]
@@ -513,6 +521,7 @@ pub async fn get_cached_asset_details(
     Ok(details.map(|asset| CachedAssetDetails {
         id: asset.id,
         original_file_name: asset.original_file_name,
+        description: asset.description,
         original_path: asset.original_path,
         file_created_at: asset.file_created_at,
         checksum: asset.checksum,
@@ -528,6 +537,25 @@ pub async fn get_cached_asset_details(
         tags: asset.tags,
         exif_info_json: asset.exif_info_json,
     }))
+}
+
+#[tauri::command]
+pub async fn update_asset_description(
+    payload: UpdateAssetDescriptionPayload,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .immich
+        .update_asset_description(&payload.asset_id, payload.description.as_deref())
+        .await
+        .map_err(|err| format!("description update failed: {err}"))?;
+
+    state
+        .db
+        .update_asset_description(&payload.asset_id, payload.description.as_deref())
+        .map_err(|err| format!("failed to cache updated description: {err}"))?;
+
+    Ok(())
 }
 
 #[tauri::command]

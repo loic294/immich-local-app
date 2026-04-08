@@ -353,6 +353,7 @@ fn to_enriched_asset_record(
         asset: crate::services::db::AssetSummaryExtended {
         id: asset.id,
         original_file_name: asset.original_file_name.clone(),
+        description: metadata.as_ref().and_then(|m| m.description.clone()),
         original_path: metadata
             .as_ref()
             .and_then(|m| m.original_path.clone())

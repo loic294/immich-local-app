@@ -63,6 +63,8 @@ pub struct AssetSummary {
 #[serde(rename_all = "camelCase")]
 pub struct AssetMetadata {
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub original_path: Option<String>,
     #[serde(default)]
     pub rating: Option<i32>,
@@ -1055,6 +1057,18 @@ impl ImmichClient {
         self.update_asset_inner(asset_id, payload).await
     }
 
+    pub async fn update_asset_description(
+        &self,
+        asset_id: &str,
+        description: Option<&str>,
+    ) -> Result<AssetSummary, String> {
+        let payload = serde_json::json!({
+            "description": description,
+        });
+
+        self.update_asset_inner(asset_id, payload).await
+    }
+
     pub async fn get_asset_statistics(&self) -> Result<AssetStatistics, String> {
         let session = self
             .session
@@ -1701,6 +1715,10 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
     let (people, person_ids) = extract_people_data(people_items);
 
     AssetMetadata {
+        description: value
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         original_path,
         rating: exif_info
             .and_then(|v| v.get("rating"))

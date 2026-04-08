@@ -36,74 +36,72 @@ export function FullscreenMetadataBar({
   const displayRating = hoverRating ?? rating;
 
   return (
-    <div className="rounded-2xl border border-white/15 bg-zinc-900 px-1 py-0.5 text-white">
-      <div className="flex items-center justify-center gap-6 lg:gap-8">
-        {/* Star Rating */}
-        <div className="join gap-0">
-          {[1, 2, 3, 4, 5].map((value) => {
-            const isActive = value <= displayRating;
-            return (
-              <button
-                key={value}
-                type="button"
-                className="btn join-item btn-ghost btn-sm p-1.5 text-white/70 transition-colors"
-                onClick={() => onSetRating(value === rating ? null : value)}
-                onMouseEnter={() => setHoverRating(value)}
-                onMouseLeave={() => setHoverRating(null)}
-                disabled={isUpdatingRating}
-                aria-label={`Set rating to ${value}`}
-              >
-                <Star
-                  size={14}
-                  className={
-                    isActive ? "fill-warning text-warning" : "text-white/70"
-                  }
-                />
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Flags with Tooltips */}
-        <div className="join">
-          <div
-            className="tooltip"
-            data-tip={asset.isFavorite ? "Remove favorite" : "Add to favorites"}
-          >
+    <div className="flex items-center justify-center gap-6 text-white lg:gap-8">
+      {/* Star Rating */}
+      <div className="join gap-0">
+        {[1, 2, 3, 4, 5].map((value) => {
+          const isActive = value <= displayRating;
+          return (
             <button
+              key={value}
               type="button"
-              className="btn join-item btn-ghost btn-sm text-white/80"
-              onClick={onToggleFavorite}
-              disabled={isUpdatingFavorite}
-              aria-label="Toggle favorite"
+              className="btn join-item btn-ghost btn-sm p-1.5 text-white/70 transition-colors"
+              onClick={() => onSetRating(value === rating ? null : value)}
+              onMouseEnter={() => setHoverRating(value)}
+              onMouseLeave={() => setHoverRating(null)}
+              disabled={isUpdatingRating}
+              aria-label={`Set rating to ${value}`}
             >
-              <Heart
+              <Star
                 size={14}
                 className={
-                  asset.isFavorite ? "fill-error text-error" : "text-white/80"
+                  isActive ? "fill-warning text-warning" : "text-white/70"
                 }
               />
             </button>
-          </div>
+          );
+        })}
+      </div>
 
-          <div
-            className="tooltip"
-            data-tip={asset.isArchived ? "Unarchive" : "Archive"}
+      {/* Flags with Tooltips */}
+      <div className="join">
+        <div
+          className="tooltip"
+          data-tip={asset.isFavorite ? "Remove favorite" : "Add to favorites"}
+        >
+          <button
+            type="button"
+            className="btn join-item btn-ghost btn-sm text-white/80"
+            onClick={onToggleFavorite}
+            disabled={isUpdatingFavorite}
+            aria-label="Toggle favorite"
           >
-            <button
-              type="button"
-              className="btn join-item btn-ghost btn-sm text-white/80"
-              onClick={onToggleArchive}
-              disabled={isUpdatingArchive}
-              aria-label="Toggle archive"
-            >
-              {asset.isArchived ? (
-                <ArchiveRestore size={14} className="text-info" />
-              ) : (
-                <Archive size={14} className="text-white/80" />
-              )}
-            </button>
-          </div>
+            <Heart
+              size={14}
+              className={
+                asset.isFavorite ? "fill-error text-error" : "text-white/80"
+              }
+            />
+          </button>
+        </div>
+
+        <div
+          className="tooltip"
+          data-tip={asset.isArchived ? "Unarchive" : "Archive"}
+        >
+          <button
+            type="button"
+            className="btn join-item btn-ghost btn-sm text-white/80"
+            onClick={onToggleArchive}
+            disabled={isUpdatingArchive}
+            aria-label="Toggle archive"
+          >
+            {asset.isArchived ? (
+              <ArchiveRestore size={14} className="text-info" />
+            ) : (
+              <Archive size={14} className="text-white/80" />
+            )}
+          </button>
         </div>
       </div>
     </div>

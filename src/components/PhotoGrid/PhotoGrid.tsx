@@ -35,6 +35,7 @@ import {
   getAssetThumbnail,
   getSettings,
   refreshAsset,
+  updateAssetDescription,
   updateAssetFavorite,
   updateAssetRating,
   updateAssetVisibility,
@@ -120,9 +121,18 @@ export function PhotoGrid({
   const [favoriteUpdateId, setFavoriteUpdateId] = useState<string | null>(null);
   const [archiveUpdateId, setArchiveUpdateId] = useState<string | null>(null);
   const [ratingUpdateId, setRatingUpdateId] = useState<string | null>(null);
+  const [descriptionUpdateId, setDescriptionUpdateId] = useState<string | null>(
+    null,
+  );
   const [isTimelineScrubbing, setIsTimelineScrubbing] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showInfoPanel, setShowInfoPanel] = useState(false);
+  const [showInfoPanel, setShowInfoPanel] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return window.localStorage.getItem("immichFullscreenInfoPanel") === "1";
+  });
   const [cachedAssetDetails, setCachedAssetDetails] =
     useState<AssetCacheDetails | null>(null);
   const [isLoadingCachedDetails, setIsLoadingCachedDetails] = useState(false);
@@ -214,6 +224,17 @@ export function PhotoGrid({
       window.localStorage.getItem("immichDebugVideoMeta") === "1",
     );
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      "immichFullscreenInfoPanel",
+      showInfoPanel ? "1" : "0",
+    );
+  }, [showInfoPanel]);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -1291,7 +1312,6 @@ export function PhotoGrid({
 
   const closeLightbox = () => {
     setActiveIndex(null);
-    setShowInfoPanel(false);
     setCopyStatus("idle");
     resetFullscreenPlayback(false);
   };
@@ -1322,7 +1342,8 @@ export function PhotoGrid({
         throw new Error("Clipboard image write is not supported");
       }
 
-      const mimeType = blob.type && blob.type.length > 0 ? blob.type : "image/png";
+      const mimeType =
+        blob.type && blob.type.length > 0 ? blob.type : "image/png";
       await navigator.clipboard.write([
         new ClipboardItem({
           [mimeType]: blob,
@@ -1449,6 +1470,42 @@ export function PhotoGrid({
       console.error("Failed to update asset rating:", error);
     } finally {
       setRatingUpdateId((current) =>
+        current === activeAsset.id ? null : current,
+      );
+    }
+  };
+
+  const handleDescriptionChange = async (description: string) => {
+    if (!activeAsset) {
+      return;
+    }
+
+    const nextDescription =
+      description.trim().length > 0 ? description.trim() : null;
+    const previousDescription = cachedAssetDetails?.description ?? null;
+
+    if (nextDescription === previousDescription) {
+      return;
+    }
+
+    setDescriptionUpdateId(activeAsset.id);
+    setCachedAssetDetails((current) =>
+      current && current.id === activeAsset.id
+        ? { ...current, description: nextDescription }
+        : current,
+    );
+
+    try {
+      await updateAssetDescription(activeAsset.id, nextDescription);
+    } catch (error) {
+      console.error("Failed to update asset description:", error);
+      setCachedAssetDetails((current) =>
+        current && current.id === activeAsset.id
+          ? { ...current, description: previousDescription }
+          : current,
+      );
+    } finally {
+      setDescriptionUpdateId((current) =>
         current === activeAsset.id ? null : current,
       );
     }
@@ -1700,7 +1757,7 @@ export function PhotoGrid({
           </button>
 
           <div
-            className="pointer-events-auto absolute top-4 left-1/2 z-40 max-w-[min(70vw,48rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-zinc-900 px-4 py-1.5 text-sm font-medium text-white/95 select-text"
+            className="pointer-events-auto absolute top-4 left-1/2 z-40 max-w-[min(70vw,48rem)] -translate-x-1/2 rounded-xl px-4 py-1.5 text-sm font-medium text-white/95 select-text"
             onClick={(event) => event.stopPropagation()}
           >
             {activeAsset.originalFileName}
@@ -1731,7 +1788,11 @@ export function PhotoGrid({
               disabled={isVideoAsset(activeAsset)}
               aria-label="Copy image to clipboard"
             >
-              {copyStatus === "success" ? <Check size={16} /> : <Copy size={16} />}
+              {copyStatus === "success" ? (
+                <Check size={16} />
+              ) : (
+                <Copy size={16} />
+              )}
               {copyStatus === "success"
                 ? "Copied"
                 : copyStatus === "error"
@@ -1741,7 +1802,7 @@ export function PhotoGrid({
 
             <button
               type="button"
-              className={`btn btn-sm border border-white/15 bg-zinc-900 text-white ${showInfoPanel ? "btn-active" : "btn-ghost"}`}
+              className={`btn btn-sm border border-white/15 ${showInfoPanel ? "bg-white text-black hover:bg-white" : "bg-zinc-900 text-white"}`}
               aria-label="Toggle info panel"
               onClick={(event) => {
                 event.stopPropagation();
@@ -1785,55 +1846,18 @@ export function PhotoGrid({
               </button>
 
               <div className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12">
-              {isVideoAsset(activeAsset) ? (
-                activeSrc ? (
-                  <video
-                    className="max-h-full max-w-full object-contain"
-                    src={activeSrc}
-                    controls
-                    autoPlay
-                    playsInline
-                    onError={(event) => {
-                      const video = event.currentTarget;
-                      console.error("[video-fullscreen-error]", {
-                        assetId: activeAsset.id,
-                        src: video.currentSrc,
-                        errorCode: video.error?.code,
-                        errorMessage: video.error?.message,
-                      });
-                    }}
-                  />
-                ) : (
-                  <div className="flex items-center gap-2 text-sm text-white/80">
-                    <span className="loading loading-spinner loading-sm" />
-                    Loading video...
-                  </div>
-                )
-              ) : isPlayingLivePhoto && activeAsset.livePhotoVideoId ? (
-                <div
-                  className="relative flex items-center justify-center overflow-hidden"
-                  style={livePhotoFrameStyle}
-                >
-                  {activeStillSrc ? (
-                    <img
-                      className="h-full w-full object-contain"
-                      src={activeStillSrc}
-                      alt={activeAsset.originalFileName}
-                    />
-                  ) : null}
-                  {activeSrc ? (
+                {isVideoAsset(activeAsset) ? (
+                  activeSrc ? (
                     <video
-                      className="absolute inset-0 h-full w-full object-fill"
+                      className="max-h-full max-w-full object-contain"
                       src={activeSrc}
+                      controls
                       autoPlay
                       playsInline
-                      onEnded={() => {
-                        setIsPlayingLivePhoto(false);
-                      }}
                       onError={(event) => {
                         const video = event.currentTarget;
-                        console.error("[live-photo-video-error]", {
-                          assetId: activeAsset.livePhotoVideoId,
+                        console.error("[video-fullscreen-error]", {
+                          assetId: activeAsset.id,
                           src: video.currentSrc,
                           errorCode: video.error?.code,
                           errorMessage: video.error?.message,
@@ -1841,33 +1865,70 @@ export function PhotoGrid({
                       }}
                     />
                   ) : (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                      <span className="loading loading-spinner loading-sm text-white" />
+                    <div className="flex items-center gap-2 text-sm text-white/80">
+                      <span className="loading loading-spinner loading-sm" />
+                      Loading video...
                     </div>
-                  )}
-                </div>
-              ) : activeAsset.livePhotoVideoId ? (
-                <div
-                  className="flex items-center justify-center"
-                  style={livePhotoFrameStyle}
-                >
+                  )
+                ) : isPlayingLivePhoto && activeAsset.livePhotoVideoId ? (
+                  <div
+                    className="relative flex items-center justify-center overflow-hidden"
+                    style={livePhotoFrameStyle}
+                  >
+                    {activeStillSrc ? (
+                      <img
+                        className="h-full w-full object-contain"
+                        src={activeStillSrc}
+                        alt={activeAsset.originalFileName}
+                      />
+                    ) : null}
+                    {activeSrc ? (
+                      <video
+                        className="absolute inset-0 h-full w-full object-fill"
+                        src={activeSrc}
+                        autoPlay
+                        playsInline
+                        onEnded={() => {
+                          setIsPlayingLivePhoto(false);
+                        }}
+                        onError={(event) => {
+                          const video = event.currentTarget;
+                          console.error("[live-photo-video-error]", {
+                            assetId: activeAsset.livePhotoVideoId,
+                            src: video.currentSrc,
+                            errorCode: video.error?.code,
+                            errorMessage: video.error?.message,
+                          });
+                        }}
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                        <span className="loading loading-spinner loading-sm text-white" />
+                      </div>
+                    )}
+                  </div>
+                ) : activeAsset.livePhotoVideoId ? (
+                  <div
+                    className="flex items-center justify-center"
+                    style={livePhotoFrameStyle}
+                  >
+                    <img
+                      className="max-h-full max-w-full object-contain"
+                      src={activeStillSrc ?? activeSrc ?? ""}
+                      alt={activeAsset.originalFileName}
+                      onClick={() => {
+                        setIsPlayingLivePhoto(true);
+                      }}
+                    />
+                  </div>
+                ) : (
                   <img
                     className="max-h-full max-w-full object-contain"
                     src={activeStillSrc ?? activeSrc ?? ""}
                     alt={activeAsset.originalFileName}
-                    onClick={() => {
-                      setIsPlayingLivePhoto(true);
-                    }}
                   />
-                </div>
-              ) : (
-                <img
-                  className="max-h-full max-w-full object-contain"
-                  src={activeStillSrc ?? activeSrc ?? ""}
-                  alt={activeAsset.originalFileName}
-                />
-              )}
-            </div>
+                )}
+              </div>
 
               <div className="pointer-events-auto mx-auto w-full max-w-5xl">
                 <FullscreenMetadataBar
@@ -1887,7 +1948,7 @@ export function PhotoGrid({
                 />
               </div>
 
-              <div className="pointer-events-auto mx-auto w-full max-w-5xl rounded-2xl border border-white/15 bg-zinc-900 px-3 py-2">
+              <div className="pointer-events-auto mx-auto w-full max-w-5xl">
                 <FullscreenThumbnailStrip
                   assets={displayAssets}
                   activeIndex={activeIndex ?? 0}
@@ -1903,6 +1964,10 @@ export function PhotoGrid({
                 asset={activeAsset}
                 details={cachedAssetDetails}
                 isLoading={isLoadingCachedDetails}
+                isUpdatingDescription={descriptionUpdateId === activeAsset.id}
+                onUpdateDescription={(description: string) => {
+                  void handleDescriptionChange(description);
+                }}
               />
             ) : null}
           </div>

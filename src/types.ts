@@ -132,6 +132,7 @@ export type AssetVisibility = "timeline" | "archive" | "hidden" | "locked";
 export type AssetCacheDetails = {
   id: string;
   originalFileName: string;
+  description: string | null;
   originalPath: string | null;
   fileCreatedAt: string | null;
   checksum: string | null;

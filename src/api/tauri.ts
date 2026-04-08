@@ -252,6 +252,18 @@ export async function updateAssetRating(
   });
 }
 
+export async function updateAssetDescription(
+  assetId: string,
+  description: string | null,
+): Promise<void> {
+  return invoke<void>("update_asset_description", {
+    payload: {
+      assetId,
+      description,
+    },
+  });
+}
+
 export async function openUrl(url: string): Promise<void> {
   return invoke<void>("open_url", { url });
 }
