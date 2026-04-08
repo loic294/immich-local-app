@@ -571,11 +571,14 @@ export function PhotoGrid({
         pendingScrollRestoreRef.current = null;
         pendingRestoreAttemptsRef.current = 0;
       } else {
-        console.log("[PhotoGrid] Scroll restore anchor not found yet, retrying", {
-          direction: pendingAnchor.direction,
-          assetId: pendingAnchor.assetId,
-          attempt: pendingRestoreAttemptsRef.current,
-        });
+        console.log(
+          "[PhotoGrid] Scroll restore anchor not found yet, retrying",
+          {
+            direction: pendingAnchor.direction,
+            assetId: pendingAnchor.assetId,
+            attempt: pendingRestoreAttemptsRef.current,
+          },
+        );
       }
       return;
     }
