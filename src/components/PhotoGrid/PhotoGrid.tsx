@@ -108,6 +108,9 @@ export function PhotoGrid({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [activeSrc, setActiveSrc] = useState<string | null>(null);
   const [activeStillSrc, setActiveStillSrc] = useState<string | null>(null);
+  const [activeFullsizeStillSrc, setActiveFullsizeStillSrc] = useState<
+    string | null
+  >(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
@@ -163,6 +166,7 @@ export function PhotoGrid({
     dateKey: string;
     startedAtMs: number;
   } | null>(null);
+  const fullsizeStillLoadingAssetIdRef = useRef<string | null>(null);
   const [layoutReadyAssetCount, setLayoutReadyAssetCount] = useState(0);
   const [fullGridSections, setFullGridSections] = useState<GridLayoutSection[]>(
     [],
@@ -1143,6 +1147,58 @@ export function PhotoGrid({
   }, [activeAsset]);
 
   useEffect(() => {
+    setActiveFullsizeStillSrc(null);
+    fullsizeStillLoadingAssetIdRef.current = null;
+  }, [activeAsset?.id]);
+
+  useEffect(() => {
+    if (
+      !activeAsset ||
+      isVideoAsset(activeAsset) ||
+      activeAsset.livePhotoVideoId
+    ) {
+      return;
+    }
+
+    const asset = activeAsset;
+
+    if (zoom <= 100 || activeFullsizeStillSrc) {
+      return;
+    }
+
+    if (fullsizeStillLoadingAssetIdRef.current === asset.id) {
+      return;
+    }
+
+    let cancelled = false;
+    fullsizeStillLoadingAssetIdRef.current = asset.id;
+
+    async function preloadFullsizeStill() {
+      try {
+        const playbackPath = await getAssetPlayback(asset.id);
+        const playbackSrc = toPlayableSrc(playbackPath);
+        await preloadImage(playbackSrc);
+
+        if (!cancelled) {
+          setActiveFullsizeStillSrc(playbackSrc);
+        }
+      } catch {
+        // Keep using thumbnail source when full-size preload fails.
+      } finally {
+        if (fullsizeStillLoadingAssetIdRef.current === asset.id) {
+          fullsizeStillLoadingAssetIdRef.current = null;
+        }
+      }
+    }
+
+    void preloadFullsizeStill();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAsset, activeFullsizeStillSrc, zoom]);
+
+  useEffect(() => {
     if (!activeAsset) {
       return;
     }
@@ -1954,21 +2010,36 @@ export function PhotoGrid({
                     />
                   </div>
                 ) : (
-                  <CanvasImageViewer
-                    src={activeStillSrc ?? activeSrc ?? ""}
-                    alt={activeAsset.originalFileName}
-                    zoom={zoom}
-                    onZoomChange={setZoom}
-                    containerWidth={imageContainerWidth}
-                    containerHeight={imageContainerHeight}
-                    onNavigate={(direction) => {
-                      if (direction === "next") {
-                        goNext();
-                      } else {
-                        goPrev();
+                  <div className="relative flex h-full w-full items-center justify-center">
+                    <CanvasImageViewer
+                      assetId={activeAsset.id}
+                      src={
+                        activeFullsizeStillSrc ??
+                        activeStillSrc ??
+                        activeSrc ??
+                        ""
                       }
-                    }}
-                  />
+                      alt={activeAsset.originalFileName}
+                      zoom={zoom}
+                      onZoomChange={setZoom}
+                      containerWidth={imageContainerWidth}
+                      containerHeight={imageContainerHeight}
+                      onNavigate={(direction) => {
+                        if (direction === "next") {
+                          goNext();
+                        } else {
+                          goPrev();
+                        }
+                      }}
+                    />
+                    {zoom === 100 && (activeStillSrc ?? activeSrc) ? (
+                      <img
+                        className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+                        src={activeStillSrc ?? activeSrc ?? ""}
+                        alt={activeAsset.originalFileName}
+                      />
+                    ) : null}
+                  </div>
                 )}
               </div>
 
@@ -2601,6 +2672,15 @@ function toPlayableSrc(value: string): string {
   }
 
   return value;
+}
+
+function preloadImage(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("Failed to preload image"));
+    image.src = src;
+  });
 }
 
 function getAssetAspectRatio(asset: AssetSummary | null): number {

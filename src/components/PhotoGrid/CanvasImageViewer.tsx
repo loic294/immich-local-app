@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 interface CanvasImageViewerProps {
+  assetId: string;
   src: string;
   alt: string;
   zoom: number;
@@ -11,6 +12,7 @@ interface CanvasImageViewerProps {
 }
 
 export function CanvasImageViewer({
+  assetId,
   src,
   alt,
   zoom,
@@ -46,8 +48,6 @@ export function CanvasImageViewer({
     img.crossOrigin = "anonymous";
     img.onload = () => {
       imageRef.current = img;
-      setPanX(0);
-      setPanY(0);
       drawCanvas();
     };
     img.onerror = () => {
@@ -56,29 +56,52 @@ export function CanvasImageViewer({
     img.src = src;
   }, [src]);
 
+  useEffect(() => {
+    setPanX(0);
+    setPanY(0);
+  }, [assetId]);
+
   // Draw canvas
   const drawCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas || !imageRef.current) return;
 
+    const rect = canvas.getBoundingClientRect();
+    const cssWidth = rect.width;
+    const cssHeight = rect.height;
+    if (cssWidth <= 0 || cssHeight <= 0) {
+      return;
+    }
+
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const targetWidth = Math.max(1, Math.round(cssWidth * devicePixelRatio));
+    const targetHeight = Math.max(1, Math.round(cssHeight * devicePixelRatio));
+
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+    }
+
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 
     const img = imageRef.current;
 
     // Calculate base fit (100% means image fits within canvas)
     const imageAspectRatio = img.width / img.height;
-    const canvasAspectRatio = canvas.width / canvas.height;
+    const canvasAspectRatio = cssWidth / cssHeight;
 
-    let baseWidth = canvas.width;
-    let baseHeight = canvas.height;
+    let baseWidth = cssWidth;
+    let baseHeight = cssHeight;
 
     if (imageAspectRatio > canvasAspectRatio) {
       // Image is wider, fit to width
-      baseHeight = canvas.width / imageAspectRatio;
+      baseHeight = cssWidth / imageAspectRatio;
     } else {
       // Image is taller or square, fit to height
-      baseWidth = canvas.height * imageAspectRatio;
+      baseWidth = cssHeight * imageAspectRatio;
     }
 
     // Apply zoom to the base fit dimensions
@@ -87,11 +110,11 @@ export function CanvasImageViewer({
 
     // Clear canvas
     ctx.fillStyle = "rgb(0, 0, 0)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, cssWidth, cssHeight);
 
     // Keep image centered by default at every zoom level; pan values are offsets.
-    const centerX = (canvas.width - zoomedWidth) / 2;
-    const centerY = (canvas.height - zoomedHeight) / 2;
+    const centerX = (cssWidth - zoomedWidth) / 2;
+    const centerY = (cssHeight - zoomedHeight) / 2;
     const drawX = centerX + panX;
     const drawY = centerY + panY;
 
@@ -112,6 +135,7 @@ export function CanvasImageViewer({
   }, [zoom]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (zoom === 100) return;
     setIsDragging(true);
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     panStartRef.current = { x: panX, y: panY };
@@ -207,9 +231,7 @@ export function CanvasImageViewer({
   return (
     <canvas
       ref={canvasRef}
-      width={containerWidth}
-      height={containerHeight}
-      className="max-h-full max-w-full object-contain cursor-grab active:cursor-grabbing"
+      className={`h-full w-full ${zoom === 100 ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
