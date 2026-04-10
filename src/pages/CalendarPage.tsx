@@ -94,7 +94,9 @@ export function CalendarPage({ session, onNavigate }: CalendarPageProps) {
         />
 
         <section className="flex-1 min-h-0 overflow-y-auto p-2 sm:p-3 lg:p-4">
-          <h1 className="mb-4 text-2xl font-bold text-base-content">Calendar</h1>
+          <h1 className="mb-4 text-2xl font-bold text-base-content">
+            Calendar
+          </h1>
 
           {timelineQuery.isError ? (
             <div role="alert" className="alert alert-error alert-soft text-sm">

@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @plugin "daisyui" {
-  themes: immichlight --default, immichdark --prefersdark;
+  themes:
+    immichlight --default,
+    immichdark --prefersdark;
 }
 
 @plugin "daisyui/theme" {
