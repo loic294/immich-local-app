@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { MapPin } from "lucide-react";
-import Map, { Marker } from "react-map-gl/maplibre";
+import Map, { Marker, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 interface MapTilerLocationMapProps {
@@ -14,15 +14,21 @@ export function MapTilerLocationMap({
   longitude,
   apiKey,
 }: MapTilerLocationMapProps) {
+  const mapRef = useRef<MapRef>(null);
   const mapStyle = useMemo(
     () =>
       `https://api.maptiler.com/maps/dataviz-v4-dark/style.json?key=${encodeURIComponent(apiKey)}`,
     [apiKey],
   );
 
+  useEffect(() => {
+    mapRef.current?.flyTo({ center: [longitude, latitude], zoom: 13 });
+  }, [latitude, longitude]);
+
   return (
     <div className="h-90 w-full overflow-hidden rounded-lg border border-white/10">
       <Map
+        ref={mapRef}
         initialViewState={{
           latitude,
           longitude,
