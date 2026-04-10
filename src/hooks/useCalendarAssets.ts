@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { fetchCalendarAssetsPaged } from "../api/tauri";
+import { getCachedCalendarAssetsPaged } from "../api/tauri";
 
 const PAGE_SIZE = 40;
 
@@ -13,7 +13,7 @@ export function useCalendarAssets(
     enabled,
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      fetchCalendarAssetsPaged(year, month, pageParam, PAGE_SIZE),
+      getCachedCalendarAssetsPaged(year, month, pageParam, PAGE_SIZE),
     getNextPageParam: (lastPage, allPages) => {
       if (!lastPage.hasNextPage) return undefined;
       if (lastPage.items.length < PAGE_SIZE) return undefined;

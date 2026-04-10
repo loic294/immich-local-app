@@ -3,12 +3,13 @@ mod db;
 mod services;
 
 use std::sync::Arc;
-use commands::albums::{fetch_albums, get_album_assets_paged};
+use commands::albums::{fetch_albums, get_album_assets_paged, get_cached_album_full_grid_layout};
 use commands::assets::{
     fetch_assets, get_asset_playback, get_asset_thumbnail, get_cached_assets, get_all_cached_assets,
     get_cached_asset_days, get_cached_asset_jump_target, get_timeline_months, refresh_asset, update_asset_favorite,
     update_asset_rating, update_asset_visibility, fetch_assets_by_month, get_calendar_assets_paged,
     calculate_grid_layout, get_cached_timeline_layout, get_cached_full_grid_layout,
+    get_cached_calendar_full_grid_layout,
     get_cached_asset_details,
     update_asset_description,
 };
@@ -56,6 +57,7 @@ pub fn main() {
             fetch_memories,
             fetch_albums,
             get_album_assets_paged,
+            get_cached_album_full_grid_layout,
             get_unique_original_paths,
             get_folder_assets_paged,
             get_settings,
@@ -67,6 +69,7 @@ pub fn main() {
             get_calendar_assets_paged,
             calculate_grid_layout,
             get_cached_full_grid_layout,
+            get_cached_calendar_full_grid_layout,
             get_sync_status,
             start_asset_sync,
             force_full_asset_sync,

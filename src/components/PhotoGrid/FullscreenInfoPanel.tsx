@@ -72,7 +72,7 @@ export function FullscreenInfoPanel({
 
   return (
     <aside className="pointer-events-auto h-full w-[min(22rem,28vw)] min-w-72 shrink-0 overflow-y-auto bg-zinc-950 p-3 text-xs text-white/80">
-      <div className="rounded-xl border border-white/10 bg-zinc-900 p-3">
+      <div className="rounded-sm bg-zinc-900 p-4">
         <p className="text-sm font-medium text-white">
           {details?.camera ?? "Unknown camera"}
         </p>
@@ -105,13 +105,20 @@ export function FullscreenInfoPanel({
         </div>
       </div>
 
-      <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-zinc-900 p-3">
+      <div className="mt-3 space-y-2 rounded-sm bg-zinc-900 p-4">
+        <InfoRow
+          label="Captured"
+          value={formatCapturedAt(
+            details?.fileCreatedAt ?? asset.fileCreatedAt,
+          )}
+        />
+
         <div>
           <p className="text-[10px] uppercase tracking-wide text-white/45">
             Description
           </p>
           <textarea
-            className="textarea textarea-sm mt-1 min-h-24 w-full rounded-lg border-white/10 bg-zinc-950 text-[11px] leading-snug text-white/85"
+            className="textarea textarea-sm mt-1 min-h-24 w-full rounded-sm border-white/10 bg-zinc-950 text-sm leading-snug text-white/85"
             value={descriptionDraft}
             placeholder="Add a description"
             onChange={(event) => setDescriptionDraft(event.currentTarget.value)}
@@ -126,16 +133,12 @@ export function FullscreenInfoPanel({
         </div>
 
         <InfoRow label="File Name" value={fileName} />
-        <InfoRow
-          label="Captured"
-          value={formatCapturedAt(
-            details?.fileCreatedAt ?? asset.fileCreatedAt,
-          )}
-        />
-        <InfoInputRow label="Location" value={locationValue} />
-        <InfoRow label="City" value={city} />
-        <InfoRow label="State / Province" value={state} />
-        <InfoRow label="Country" value={country} />
+
+        <InfoInputRow label="File Location" value={locationValue} />
+      </div>
+
+      <div className="mt-3 space-y-2 rounded-sm bg-zinc-900 p-4">
+        <InfoRow label="Location" value={`${city}, ${state}, ${country}`} />
         <InfoRow
           label="GPS"
           value={
@@ -147,14 +150,11 @@ export function FullscreenInfoPanel({
 
         {mapSrc ? (
           <div>
-            <p className="text-[10px] uppercase tracking-wide text-white/45">
-              Map
-            </p>
             <div className="mt-1 overflow-hidden rounded-lg border border-white/10">
               <iframe
                 title="Photo location map"
                 src={mapSrc}
-                className="h-40 w-40 bg-zinc-950"
+                className="h-90 w-full bg-zinc-950"
                 loading="lazy"
                 referrerPolicy="no-referrer-when-downgrade"
               />

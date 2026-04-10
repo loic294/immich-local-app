@@ -1,6 +1,7 @@
-use crate::commands::assets::AssetPage;
+use crate::commands::assets::{calculate_grid_layout, AssetPage, GridLayoutAssetInput, GridLayoutResponse};
 use crate::services::immich_client::{AlbumOwnerSummary, AlbumSummary};
 use crate::AppState;
+use std::time::Instant;
 
 #[tauri::command]
 pub async fn fetch_albums(state: tauri::State<'_, AppState>) -> Result<Vec<AlbumSummary>, String> {
@@ -9,13 +10,12 @@ pub async fn fetch_albums(state: tauri::State<'_, AppState>) -> Result<Vec<Album
         .get_albums()
         .map_err(|err| format!("album cache read failed: {err}"))?;
 
-    if !cached.is_empty() {
-        return Ok(cached
-            .into_iter()
-            .map(|album| {
-                let owner_id = album.owner_id.clone();
+    Ok(cached
+        .into_iter()
+        .map(|album| {
+            let owner_id = album.owner_id.clone();
 
-                AlbumSummary {
+            AlbumSummary {
                 id: album.id,
                 album_name: album.album_name,
                 album_thumbnail_asset_id: album.album_thumbnail_asset_id,
@@ -32,22 +32,9 @@ pub async fn fetch_albums(state: tauri::State<'_, AppState>) -> Result<Vec<Album
                     email: album.owner_email,
                 }),
                 description: album.description,
-            }})
-            .collect());
-    }
-
-    let albums = state
-        .immich
-        .get_albums()
-        .await
-        .map_err(|err| format!("fetch albums failed: {err}"))?;
-
-    state
-        .db
-        .upsert_albums(&albums)
-        .map_err(|err| format!("album cache write failed: {err}"))?;
-
-    Ok(albums)
+            }
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -57,43 +44,7 @@ pub async fn get_album_assets_paged(
     page_size: u32,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
-    let album_exists = state
-        .db
-        .has_album(&album_id)
-        .map_err(|err| format!("album cache read failed: {err}"))?;
-
     let (cached_items, cached_has_next_page) = state
-        .db
-        .get_album_assets(&album_id, page, page_size)
-        .map_err(|err| format!("album asset cache read failed: {err}"))?;
-
-    if album_exists && (page > 0 || !cached_items.is_empty() || !cached_has_next_page) {
-        return Ok(AssetPage {
-            page,
-            page_size,
-            items: cached_items,
-            has_next_page: cached_has_next_page,
-        });
-    }
-
-    let items = state
-        .immich
-        .get_album_assets(&album_id)
-        .await
-        .map_err(|err| format!("fetch album assets failed: {err}"))?;
-
-    state
-        .db
-        .upsert_assets(&items)
-        .map_err(|err| format!("cache write failed: {err}"))?;
-
-    let asset_ids = items.iter().map(|asset| asset.id.clone()).collect::<Vec<_>>();
-    state
-        .db
-        .replace_album_assets(&album_id, &asset_ids)
-        .map_err(|err| format!("album asset cache write failed: {err}"))?;
-
-    let (items, has_next_page) = state
         .db
         .get_album_assets(&album_id, page, page_size)
         .map_err(|err| format!("album asset cache read failed: {err}"))?;
@@ -101,7 +52,48 @@ pub async fn get_album_assets_paged(
     Ok(AssetPage {
         page,
         page_size,
-        items,
-        has_next_page,
+        items: cached_items,
+        has_next_page: cached_has_next_page,
     })
+}
+
+#[tauri::command]
+pub async fn get_cached_album_full_grid_layout(
+    album_id: String,
+    container_width: f64,
+    state: tauri::State<'_, AppState>,
+) -> Result<GridLayoutResponse, String> {
+    let started_at = Instant::now();
+    if container_width <= 0.0 {
+        return Ok(GridLayoutResponse { sections: Vec::new() });
+    }
+
+    let all_assets = state
+        .db
+        .get_all_album_assets(&album_id)
+        .map_err(|err| format!("album full grid layout cache read failed: {err}"))?;
+
+    let layout_assets = all_assets
+        .into_iter()
+        .map(|asset| GridLayoutAssetInput {
+            id: asset.id,
+            file_created_at: asset.file_created_at,
+            r#type: asset.r#type,
+            width: asset.width,
+            height: asset.height,
+            thumbhash: asset.thumbhash,
+        })
+        .collect();
+
+    let response = calculate_grid_layout(layout_assets, container_width)?;
+
+    eprintln!(
+        "[albums.get_cached_album_full_grid_layout] album_id={} container_width={} sections={} duration_ms= {}",
+        album_id,
+        container_width,
+        response.sections.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(response)
 }

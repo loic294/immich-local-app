@@ -196,36 +196,11 @@ pub async fn get_calendar_assets_paged(
         .get_calendar_assets(year, month, page, page_size)
         .map_err(|err| format!("calendar cache read failed: {err}"))?;
 
-    if page > 0 || !cached_items.is_empty() {
-        return Ok(AssetPage {
-            page,
-            page_size,
-            items: cached_items,
-            has_next_page: cached_has_next_page,
-        });
-    }
-
-    let result = state
-        .immich
-        .get_calendar_assets_paged(year, month, page, page_size)
-        .await
-        .map_err(|err| format!("fetch calendar assets failed: {err}"))?;
-
-    state
-        .db
-        .upsert_assets(&result.items)
-        .map_err(|err| format!("cache write failed: {err}"))?;
-
-    let (items, has_next_page) = state
-        .db
-        .get_calendar_assets(year, month, page, page_size)
-        .map_err(|err| format!("calendar cache read failed: {err}"))?;
-
     Ok(AssetPage {
         page,
         page_size,
-        items,
-        has_next_page,
+        items: cached_items,
+        has_next_page: cached_has_next_page,
     })
 }
 
@@ -443,6 +418,49 @@ pub async fn get_cached_full_grid_layout(
     eprintln!(
         "[assets.get_cached_full_grid_layout] search={:?} container_width={} sections={} duration_ms={}",
         search,
+        container_width,
+        response.sections.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn get_cached_calendar_full_grid_layout(
+    year: i32,
+    month: u32,
+    container_width: f64,
+    state: tauri::State<'_, AppState>,
+) -> Result<GridLayoutResponse, String> {
+    let started_at = Instant::now();
+    if container_width <= 0.0 {
+        return Ok(GridLayoutResponse { sections: Vec::new() });
+    }
+
+    let all_assets = state
+        .db
+        .get_all_calendar_assets(year, month)
+        .map_err(|err| format!("calendar full grid layout cache read failed: {err}"))?;
+
+    let layout_assets = all_assets
+        .into_iter()
+        .map(|asset| GridLayoutAssetInput {
+            id: asset.id,
+            file_created_at: asset.file_created_at,
+            r#type: asset.r#type,
+            width: asset.width,
+            height: asset.height,
+            thumbhash: asset.thumbhash,
+        })
+        .collect();
+
+    let response = calculate_grid_layout(layout_assets, container_width)?;
+
+    eprintln!(
+        "[assets.get_cached_calendar_full_grid_layout] year={} month={} container_width={} sections={} duration_ms={}",
+        year,
+        month,
         container_width,
         response.sections.len(),
         started_at.elapsed().as_millis()

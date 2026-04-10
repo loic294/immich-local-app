@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { fetchFolderAssetsPaged } from "../api/tauri";
+import { getCachedFolderAssetsPaged } from "../api/tauri";
 
 const PAGE_SIZE = 40;
 
@@ -9,7 +9,7 @@ export function useFolderAssets(enabled: boolean, path: string) {
     enabled,
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      fetchFolderAssetsPaged(path, pageParam, PAGE_SIZE),
+      getCachedFolderAssetsPaged(path, pageParam, PAGE_SIZE),
     getNextPageParam: (lastPage, allPages) => {
       if (!lastPage.hasNextPage) return undefined;
       return allPages.length;

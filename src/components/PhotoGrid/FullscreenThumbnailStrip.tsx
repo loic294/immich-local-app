@@ -21,18 +21,48 @@ const ThumbnailButton = React.forwardRef<
   ThumbnailButtonProps
 >(({ asset, isActive, onClick }, ref) => {
   const [src, setSrc] = useState<string | null>(null);
+  const [isVisible, setIsVisible] = useState(isActive);
+  const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+
+  // Use Intersection Observer to detect when thumbnail enters viewport
+  useEffect(() => {
+    const element = buttonRef.current;
+    if (!element) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsVisible(entry.isIntersecting || isActive);
+      },
+      { root: null, rootMargin: "100px", threshold: 0 },
+    );
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [isActive]);
 
   useEffect(() => {
+    if (!isVisible) {
+      return;
+    }
+
     let cancelled = false;
 
     async function loadThumbnail() {
       try {
+        console.log(`[Thumbnail] Loading thumbnail for asset: ${asset.id}`);
         const value = await getAssetThumbnail(asset.id);
         if (!cancelled) {
+          console.log(
+            `[Thumbnail] Successfully loaded thumbnail for asset: ${asset.id}`,
+          );
           setSrc(value);
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
+          console.error(
+            `[Thumbnail] Failed to load thumbnail for asset: ${asset.id}`,
+            error,
+          );
           setSrc(null);
         }
       }
@@ -43,11 +73,18 @@ const ThumbnailButton = React.forwardRef<
     return () => {
       cancelled = true;
     };
-  }, [asset.id]);
+  }, [asset.id, isVisible]);
 
   return (
     <button
-      ref={ref}
+      ref={(element) => {
+        buttonRef.current = element;
+        if (typeof ref === "function") {
+          ref(element);
+        } else if (ref) {
+          ref.current = element;
+        }
+      }}
       type="button"
       className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border transition-all ${
         isActive

@@ -1,11 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft } from "lucide-react";
 import { Header } from "../components/Layout/Header";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useCalendarAssets } from "../hooks/useCalendarAssets";
-import { fetchTimelineMonths } from "../api/tauri";
+import {
+  getCachedCalendarFullGridLayout,
+  getCachedTimelineMonths,
+} from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 
 interface CalendarPageProps {
@@ -38,7 +41,7 @@ export function CalendarPage({ session, onNavigate }: CalendarPageProps) {
 
   const timelineQuery = useQuery({
     queryKey: ["timeline-months"],
-    queryFn: fetchTimelineMonths,
+    queryFn: getCachedTimelineMonths,
     staleTime: 60_000,
   });
 
@@ -162,11 +165,72 @@ function MonthView({
   month,
   onBack,
 }: MonthViewProps) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [photoGridHeight, setPhotoGridHeight] = useState(0);
+  
   const assetsQuery = useCalendarAssets(true, year, month);
   const assets = useMemo(
     () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [assetsQuery.data?.pages],
   );
+
+  // Calculate PhotoGrid height dynamically
+  useEffect(() => {
+    if (!contentRef.current) {
+      return;
+    }
+
+    const calculateHeight = () => {
+      if (!contentRef.current) {
+        return;
+      }
+
+      const container = contentRef.current;
+      const title = container.querySelector(
+        '[data-test="month-title"]',
+      ) as HTMLElement;
+      const errorAlert = container.querySelector(
+        '[data-test="error-alert"]',
+      ) as HTMLElement;
+
+      const padding = 16; // padding from p-2 sm:p-3 lg:p-4 (bottom only)
+      let usedHeight = padding;
+
+      if (title) {
+        usedHeight += title.offsetHeight + 8; // gap
+      }
+      if (errorAlert) {
+        usedHeight += errorAlert.offsetHeight + 8; // gap
+      }
+
+      // Get the position of container element
+      const containerTop = container.getBoundingClientRect().top;
+      const containerHeight = window.innerHeight - containerTop - padding;
+      const availableHeight = containerHeight - (usedHeight - padding);
+      setPhotoGridHeight(Math.max(300, availableHeight));
+    };
+
+    // Calculate on mount and when window is resized
+    calculateHeight();
+    const resizeObserver = new ResizeObserver(calculateHeight);
+    resizeObserver.observe(contentRef.current);
+    const mutationObserver = new MutationObserver(() => {
+      // Recalculate after mutations
+      requestAnimationFrame(calculateHeight);
+    });
+    mutationObserver.observe(contentRef.current, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    window.addEventListener("resize", calculateHeight);
+
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", calculateHeight);
+    };
+  }, []);
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -182,8 +246,11 @@ function MonthView({
           searchPlaceholder="Calendar"
         />
 
-        <section className="flex-1 min-h-0 overflow-y-auto p-2 sm:p-3 lg:p-4">
-          <div className="mb-3 flex items-center gap-2">
+        <section
+          ref={contentRef}
+          className="flex-1 min-h-0 flex flex-col gap-2 p-2 sm:p-3 lg:p-4"
+        >
+          <div data-test="month-title" className="mb-1 flex items-center gap-2 shrink-0">
             <button
               type="button"
               className="btn btn-sm btn-ghost"
@@ -203,7 +270,7 @@ function MonthView({
           </div>
 
           {assetsQuery.isError ? (
-            <div role="alert" className="alert alert-error alert-soft text-sm">
+            <div role="alert" data-test="error-alert" className="shrink-0 alert alert-error alert-soft text-sm">
               <span>
                 {(assetsQuery.error as Error | null)?.message ??
                   "Could not load photos for this month"}
@@ -214,8 +281,12 @@ function MonthView({
               assets={assets}
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
+              maxHeight={photoGridHeight}
               onLoadMore={() =>
                 assetsQuery.fetchNextPage().then(() => undefined)
+              }
+              loadFullLayout={(containerWidth) =>
+                getCachedCalendarFullGridLayout(year, month, containerWidth)
               }
             />
           )}

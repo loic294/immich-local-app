@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { AlbumCard } from "../components/Albums/AlbumCard";
 import { Header } from "../components/Layout/Header";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
@@ -7,7 +7,7 @@ import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
 import type { Session } from "../hooks/useSession";
 import type { AlbumSummary } from "../types";
-import { openUrl } from "../api/tauri";
+import { getCachedAlbumFullGridLayout, openUrl } from "../api/tauri";
 
 interface AlbumsPageProps {
   session: Session;
@@ -20,6 +20,9 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
   const [searchInput, setSearchInput] = useState("");
   const [filter, setFilter] = useState<AlbumFilter>("all");
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [photoGridHeight, setPhotoGridHeight] = useState(0);
+  
   const albumsQuery = useAlbums(true);
   const selectedAlbum = useMemo(
     () =>
@@ -32,6 +35,70 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
     selectedAlbumId !== null,
     selectedAlbumId ?? "",
   );
+
+  // Calculate PhotoGrid height dynamically
+  useEffect(() => {
+    if (!contentRef.current) {
+      return;
+    }
+
+    const calculateHeight = () => {
+      if (!contentRef.current) {
+        return;
+      }
+
+      const container = contentRef.current;
+      const albumHeader = container.querySelector(
+        '[data-test="album-header"]',
+      ) as HTMLElement;
+      const albumDescription = container.querySelector(
+        '[data-test="album-description"]',
+      ) as HTMLElement;
+      const errorAlert = container.querySelector(
+        '[data-test="error-alert"]',
+      ) as HTMLElement;
+
+      const padding = 16; // padding from p-2 sm:p-3 lg:p-4 (bottom only)
+      let usedHeight = padding;
+
+      if (albumHeader) {
+        usedHeight += albumHeader.offsetHeight + 8; // gap
+      }
+      if (albumDescription) {
+        usedHeight += albumDescription.offsetHeight + 8; // gap
+      }
+      if (errorAlert) {
+        usedHeight += errorAlert.offsetHeight + 8; // gap
+      }
+
+      // Get the position of container element
+      const containerTop = container.getBoundingClientRect().top;
+      const containerHeight = window.innerHeight - containerTop - padding;
+      const availableHeight = containerHeight - (usedHeight - padding);
+      setPhotoGridHeight(Math.max(300, availableHeight));
+    };
+
+    // Calculate on mount and when window is resized
+    calculateHeight();
+    const resizeObserver = new ResizeObserver(calculateHeight);
+    resizeObserver.observe(contentRef.current);
+    const mutationObserver = new MutationObserver(() => {
+      // Recalculate after mutations
+      requestAnimationFrame(calculateHeight);
+    });
+    mutationObserver.observe(contentRef.current, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    window.addEventListener("resize", calculateHeight);
+
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", calculateHeight);
+    };
+  }, [selectedAlbumId]);
 
   const filteredAlbumAssets = useMemo(() => {
     const term = searchInput.trim().toLowerCase();
@@ -104,10 +171,13 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
           }
         />
 
-        <section className="flex-1 min-h-0 overflow-y-auto p-2 sm:p-3 lg:p-4">
+        <section
+          ref={contentRef}
+          className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4"
+        >
           {selectedAlbum ? (
-            <section>
-              <div className="mb-3 flex items-center gap-2">
+            <>
+              <div data-test="album-header" className="mb-1 flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost"
@@ -124,15 +194,18 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
               </div>
 
               {selectedAlbum.description ? (
-                <AlbumDescriptionSection
-                  description={selectedAlbum.description}
-                />
+                <div data-test="album-description" className="shrink-0">
+                  <AlbumDescriptionSection
+                    description={selectedAlbum.description}
+                  />
+                </div>
               ) : null}
 
               {albumAssetsQuery.isError ? (
                 <div
                   role="alert"
-                  className="alert alert-error alert-soft text-sm"
+                  data-test="error-alert"
+                  className="shrink-0 alert alert-error alert-soft text-sm"
                 >
                   <span>
                     {(albumAssetsQuery.error as Error | null)?.message ??
@@ -144,12 +217,22 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
                   assets={filteredAlbumAssets}
                   isFetching={albumAssetsQuery.isFetchingNextPage}
                   hasNextPage={Boolean(albumAssetsQuery.hasNextPage)}
+                  maxHeight={photoGridHeight}
                   onLoadMore={() =>
                     albumAssetsQuery.fetchNextPage().then(() => undefined)
                   }
+                  loadFullLayout={
+                    selectedAlbumId && searchInput.trim().length === 0
+                      ? (containerWidth) =>
+                          getCachedAlbumFullGridLayout(
+                            selectedAlbumId,
+                            containerWidth,
+                          )
+                      : undefined
+                  }
                 />
               )}
-            </section>
+            </>
           ) : (
             <section>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

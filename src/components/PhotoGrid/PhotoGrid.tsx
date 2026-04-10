@@ -44,6 +44,7 @@ import {
   updateAssetVisibility,
 } from "../../api/tauri";
 
+import { isThumbnailCached } from "../../api/tauri";
 type PhotoGridProps = {
   assets: AssetSummary[];
   isFetching: boolean;
@@ -2147,8 +2148,15 @@ function AssetThumbnail({
     fullImageReadyLoggedRef.current = false;
   }, [asset.id, src]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (suppressFullThumbnail) {
+      return;
+    }
+
+    // Check cache synchronously first to avoid thumbhash flash
+    const cached = isThumbnailCached(asset.id);
+    if (cached) {
+      setSrc(cached);
       return;
     }
 

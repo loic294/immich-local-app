@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { fetchAlbumAssetsPaged } from "../api/tauri";
+import { getCachedAlbumAssetsPaged } from "../api/tauri";
 
 const PAGE_SIZE = 40;
 
@@ -9,7 +9,7 @@ export function useAlbumAssets(enabled: boolean, albumId: string) {
     enabled,
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      fetchAlbumAssetsPaged(albumId, pageParam, PAGE_SIZE),
+      getCachedAlbumAssetsPaged(albumId, pageParam, PAGE_SIZE),
     getNextPageParam: (lastPage, allPages) => {
       if (!lastPage.hasNextPage) return undefined;
       if (lastPage.items.length < PAGE_SIZE) return undefined;

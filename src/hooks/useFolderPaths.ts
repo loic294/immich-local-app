@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchUniqueOriginalPaths } from "../api/tauri";
+import { getCachedUniqueOriginalPaths } from "../api/tauri";
 
 export function useFolderPaths(enabled: boolean) {
   return useQuery({
     queryKey: ["folder-paths"],
     enabled,
-    queryFn: () => fetchUniqueOriginalPaths(),
+    queryFn: () => getCachedUniqueOriginalPaths(),
     staleTime: 60_000,
   });
 }

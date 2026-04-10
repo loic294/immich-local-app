@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export type SyncStatus = {
@@ -28,6 +28,7 @@ type UseSyncStatusOptions = {
 };
 
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes in milliseconds
+const CHECK_STALE_TIMEOUT = 2 * 60 * 1000; // 2 minutes
 
 export function useSyncStatus(
   options: UseSyncStatusOptions = {},
@@ -35,11 +36,33 @@ export function useSyncStatus(
   const { enableAutoCheck = true } = options;
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const lastStatusLogKeyRef = useRef<string>("");
 
   // Fetch sync status
   const fetchSyncStatus = useCallback(async () => {
     try {
       const status = await invoke<SyncStatus>("get_sync_status");
+      const logKey = [
+        status.isSyncing,
+        status.checkStatus,
+        status.totalAssets,
+        status.processedAssets,
+        status.lastCheckedAt,
+        status.updatedAt,
+      ].join("|");
+
+      if (lastStatusLogKeyRef.current !== logKey) {
+        console.info("[useSyncStatus] get_sync_status", {
+          isSyncing: status.isSyncing,
+          checkStatus: status.checkStatus,
+          totalAssets: status.totalAssets,
+          processedAssets: status.processedAssets,
+          lastCheckedAt: status.lastCheckedAt,
+          updatedAt: status.updatedAt,
+        });
+        lastStatusLogKeyRef.current = logKey;
+      }
+
       setSyncStatus(status);
       setError(null);
     } catch (err) {
@@ -100,7 +123,16 @@ export function useSyncStatus(
     try {
       setError(null);
       const previousTotal = syncStatus?.totalAssets ?? 0;
+      console.info("[useSyncStatus] invoking check_for_new_assets", {
+        previousTotal,
+      });
+
       const result = await invoke<SyncStatus>("check_for_new_assets");
+      console.info("[useSyncStatus] check_for_new_assets resolved", {
+        returnedTotal: result.totalAssets,
+        returnedCheckStatus: result.checkStatus,
+      });
+
       // Fetch updated status
       await fetchSyncStatus();
       // Return true if new assets were found (total increased)
@@ -125,9 +157,21 @@ export function useSyncStatus(
     void fetchSyncStatus();
   }, [fetchSyncStatus]);
 
-  // Poll for status updates while syncing
+  // Poll for status updates while syncing or checking
   useEffect(() => {
-    if (!syncStatus?.isSyncing) {
+    const updatedAtMs = syncStatus?.updatedAt
+      ? new Date(syncStatus.updatedAt).getTime()
+      : Number.NaN;
+    const checkingAgeMs = Number.isFinite(updatedAtMs)
+      ? Date.now() - updatedAtMs
+      : Number.POSITIVE_INFINITY;
+    const isFreshChecking =
+      syncStatus?.checkStatus === "checking" &&
+      checkingAgeMs >= 0 &&
+      checkingAgeMs <= CHECK_STALE_TIMEOUT;
+    const shouldPoll = Boolean(syncStatus?.isSyncing || isFreshChecking);
+
+    if (!shouldPoll) {
       return;
     }
 
@@ -136,7 +180,7 @@ export function useSyncStatus(
     }, 1000); // Poll every 1 second
 
     return () => clearInterval(interval);
-  }, [syncStatus?.isSyncing, fetchSyncStatus]);
+  }, [syncStatus?.isSyncing, syncStatus?.checkStatus, fetchSyncStatus]);
 
   // Set up periodic checks every 15 minutes
   useEffect(() => {
@@ -156,7 +200,21 @@ export function useSyncStatus(
       ? Math.round((syncStatus.processedAssets / syncStatus.totalAssets) * 100)
       : 0;
 
-  const isChecking = syncStatus?.checkStatus === "checking";
+  const isChecking = (() => {
+    if (syncStatus?.checkStatus !== "checking") {
+      return false;
+    }
+
+    const updatedAtMs = syncStatus.updatedAt
+      ? new Date(syncStatus.updatedAt).getTime()
+      : Number.NaN;
+    if (!Number.isFinite(updatedAtMs)) {
+      return false;
+    }
+
+    const age = Date.now() - updatedAtMs;
+    return age >= 0 && age <= CHECK_STALE_TIMEOUT;
+  })();
 
   return {
     syncStatus,

@@ -1054,6 +1054,46 @@ impl Database {
         Ok((items, has_next_page))
     }
 
+    pub fn get_all_album_assets(&self, album_id: &str) -> Result<Vec<AssetSummary>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT
+                    a.id,
+                    a.original_file_name,
+                    a.original_path,
+                    a.file_created_at,
+                    a.checksum,
+                    a.asset_type,
+                    a.duration,
+                    a.is_favorite,
+                    a.is_archived,
+                    a.visibility,
+                    a.rating,
+                    a.width,
+                    a.height,
+                    a.thumbhash
+                FROM album_assets aa
+                JOIN assets a ON a.id = aa.asset_id
+                WHERE aa.album_id = ?1
+                ORDER BY a.file_created_at DESC NULLS LAST, a.updated_at DESC
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let rows = stmt
+            .query_map(params![album_id], map_asset_summary)
+            .map_err(|err| err.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|err| err.to_string())?);
+        }
+
+        Ok(items)
+    }
+
     pub fn get_unique_original_paths(&self) -> Result<Vec<String>, String> {
         let conn = self.open()?;
         let mut stmt = conn
@@ -1183,6 +1223,50 @@ impl Database {
         }
 
         Ok((items, has_next_page))
+    }
+
+    pub fn get_all_calendar_assets(
+        &self,
+        year: i32,
+        month: u32,
+    ) -> Result<Vec<AssetSummary>, String> {
+        let conn = self.open()?;
+        let month_key = format!("{:04}-{:02}", year, month);
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT
+                    id,
+                    original_file_name,
+                    original_path,
+                    file_created_at,
+                    checksum,
+                    asset_type,
+                    duration,
+                    is_favorite,
+                    is_archived,
+                    visibility,
+                    rating,
+                    width,
+                    height,
+                    thumbhash
+                FROM assets
+                WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1
+                ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let rows = stmt
+            .query_map(params![month_key], map_asset_summary)
+            .map_err(|err| err.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|err| err.to_string())?);
+        }
+
+        Ok(items)
     }
 
     pub fn get_timeline_months(&self) -> Result<(Option<String>, Option<String>, Vec<String>), String> {

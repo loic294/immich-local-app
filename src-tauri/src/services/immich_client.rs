@@ -1333,14 +1333,33 @@ impl ImmichClient {
 
         let status = response.status();
         let body = response.text().await.map_err(|err| err.to_string())?;
+        eprintln!(
+            "[immich.fetch_assets_inner] source=search_metadata page={} page_size={} status={} body_len={}",
+            page,
+            page_size,
+            status,
+            body.len()
+        );
 
         if status.is_success() {
             if let Ok(mut result) = parse_asset_list(&body) {
                 if !result.has_next_page {
                     result.has_next_page = result.items.len() >= page_size as usize;
                 }
+                eprintln!(
+                    "[immich.fetch_assets_inner] source=search_metadata page={} parsed_items={} has_next_page={}",
+                    page,
+                    result.items.len(),
+                    result.has_next_page
+                );
                 return Ok(result);
             }
+
+            eprintln!(
+                "[immich.fetch_assets_inner] source=search_metadata page={} parse_failed body_preview={}",
+                page,
+                truncate_for_log(&body)
+            );
         }
 
         // Fallback for variants exposing a flat list endpoint.
@@ -1358,14 +1377,34 @@ impl ImmichClient {
 
         let assets_status = assets_response.status();
         let assets_body = assets_response.text().await.map_err(|err| err.to_string())?;
+        eprintln!(
+            "[immich.fetch_assets_inner] source=assets_fallback page={} page_size={} status={} body_len={}",
+            page,
+            page_size,
+            assets_status,
+            assets_body.len()
+        );
 
         if assets_status.is_success() {
             if let Ok(mut result) = parse_asset_list(&assets_body) {
                 if !result.has_next_page {
                     result.has_next_page = result.items.len() >= page_size as usize;
                 }
+                eprintln!(
+                    "[immich.fetch_assets_inner] source=assets_fallback page={} parsed_items={} has_next_page={}",
+                    page,
+                    result.items.len(),
+                    result.has_next_page
+                );
                 return Ok(result);
             }
+
+            eprintln!(
+                "[immich.fetch_assets_inner] source=assets_fallback page={} parse_failed body_preview={}",
+                page,
+                truncate_for_log(&assets_body)
+            );
+
             return Err(format!(
                 "unable to parse assets response from /api/assets: {}",
                 truncate_for_log(&assets_body)

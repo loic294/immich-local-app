@@ -131,8 +131,8 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   }
 
   return (
-    <div className="min-h-screen bg-base-100 pt-24">
-      <div className="mx-auto max-w-2xl px-4 pb-12">
+    <div className="h-screen overflow-y-auto bg-base-100">
+      <div className="mx-auto max-w-2xl px-4 pb-12 pt-24">
         <div className="mb-8">
           <button
             type="button"
