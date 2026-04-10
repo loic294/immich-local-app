@@ -48,20 +48,20 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
               <span>Albums</span>
             </button>
             <button
-              className={navClass("folders")}
-              type="button"
-              onClick={() => onNavigate?.("folders")}
-            >
-              <FolderTree size={16} className="shrink-0" />
-              <span>Folders</span>
-            </button>
-            <button
               className={navClass("calendar")}
               type="button"
               onClick={() => onNavigate?.("calendar")}
             >
               <CalendarDays size={16} className="shrink-0" />
               <span>Calendar</span>
+            </button>
+            <button
+              className={navClass("folders")}
+              type="button"
+              onClick={() => onNavigate?.("folders")}
+            >
+              <FolderTree size={16} className="shrink-0" />
+              <span>Folders</span>
             </button>
           </nav>
 

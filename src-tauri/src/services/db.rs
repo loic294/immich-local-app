@@ -1111,12 +1111,20 @@ impl Database {
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|err| err.to_string())?;
 
-        let mut paths = Vec::new();
+        // original_path stores the full file path (e.g. /dir/file.jpg).
+        // Extract the unique parent directories so the frontend can build the folder tree.
+        let mut dir_set = std::collections::BTreeSet::new();
         for row in rows {
-            paths.push(row.map_err(|err| err.to_string())?);
+            let file_path = row.map_err(|err| err.to_string())?;
+            if let Some(parent) = std::path::Path::new(&file_path).parent() {
+                let parent_str = parent.to_string_lossy().into_owned();
+                if !parent_str.is_empty() && parent_str != "." {
+                    dir_set.insert(parent_str);
+                }
+            }
         }
 
-        Ok(paths)
+        Ok(dir_set.into_iter().collect())
     }
 
     pub fn get_folder_assets(
@@ -1128,39 +1136,90 @@ impl Database {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
         let limit = i64::from(page_size) + 1;
-        let mut stmt = conn
-            .prepare(
-                "
-                SELECT
-                    id,
-                    original_file_name,
-                    original_path,
-                    file_created_at,
-                    checksum,
-                    asset_type,
-                    duration,
-                    is_favorite,
-                    is_archived,
-                    visibility,
-                    rating,
-                    width,
-                    height,
-                    thumbhash
-                FROM assets
-                WHERE original_path = ?1
-                ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
-                LIMIT ?2 OFFSET ?3
-                ",
-            )
-            .map_err(|err| err.to_string())?;
 
-        let rows = stmt
-            .query_map(params![path, limit, offset], map_asset_summary)
-            .map_err(|err| err.to_string())?;
-
+        // original_path stores the full file path (e.g. /dir/file.jpg).
+        // Match assets whose parent directory equals `path` by checking:
+        //   - the path starts with "{path}/" (direct child, not nested)
+        //   - the remainder after "{path}/" contains no "/" (not a subdirectory)
         let mut items = Vec::new();
-        for row in rows {
-            items.push(row.map_err(|err| err.to_string())?);
+
+        if path == "/" {
+            // Root: match paths with exactly one segment, e.g. /file.jpg
+            let mut stmt = conn
+                .prepare(
+                    "
+                    SELECT
+                        id,
+                        original_file_name,
+                        original_path,
+                        file_created_at,
+                        checksum,
+                        asset_type,
+                        duration,
+                        is_favorite,
+                        is_archived,
+                        visibility,
+                        rating,
+                        width,
+                        height,
+                        thumbhash
+                    FROM assets
+                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'
+                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    LIMIT ?1 OFFSET ?2
+                    ",
+                )
+                .map_err(|err| err.to_string())?;
+
+            let rows = stmt
+                .query_map(params![limit, offset], map_asset_summary)
+                .map_err(|err| err.to_string())?;
+            for row in rows {
+                items.push(row.map_err(|err| err.to_string())?);
+            }
+        } else {
+            // Non-root: match paths starting with "{path}/" where the rest has no "/"
+            let path_prefix = format!("{}/", path);
+            let like_pattern = format!("{}%", path_prefix);
+            // 1-based position of the first character after the prefix (for substr)
+            let remaining_start = (path_prefix.len() + 1) as i64;
+
+            let mut stmt = conn
+                .prepare(
+                    "
+                    SELECT
+                        id,
+                        original_file_name,
+                        original_path,
+                        file_created_at,
+                        checksum,
+                        asset_type,
+                        duration,
+                        is_favorite,
+                        is_archived,
+                        visibility,
+                        rating,
+                        width,
+                        height,
+                        thumbhash
+                    FROM assets
+                    WHERE original_path LIKE ?1
+                      AND instr(substr(original_path, ?2), '/') = 0
+                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    LIMIT ?3 OFFSET ?4
+                    ",
+                )
+                .map_err(|err| err.to_string())?;
+
+            let rows = stmt
+                .query_map(
+                    params![like_pattern, remaining_start, limit, offset],
+                    map_asset_summary,
+                )
+                .map_err(|err| err.to_string())?;
+            for row in rows {
+                items.push(row.map_err(|err| err.to_string())?);
+            }
         }
 
         let has_next_page = items.len() > page_size as usize;

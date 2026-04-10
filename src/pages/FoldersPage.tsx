@@ -1,5 +1,5 @@
 import { ChevronRight, Folder, House, MoveUpLeft } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "../components/Layout/Header";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
@@ -15,6 +15,8 @@ interface FoldersPageProps {
 export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
   const [currentPath, setCurrentPath] = useState("/");
   const [searchInput, setSearchInput] = useState("");
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const folderPathsQuery = useFolderPaths(true);
 
   const paths = useMemo(
@@ -50,6 +52,67 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
   const breadcrumbs = useMemo(() => getBreadcrumbs(currentPath), [currentPath]);
   const hasSubfolders = subfolders.length > 0;
 
+  // Calculate PhotoGrid height dynamically, same as AlbumsPage / PhotosPage
+  useEffect(() => {
+    if (!contentRef.current) {
+      return;
+    }
+
+    const calculateHeight = () => {
+      if (!contentRef.current) {
+        return;
+      }
+
+      const container = contentRef.current;
+      const folderHeader = container.querySelector(
+        '[data-test="folder-header"]',
+      ) as HTMLElement;
+      const subfoldersSection = container.querySelector(
+        '[data-test="subfolders"]',
+      ) as HTMLElement;
+      const errorAlert = container.querySelector(
+        '[data-test="error-alert"]',
+      ) as HTMLElement;
+
+      const padding = 16;
+      let usedHeight = padding;
+
+      if (folderHeader) {
+        usedHeight += folderHeader.offsetHeight + 8;
+      }
+      if (subfoldersSection) {
+        usedHeight += subfoldersSection.offsetHeight + 8;
+      }
+      if (errorAlert) {
+        usedHeight += errorAlert.offsetHeight + 8;
+      }
+
+      const containerTop = container.getBoundingClientRect().top;
+      const containerHeight = window.innerHeight - containerTop - padding;
+      const availableHeight = containerHeight - (usedHeight - padding);
+      setPhotoGridHeight(Math.max(300, availableHeight));
+    };
+
+    calculateHeight();
+    const resizeObserver = new ResizeObserver(calculateHeight);
+    resizeObserver.observe(contentRef.current);
+    const mutationObserver = new MutationObserver(() => {
+      requestAnimationFrame(calculateHeight);
+    });
+    mutationObserver.observe(contentRef.current, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    window.addEventListener("resize", calculateHeight);
+
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", calculateHeight);
+    };
+  }, [currentPath]);
+
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage="folders" onNavigate={onNavigate} />
@@ -64,8 +127,14 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
           searchPlaceholder="Search folder photos"
         />
 
-        <section className="flex-1 min-h-0 overflow-y-auto space-y-4 p-2 sm:p-3 lg:p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <section
+          ref={contentRef}
+          className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4"
+        >
+          <div
+            data-test="folder-header"
+            className="shrink-0 flex flex-wrap items-center justify-between gap-3"
+          >
             <div>
               <h1 className="m-0 text-xl font-bold text-base-content">
                 Folders
@@ -98,7 +167,11 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
           </div>
 
           {folderPathsQuery.isError ? (
-            <div role="alert" className="alert alert-error alert-soft text-sm">
+            <div
+              role="alert"
+              data-test="error-alert"
+              className="shrink-0 alert alert-error alert-soft text-sm"
+            >
               <span>
                 {(folderPathsQuery.error as Error | null)?.message ??
                   "Could not load folders"}
@@ -107,7 +180,7 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
           ) : null}
 
           {hasSubfolders ? (
-            <section>
+            <section data-test="subfolders" className="shrink-0">
               <h2 className="mb-2 mt-0 text-sm font-semibold uppercase tracking-wide text-base-content/60">
                 Subfolders
               </h2>
@@ -128,33 +201,27 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
           ) : null}
 
           {assetsQuery.isError ? (
-            <div role="alert" className="alert alert-error alert-soft text-sm">
+            <div
+              role="alert"
+              data-test="error-alert"
+              className="shrink-0 alert alert-error alert-soft text-sm"
+            >
               <span>
                 {(assetsQuery.error as Error | null)?.message ??
                   "Could not load photos for this folder"}
               </span>
             </div>
-          ) : null}
-
-          {!assetsQuery.isError ? (
+          ) : (
             <PhotoGrid
               assets={allAssets}
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
+              maxHeight={photoGridHeight}
               onLoadMore={() =>
                 assetsQuery.fetchNextPage().then(() => undefined)
               }
             />
-          ) : null}
-
-          {!assetsQuery.isLoading &&
-          !assetsQuery.isError &&
-          !hasSubfolders &&
-          allAssets.length === 0 ? (
-            <div className="rounded-xl bg-base-100 px-3 py-4 text-sm text-base-content/60 ring-1 ring-base-300/80">
-              This folder is empty.
-            </div>
-          ) : null}
+          )}
         </section>
       </section>
     </main>
