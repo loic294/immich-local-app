@@ -18,19 +18,19 @@ export type AppPage = "photos" | "albums" | "folders" | "calendar" | "settings";
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const navClass = (page: AppPage) =>
     page === activePage
-      ? "btn btn-sm btn-soft btn-primary justify-start"
-      : "btn btn-sm btn-ghost justify-start";
+      ? "btn btn-md btn-block w-full max-w-none btn-soft btn-primary justify-start text-base font-semibold"
+      : "btn btn-md btn-block w-full max-w-none btn-ghost justify-start text-base font-semibold";
 
   return (
     <aside className="hidden h-screen border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
       <div className="flex h-full min-h-0 w-full flex-col gap-3 p-3">
-        <div className="flex h-9 items-center gap-2 px-2 text-2xl font-bold text-primary">
+        <div className="flex h-10 items-center gap-2 px-2 text-3xl font-bold text-primary">
           <div className="h-7 w-7 rounded-full bg-linear-to-br from-error via-warning to-info" />
           <span>immich.local</span>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-          <nav className="menu rounded-box bg-base-100 p-1">
+        <div className="min-h-0 flex-1 w-full overflow-y-auto pr-1">
+          <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
             <button
               className={navClass("photos")}
               type="button"
@@ -65,12 +65,12 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
             </button>
           </nav>
 
-          <div className="mt-3 px-2 text-xs font-semibold uppercase tracking-wide text-base-content/50">
+          <div className="mt-3 w-full px-2 text-sm font-semibold uppercase tracking-wide text-base-content/50">
             Library
           </div>
-          <nav className="menu rounded-box bg-base-100 p-1">
+          <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
             <button
-              className="btn btn-sm btn-ghost justify-start"
+              className="btn btn-md btn-block w-full max-w-none btn-ghost justify-start text-base font-semibold"
               type="button"
               disabled
             >
@@ -80,8 +80,8 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
           </nav>
         </div>
 
-        <div className="shrink-0 space-y-3 px-2 pb-2">
-          <nav className="menu rounded-box bg-base-100 p-1">
+        <div className="shrink-0 w-full space-y-3 px-2 pb-2">
+          <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
             <button
               className={navClass("settings")}
               type="button"

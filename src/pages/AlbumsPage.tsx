@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { AlbumCard } from "../components/Albums/AlbumCard";
 import { Header } from "../components/Layout/Header";
+import { PageBackButton } from "../components/Layout/PageBackButton";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
@@ -173,7 +174,11 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
 
         <section
           ref={contentRef}
-          className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4"
+          className={`p-2 sm:p-3 lg:p-4 ${
+            selectedAlbum
+              ? "flex min-h-0 flex-1 flex-col gap-2"
+              : "min-h-0 flex-1 overflow-y-auto"
+          }`}
         >
           {selectedAlbum ? (
             <>
@@ -181,17 +186,14 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
                 data-test="album-header"
                 className="mb-1 flex items-center gap-2 shrink-0"
               >
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
+                <PageBackButton
+                  ariaLabel="Back to albums"
                   onClick={() => {
                     setSelectedAlbumId(null);
                     setSearchInput("");
                   }}
-                >
-                  Back to albums
-                </button>
-                <h1 className="m-0 text-lg font-bold text-base-content">
+                />
+                <h1 className="m-0 text-xl font-bold text-base-content">
                   {selectedAlbum.albumName}
                 </h1>
               </div>
@@ -237,9 +239,9 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
               )}
             </>
           ) : (
-            <section>
+            <section className="space-y-4 pb-2">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <h1 className="m-0 text-xl font-bold text-base-content">
+                <h1 className="m-0 text-2xl font-bold text-base-content">
                   Albums
                 </h1>
                 <div className="join">

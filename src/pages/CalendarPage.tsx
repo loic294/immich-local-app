@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft } from "lucide-react";
 import { Header } from "../components/Layout/Header";
+import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useCalendarAssets } from "../hooks/useCalendarAssets";
@@ -94,7 +94,7 @@ export function CalendarPage({ session, onNavigate }: CalendarPageProps) {
         />
 
         <section className="flex-1 min-h-0 overflow-y-auto p-2 sm:p-3 lg:p-4">
-          <h1 className="mb-4 text-xl font-bold text-base-content">Calendar</h1>
+          <h1 className="mb-4 text-2xl font-bold text-base-content">Calendar</h1>
 
           {timelineQuery.isError ? (
             <div role="alert" className="alert alert-error alert-soft text-sm">
@@ -254,15 +254,8 @@ function MonthView({
             data-test="month-title"
             className="mb-1 flex items-center gap-2 shrink-0"
           >
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={onBack}
-            >
-              <ChevronLeft size={16} />
-              Back
-            </button>
-            <h1 className="m-0 text-lg font-bold text-base-content">
+            <PageBackButton ariaLabel="Back" onClick={onBack} />
+            <h1 className="m-0 text-xl font-bold text-base-content">
               {MONTH_NAMES[month - 1]} {year}
             </h1>
             {assetsQuery.isSuccess ? (

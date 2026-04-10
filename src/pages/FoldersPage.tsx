@@ -1,6 +1,7 @@
-import { ChevronRight, Folder, House, MoveUpLeft } from "lucide-react";
+import { ChevronRight, Folder, House } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "../components/Layout/Header";
+import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useFolderAssets } from "../hooks/useFolderAssets";
@@ -137,37 +138,33 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
         >
           <div
             data-test="folder-header"
-            className="shrink-0 flex flex-wrap items-center justify-between gap-3"
+            className="shrink-0 flex flex-col gap-2"
           >
-            <div>
-              <h1 className="m-0 text-xl font-bold text-base-content">
+            <div className="flex items-center gap-2">
+              <PageBackButton
+                ariaLabel="Back"
+                disabled={currentPath === "/"}
+                onClick={() => setCurrentPath(getParentPath(currentPath))}
+              />
+              <h1 className="m-0 text-2xl font-bold text-base-content">
                 Folders
               </h1>
-              <div className="mt-1 flex items-center gap-1 text-xs text-base-content/70">
-                {breadcrumbs.map((crumb) => (
-                  <button
-                    key={crumb.path}
-                    type="button"
-                    className={`btn btn-ghost btn-xs px-2 ${crumb.path === currentPath ? "text-primary" : ""}`}
-                    onClick={() => setCurrentPath(crumb.path)}
-                  >
-                    {crumb.path === "/" ? <House size={12} /> : null}
-                    <span>{crumb.label}</span>
-                    <ChevronRight size={11} className="text-base-content/40" />
-                  </button>
-                ))}
-              </div>
             </div>
 
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              disabled={currentPath === "/"}
-              onClick={() => setCurrentPath(getParentPath(currentPath))}
-            >
-              <MoveUpLeft size={14} />
-              Up
-            </button>
+            <div className="flex items-center gap-1 text-xs text-base-content/70">
+              {breadcrumbs.map((crumb) => (
+                <button
+                  key={crumb.path}
+                  type="button"
+                  className={`btn btn-ghost btn-xs px-2 ${crumb.path === currentPath ? "text-primary" : ""}`}
+                  onClick={() => setCurrentPath(crumb.path)}
+                >
+                  {crumb.path === "/" ? <House size={12} /> : null}
+                  <span>{crumb.label}</span>
+                  <ChevronRight size={11} className="text-base-content/40" />
+                </button>
+              ))}
+            </div>
           </div>
 
           {folderPathsQuery.isError ? (
