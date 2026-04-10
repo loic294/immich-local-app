@@ -43,6 +43,7 @@ export function FullscreenInfoPanel({
   const shutterSpeed = getExifString(exif, ["exposureTime", "shutterSpeed"]);
   const aperture = getExifString(exif, ["fNumber", "apertureValue"]);
   const iso = getExifString(exif, ["iso", "isoSpeedRatings"]);
+  const make = getExifString(exif, ["make"]);
   const city = getExifString(exif, ["city"]);
   const state = getExifString(exif, ["state", "stateProvince"]);
   const country = getExifString(exif, ["country"]);
@@ -74,7 +75,7 @@ export function FullscreenInfoPanel({
     <aside className="pointer-events-auto h-full w-[min(22rem,28vw)] min-w-72 shrink-0 overflow-y-auto bg-zinc-950 p-3 text-xs text-white/80">
       <div className="rounded-sm bg-zinc-900 p-4">
         <p className="text-sm font-medium text-white">
-          {details?.camera ?? "Unknown camera"}
+          {make ?? "Unknown make"} {details?.camera ?? "Unknown camera"}
         </p>
         {details?.lens ? (
           <p className="mt-0.5 text-xs text-white/65">{details.lens}</p>

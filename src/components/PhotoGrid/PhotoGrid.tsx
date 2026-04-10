@@ -129,6 +129,7 @@ export function PhotoGrid({
   const [favoriteUpdateId, setFavoriteUpdateId] = useState<string | null>(null);
   const [archiveUpdateId, setArchiveUpdateId] = useState<string | null>(null);
   const [ratingUpdateId, setRatingUpdateId] = useState<string | null>(null);
+  const pendingFullscreenAdvanceRef = useRef(false);
   const [descriptionUpdateId, setDescriptionUpdateId] = useState<string | null>(
     null,
   );
@@ -175,6 +176,21 @@ export function PhotoGrid({
   const isUsingFullLayout = fullGridSections.length > 0;
   const [timelineLayout, setTimelineLayout] =
     useState<TimelineLayoutResponse | null>(null);
+
+  const requestFullscreenLoadMore = () => {
+    if (pendingJumpDateKey) {
+      return;
+    }
+
+    if (!hasNextPage || isFetching || isLoadingNextRef.current) {
+      return;
+    }
+
+    isLoadingNextRef.current = true;
+    void Promise.resolve(onLoadMore()).finally(() => {
+      isLoadingNextRef.current = false;
+    });
+  };
 
   const captureScrollRestoreAnchor = (
     direction: "prepend" | "append",
@@ -1290,19 +1306,12 @@ export function PhotoGrid({
       }
 
       if (event.key === "ArrowLeft") {
-        if (activeIndex !== null) {
-          showAssetAtIndex(Math.max(0, activeIndex - 1), true);
-        }
+        goPrev();
         return;
       }
 
       if (event.key === "ArrowRight") {
-        if (activeIndex !== null) {
-          showAssetAtIndex(
-            Math.min(displayAssets.length - 1, activeIndex + 1),
-            true,
-          );
-        }
+        goNext();
       }
     };
 
@@ -1452,8 +1461,48 @@ export function PhotoGrid({
       return;
     }
 
-    showAssetAtIndex(Math.min(displayAssets.length - 1, activeIndex + 1), true);
+    if (activeIndex < displayAssets.length - 1) {
+      showAssetAtIndex(activeIndex + 1, true);
+      return;
+    }
+
+    if (hasNextPage) {
+      pendingFullscreenAdvanceRef.current = true;
+      requestFullscreenLoadMore();
+    }
   };
+
+  useEffect(() => {
+    if (activeIndex === null) {
+      pendingFullscreenAdvanceRef.current = false;
+      return;
+    }
+
+    if (!hasNextPage) {
+      return;
+    }
+
+    const remaining = displayAssets.length - 1 - activeIndex;
+    if (remaining <= 2) {
+      requestFullscreenLoadMore();
+    }
+  }, [activeIndex, displayAssets.length, hasNextPage, isFetching, pendingJumpDateKey]);
+
+  useEffect(() => {
+    if (!pendingFullscreenAdvanceRef.current || activeIndex === null) {
+      return;
+    }
+
+    if (activeIndex < displayAssets.length - 1) {
+      pendingFullscreenAdvanceRef.current = false;
+      showAssetAtIndex(activeIndex + 1, true);
+      return;
+    }
+
+    if (!hasNextPage) {
+      pendingFullscreenAdvanceRef.current = false;
+    }
+  }, [activeIndex, displayAssets.length, hasNextPage]);
 
   const updateActiveAssetOverride = (override: Partial<AssetSummary>) => {
     if (!activeAsset) {
@@ -1926,7 +1975,9 @@ export function PhotoGrid({
                   event.stopPropagation();
                   goNext();
                 }}
-                disabled={activeIndex === displayAssets.length - 1}
+                disabled={
+                  activeIndex === displayAssets.length - 1 && !hasNextPage
+                }
               >
                 <ChevronRight size={28} />
               </button>
