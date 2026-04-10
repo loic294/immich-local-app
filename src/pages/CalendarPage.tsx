@@ -167,7 +167,7 @@ function MonthView({
 }: MonthViewProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
-  
+
   const assetsQuery = useCalendarAssets(true, year, month);
   const assets = useMemo(
     () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -250,7 +250,10 @@ function MonthView({
           ref={contentRef}
           className="flex-1 min-h-0 flex flex-col gap-2 p-2 sm:p-3 lg:p-4"
         >
-          <div data-test="month-title" className="mb-1 flex items-center gap-2 shrink-0">
+          <div
+            data-test="month-title"
+            className="mb-1 flex items-center gap-2 shrink-0"
+          >
             <button
               type="button"
               className="btn btn-sm btn-ghost"
@@ -270,7 +273,11 @@ function MonthView({
           </div>
 
           {assetsQuery.isError ? (
-            <div role="alert" data-test="error-alert" className="shrink-0 alert alert-error alert-soft text-sm">
+            <div
+              role="alert"
+              data-test="error-alert"
+              className="shrink-0 alert alert-error alert-soft text-sm"
+            >
               <span>
                 {(assetsQuery.error as Error | null)?.message ??
                   "Could not load photos for this month"}

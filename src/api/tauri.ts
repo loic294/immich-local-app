@@ -1,4 +1,3 @@
-
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AlbumSummary,
@@ -168,7 +167,14 @@ export async function getAssetThumbnail(assetId: string): Promise<string> {
   if (cached) {
     thumbnailCacheHits++;
     if (thumbnailCacheHits % 50 === 0) {
-      console.log("[thumbnail cache] hits=" + thumbnailCacheHits + " misses=" + thumbnailCacheMisses + " dedup=" + thumbnailDeduplicationHits);
+      console.log(
+        "[thumbnail cache] hits=" +
+          thumbnailCacheHits +
+          " misses=" +
+          thumbnailCacheMisses +
+          " dedup=" +
+          thumbnailDeduplicationHits,
+      );
     }
     return cached;
   }
@@ -223,12 +229,21 @@ export async function getCachedAssetDetails(
 export function clearThumbnailCache(): void {
   const totalSize = thumbnailCache.size;
   thumbnailCache.clear();
-  console.log(`[thumbnail cache] cleared ${totalSize} cached items, hits=${thumbnailCacheHits} misses=${thumbnailCacheMisses} dedup=${thumbnailDeduplicationHits}`);
+  console.log(
+    `[thumbnail cache] cleared ${totalSize} cached items, hits=${thumbnailCacheHits} misses=${thumbnailCacheMisses} dedup=${thumbnailDeduplicationHits}`,
+  );
 }
 
-export function getThumbnailCacheStats(): { size: number; hits: number; misses: number; dedup: number; hitRate: string } {
+export function getThumbnailCacheStats(): {
+  size: number;
+  hits: number;
+  misses: number;
+  dedup: number;
+  hitRate: string;
+} {
   const total = thumbnailCacheHits + thumbnailCacheMisses;
-  const hitRate = total > 0 ? ((thumbnailCacheHits / total) * 100).toFixed(1) : "N/A";
+  const hitRate =
+    total > 0 ? ((thumbnailCacheHits / total) * 100).toFixed(1) : "N/A";
   return {
     size: thumbnailCache.size,
     hits: thumbnailCacheHits,

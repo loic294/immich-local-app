@@ -22,7 +22,7 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
-  
+
   const albumsQuery = useAlbums(true);
   const selectedAlbum = useMemo(
     () =>
@@ -177,7 +177,10 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
         >
           {selectedAlbum ? (
             <>
-              <div data-test="album-header" className="mb-1 flex items-center gap-2 shrink-0">
+              <div
+                data-test="album-header"
+                className="mb-1 flex items-center gap-2 shrink-0"
+              >
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost"
