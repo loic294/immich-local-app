@@ -1486,7 +1486,13 @@ export function PhotoGrid({
     if (remaining <= 2) {
       requestFullscreenLoadMore();
     }
-  }, [activeIndex, displayAssets.length, hasNextPage, isFetching, pendingJumpDateKey]);
+  }, [
+    activeIndex,
+    displayAssets.length,
+    hasNextPage,
+    isFetching,
+    pendingJumpDateKey,
+  ]);
 
   useEffect(() => {
     if (!pendingFullscreenAdvanceRef.current || activeIndex === null) {
