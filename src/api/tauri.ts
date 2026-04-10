@@ -161,6 +161,16 @@ export async function getCachedCalendarFullGridLayout(
   });
 }
 
+export async function getCachedFolderFullGridLayout(
+  path: string,
+  containerWidth: number,
+): Promise<GridLayoutResponse> {
+  return invoke<GridLayoutResponse>("get_cached_folder_full_grid_layout", {
+    path,
+    containerWidth,
+  });
+}
+
 export async function getAssetThumbnail(assetId: string): Promise<string> {
   // Check cache first
   const cached = thumbnailCache.get(assetId);

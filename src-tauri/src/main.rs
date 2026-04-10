@@ -15,6 +15,7 @@ use commands::assets::{
 };
 use commands::auth::{authenticate, restore_session, logout, get_profile_image};
 use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
+use commands::folders::get_cached_folder_full_grid_layout;
 use commands::memories::fetch_memories;
 use commands::settings::{get_cache_path, get_cache_stats, get_settings, update_settings};
 use commands::shell::open_url;
@@ -60,6 +61,7 @@ pub fn main() {
             get_cached_album_full_grid_layout,
             get_unique_original_paths,
             get_folder_assets_paged,
+            get_cached_folder_full_grid_layout,
             get_settings,
             update_settings,
             get_cache_stats,

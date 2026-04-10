@@ -5,6 +5,7 @@ import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useFolderAssets } from "../hooks/useFolderAssets";
 import { useFolderPaths } from "../hooks/useFolderPaths";
+import { getCachedFolderFullGridLayout } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 
 interface FoldersPageProps {
@@ -51,6 +52,9 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
 
   const breadcrumbs = useMemo(() => getBreadcrumbs(currentPath), [currentPath]);
   const hasSubfolders = subfolders.length > 0;
+  const hasFolderAssets = allAssets.length > 0;
+  const shouldShowPhotoGrid =
+    assetsQuery.isLoading || assetsQuery.isFetchingNextPage || hasFolderAssets;
 
   // Calculate PhotoGrid height dynamically, same as AlbumsPage / PhotosPage
   useEffect(() => {
@@ -211,8 +215,9 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
                   "Could not load photos for this folder"}
               </span>
             </div>
-          ) : (
+          ) : shouldShowPhotoGrid ? (
             <PhotoGrid
+              key={currentPath}
               assets={allAssets}
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
@@ -220,8 +225,20 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
               onLoadMore={() =>
                 assetsQuery.fetchNextPage().then(() => undefined)
               }
+              loadFullLayout={(containerWidth) =>
+                getCachedFolderFullGridLayout(currentPath, containerWidth)
+              }
             />
-          )}
+          ) : null}
+
+          {!assetsQuery.isLoading &&
+          !assetsQuery.isError &&
+          !hasSubfolders &&
+          !hasFolderAssets ? (
+            <div className="rounded-xl bg-base-100 px-3 py-4 text-sm text-base-content/60 ring-1 ring-base-300/80">
+              This folder is empty.
+            </div>
+          ) : null}
         </section>
       </section>
     </main>

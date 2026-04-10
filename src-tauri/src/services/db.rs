@@ -1230,6 +1230,85 @@ impl Database {
         Ok((items, has_next_page))
     }
 
+    pub fn get_all_folder_assets(&self, path: &str) -> Result<Vec<AssetSummary>, String> {
+        let conn = self.open()?;
+
+        let mut items = Vec::new();
+
+        if path == "/" {
+            let mut stmt = conn
+                .prepare(
+                    "
+                    SELECT
+                        id,
+                        original_file_name,
+                        original_path,
+                        file_created_at,
+                        checksum,
+                        asset_type,
+                        duration,
+                        is_favorite,
+                        is_archived,
+                        visibility,
+                        rating,
+                        width,
+                        height,
+                        thumbhash
+                    FROM assets
+                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'
+                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ",
+                )
+                .map_err(|err| err.to_string())?;
+
+            let rows = stmt
+                .query_map([], map_asset_summary)
+                .map_err(|err| err.to_string())?;
+            for row in rows {
+                items.push(row.map_err(|err| err.to_string())?);
+            }
+        } else {
+            let path_prefix = format!("{}/", path);
+            let like_pattern = format!("{}%", path_prefix);
+            let remaining_start = (path_prefix.len() + 1) as i64;
+
+            let mut stmt = conn
+                .prepare(
+                    "
+                    SELECT
+                        id,
+                        original_file_name,
+                        original_path,
+                        file_created_at,
+                        checksum,
+                        asset_type,
+                        duration,
+                        is_favorite,
+                        is_archived,
+                        visibility,
+                        rating,
+                        width,
+                        height,
+                        thumbhash
+                    FROM assets
+                    WHERE original_path LIKE ?1
+                      AND instr(substr(original_path, ?2), '/') = 0
+                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ",
+                )
+                .map_err(|err| err.to_string())?;
+
+            let rows = stmt
+                .query_map(params![like_pattern, remaining_start], map_asset_summary)
+                .map_err(|err| err.to_string())?;
+            for row in rows {
+                items.push(row.map_err(|err| err.to_string())?);
+            }
+        }
+
+        Ok(items)
+    }
+
     pub fn get_calendar_assets(
         &self,
         year: i32,
