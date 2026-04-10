@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AssetCacheDetails, AssetSummary } from "../../types";
+import { MapTilerLocationMap } from "./MapTilerLocationMap";
 
 interface FullscreenInfoPanelProps {
   asset: AssetSummary;
@@ -49,6 +50,7 @@ export function FullscreenInfoPanel({
   const country = getExifString(exif, ["country"]);
   const latitude = getExifNumber(exif, ["latitude"]);
   const longitude = getExifNumber(exif, ["longitude"]);
+  const mapTilerApiKey = import.meta.env.VITE_MAPTILER_API_KEY?.trim() ?? "";
 
   const fileName = details?.originalFileName ?? asset.originalFileName;
   const dimensionsText =
@@ -149,16 +151,24 @@ export function FullscreenInfoPanel({
           }
         />
 
-        {mapSrc ? (
+        {latitude !== null && longitude !== null ? (
           <div>
-            <div className="mt-1 overflow-hidden rounded-lg border border-white/10">
-              <iframe
-                title="Photo location map"
-                src={mapSrc}
-                className="h-90 w-full bg-zinc-950"
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-              />
+            <div className="mt-1">
+              {mapTilerApiKey ? (
+                <MapTilerLocationMap
+                  latitude={latitude}
+                  longitude={longitude}
+                  apiKey={mapTilerApiKey}
+                />
+              ) : mapSrc ? (
+                <iframe
+                  title="Photo location map"
+                  src={mapSrc}
+                  className="h-90 w-full overflow-hidden rounded-lg border border-white/10 bg-zinc-950"
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+              ) : null}
             </div>
           </div>
         ) : null}

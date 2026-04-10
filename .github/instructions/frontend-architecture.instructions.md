@@ -2,7 +2,7 @@
 description: Frontend Modular Architecture Guidelines
 alwaysApply: true
 applyTo: "src/**/*.tsx"
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Frontend Modular Architecture
@@ -10,6 +10,57 @@ version: 1.0.0
 ## Core Principles
 
 The frontend is organized to maximize reusability, maintainability, and readability through modular component architecture. All developers must follow these guidelines when creating or modifying frontend code.
+
+## Project-Specific Rules
+
+### 1. Shared PhotoGrid Contract
+
+**Rule**: Photos, Albums, Calendar, and Folders all use the same `PhotoGrid` component. Any feature added to this grid must work across all four pages.
+
+- Do not implement page-specific grid behavior by forking `PhotoGrid`
+- Extend shared `PhotoGrid` props, extracted hooks, or supporting child components instead
+- When changing fullscreen behavior, selection, layout, metadata display, or loading behavior, verify the change still works in Photos, Albums, Calendar, and Folders
+
+### 2. Always Prefer Tauri Full Grid Layouts
+
+**Rule**: When a page has access to a full photo grid layout calculated in Tauri, always use that full layout.
+
+- Prefer cached full-grid layout commands from Tauri over recalculating the complete layout in React
+- Frontend layout calculation is only a fallback for cases where no Tauri full-layout source exists
+- New pages or new asset sources that render `PhotoGrid` should expose a Tauri full-layout loader whenever possible
+
+### 3. Guard Against Fetch Loops
+
+**Rule**: Be deliberate with effects, pagination triggers, and API calls so UI state changes cannot accidentally create repeated fetch loops.
+
+- Never trigger API calls during render
+- Effects that fetch data must use stable dependencies and explicit guards
+- Infinite scroll, jump-to-date, and layout-loading flows must protect against duplicate in-flight requests
+- When a fetch updates state that can retrigger the same effect, add cancellation and loop-prevention guards with refs or equivalent control flow
+
+### 4. Keep Files Small
+
+**Rule**: Keep files as small as practical. Prefer creating a new file over making an existing file significantly larger.
+
+- If a file is growing because of a new concern, extract that concern into a new component, hook, or utility
+- Avoid adding unrelated responsibilities to already-large page or component files
+- Treat file size growth as a design smell, especially in `pages/` and `components/PhotoGrid/`
+
+### 5. Extract Reusable Components Early
+
+**Rule**: If UI or behavior is reused, create a dedicated component instead of duplicating code.
+
+- Repeated JSX should usually become a component
+- Repeated stateful logic should usually become a hook
+- Shared transformations should usually become utilities
+
+### 6. Preserve Grid Data Completeness
+
+**Rule**: Any asset source rendered in `PhotoGrid` must supply the data required for stable layout and fullscreen metadata.
+
+- Width, height, creation date, asset type, and thumbhash must remain available for layout stability
+- Asset sources shown in fullscreen should preserve enough metadata for the info panel and related actions to work consistently
+- Do not regress one source, such as albums or folders, while improving another
 
 ## Directory Structure
 
@@ -53,7 +104,7 @@ src/
 
 - Small components: ~50-200 lines
 - Medium components: ~200-400 lines
-- Large components (Pages): ~400+ lines can be split or organized with clear sections
+- Large components (Pages): ~400+ lines should be split unless there is a strong reason not to
 
 **Example**: Instead of combining `MemoryCard`, `MemoriesStrip`, and `MemoryFullscreenViewer` in one file, create separate files.
 
@@ -136,6 +187,7 @@ export function App() {
 2. Manage page-level state and data fetching
 3. Compose layout and feature components
 4. Pass data/callbacks to child components
+5. Adapt shared components instead of duplicating shared behavior per page
 
 **Example Structure**:
 
@@ -167,6 +219,14 @@ export function PhotosPage({ session }: PhotosPageProps) {
 useAssets (hook)
   → PhotosPage (gets data, passes to PhotoGrid)
     → PhotoGrid (receives data, renders)
+```
+
+For shared grid flows:
+
+```
+Tauri cached layout command
+  → page hook/page component
+    → PhotoGrid
 ```
 
 ## Naming Conventions
@@ -201,6 +261,9 @@ For component files, organize in this order:
 - Mixing data fetching logic in components (use hooks)
 - Leaving utility functions scattered throughout components
 - Generic prop names like `data`, `callback`, `handler`
+- Adding a grid feature to one page while forgetting the other pages that reuse `PhotoGrid`
+- Triggering repeated API calls from unstable effect dependencies or scroll handlers without in-flight guards
+- Recomputing full layouts in the frontend when a Tauri full-layout source already exists
 
 ✅ **Do Instead**:
 
@@ -209,6 +272,9 @@ For component files, organize in this order:
 - Create custom hooks for complex logic
 - Centralize utilities in dedicated files
 - Use descriptive names
+- Extend shared grid APIs and verify all grid pages still behave correctly
+- Use guarded async flows with cancellation and duplicate-request protection
+- Prefer Tauri full-layout loaders for shared photo grid pages
 
 ## When to Create New Components
 
@@ -218,6 +284,7 @@ Create a new component when:
 - A single component exceeds 300 lines of logic
 - A section can be independently understood and tested
 - A component has clear inputs and outputs (props/events)
+- A repeated `PhotoGrid` subview or fullscreen panel concern appears across multiple contexts
 
 ## When to Use Utilities
 
