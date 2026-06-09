@@ -1,5 +1,6 @@
 import { Check, Copy, Folder, Link, Plus, BookImage } from "lucide-react";
 import { useRef, useState, type MouseEvent } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   addAssetsToAlbum,
   copyAssetsToLocalFolder,
@@ -352,89 +353,137 @@ export function SelectionActions({
         return;
       }
 
-      setLocalCopyStatusMessage("Copying accessible original files...");
-      const initial = await copyAssetsToLocalFolder(
-        selectedAssetIds,
-        destinationFolder,
-        false,
-      );
-
-      let copiedOriginalCount = initial.copiedOriginalCount;
-      let copiedCachedCount = initial.copiedCachedCount;
-      let skippedCount = initial.skippedCount;
-      let failedCount = initial.failedCount;
-
-      if (
-        initial.hasFallbackCandidates &&
-        initial.cacheFallbackAvailableCount > 0 &&
-        initial.fallbackCandidateAssetIds.length > 0
-      ) {
-        setLocalCopyHasFallbackStep(true);
-        setLocalCopyStatusMessage(
-          "Some originals are unavailable. Waiting for fallback confirmation...",
-        );
-        const useFallback = await requestCachedFallbackDecision({
-          originalUnavailableCount: initial.originalUnavailableCount,
-          cacheFallbackAvailableCount: initial.cacheFallbackAvailableCount,
-        });
-
-        if (useFallback) {
-          setLocalCopyStatusMessage("Copying cached fallback files...");
-          const fallback = await copyAssetsToLocalFolder(
-            initial.fallbackCandidateAssetIds,
-            destinationFolder,
-            true,
-          );
-          copiedOriginalCount += fallback.copiedOriginalCount;
-          copiedCachedCount += fallback.copiedCachedCount;
-          skippedCount += fallback.skippedCount;
-          failedCount += fallback.failedCount;
-        } else {
-          setLocalCopyStatusMessage("Skipped cached fallback copy.");
-          skippedCount += initial.cacheFallbackAvailableCount;
-        }
-      }
-
-      const totalCopied = copiedOriginalCount + copiedCachedCount;
-      if (totalCopied > 0) {
-        setLocalCopyStatusMessage("Opening destination folder...");
-        await openFolderInFileExplorer(destinationFolder);
-        onSelectionActionCompleted?.();
-      }
-
-      const hasIssues = skippedCount > 0 || failedCount > 0;
-      if (hasIssues) {
-        const issueLines = [
-          `Originals copied: ${copiedOriginalCount}`,
-          `Cached copied: ${copiedCachedCount}`,
-          `Skipped: ${skippedCount}`,
-          `Failed: ${failedCount}`,
-        ];
-
-        if (initial.originalUnavailableCount > 0) {
-          issueLines.push(
-            `${initial.originalUnavailableCount} original file(s) were not accessible during this operation.`,
-          );
-        }
-
-        setLocalCopyIssueDetails({
-          title: "Copy completed with issues",
-          lines: issueLines,
-        });
-        setShowLocalCopyIssuesModal(true);
-      }
-
-      if (!hasIssues) {
-        setLocalCopyStatusMessage("Copy completed successfully.");
-        window.setTimeout(() => {
-          setLocalCopyStatusMessage(null);
-        }, 1800);
-      }
+      await runCopyToDestinationFolder(destinationFolder);
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message
           : "Failed to copy files to local folder";
+      setSelectionError(message);
+      setLocalCopyIssueDetails({
+        title: "Copy failed",
+        lines: [message],
+      });
+      setShowLocalCopyIssuesModal(true);
+      setLocalCopyStatusMessage(null);
+    } finally {
+      setIsCopyingToLocalFolder(false);
+      if (!showLocalCopyIssuesModal && !showLocalCopyFallbackModal) {
+        setLocalCopyStatusMessage((current) =>
+          current === "Copy completed successfully." ? current : null,
+        );
+      }
+      setLocalCopyHasFallbackStep(false);
+    }
+  };
+
+  const runCopyToDestinationFolder = async (destinationFolder: string) => {
+    setLocalCopyStatusMessage("Copying accessible original files...");
+    const initial = await copyAssetsToLocalFolder(
+      selectedAssetIds,
+      destinationFolder,
+      false,
+    );
+
+    let copiedOriginalCount = initial.copiedOriginalCount;
+    let copiedCachedCount = initial.copiedCachedCount;
+    let skippedCount = initial.skippedCount;
+    let failedCount = initial.failedCount;
+
+    if (
+      initial.hasFallbackCandidates &&
+      initial.cacheFallbackAvailableCount > 0 &&
+      initial.fallbackCandidateAssetIds.length > 0
+    ) {
+      setLocalCopyHasFallbackStep(true);
+      setLocalCopyStatusMessage(
+        "Some originals are unavailable. Waiting for fallback confirmation...",
+      );
+      const useFallback = await requestCachedFallbackDecision({
+        originalUnavailableCount: initial.originalUnavailableCount,
+        cacheFallbackAvailableCount: initial.cacheFallbackAvailableCount,
+      });
+
+      if (useFallback) {
+        setLocalCopyStatusMessage("Copying cached fallback files...");
+        const fallback = await copyAssetsToLocalFolder(
+          initial.fallbackCandidateAssetIds,
+          destinationFolder,
+          true,
+        );
+        copiedOriginalCount += fallback.copiedOriginalCount;
+        copiedCachedCount += fallback.copiedCachedCount;
+        skippedCount += fallback.skippedCount;
+        failedCount += fallback.failedCount;
+      } else {
+        setLocalCopyStatusMessage("Skipped cached fallback copy.");
+        skippedCount += initial.cacheFallbackAvailableCount;
+      }
+    }
+
+    const totalCopied = copiedOriginalCount + copiedCachedCount;
+    if (totalCopied > 0) {
+      setLocalCopyStatusMessage("Opening destination folder...");
+      await openFolderInFileExplorer(destinationFolder);
+      onSelectionActionCompleted?.();
+    }
+
+    const hasIssues = skippedCount > 0 || failedCount > 0;
+    if (hasIssues) {
+      const issueLines = [
+        `Originals copied: ${copiedOriginalCount}`,
+        `Cached copied: ${copiedCachedCount}`,
+        `Skipped: ${skippedCount}`,
+        `Failed: ${failedCount}`,
+      ];
+
+      if (initial.originalUnavailableCount > 0) {
+        issueLines.push(
+          `${initial.originalUnavailableCount} original file(s) were not accessible during this operation.`,
+        );
+      }
+
+      setLocalCopyIssueDetails({
+        title: "Copy completed with issues",
+        lines: issueLines,
+      });
+      setShowLocalCopyIssuesModal(true);
+    }
+
+    if (!hasIssues) {
+      setLocalCopyStatusMessage("Copy completed successfully.");
+      window.setTimeout(() => {
+        setLocalCopyStatusMessage(null);
+      }, 1800);
+    }
+  };
+
+  const submitCopyToUsbFolder = async () => {
+    if (!canRunSelectionAction) {
+      return;
+    }
+
+    setSelectionError(null);
+    setIsCopyingToLocalFolder(true);
+    setLocalCopyHasFallbackStep(false);
+    setLocalCopyStatusMessage("Selecting destination folder...");
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+
+      if (!selected || Array.isArray(selected)) {
+        setLocalCopyStatusMessage(null);
+        return;
+      }
+
+      await runCopyToDestinationFolder(selected);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to copy files to selected folder";
       setSelectionError(message);
       setLocalCopyIssueDetails({
         title: "Copy failed",
@@ -526,6 +575,20 @@ export function SelectionActions({
               {isCopyingToLocalFolder
                 ? "Copying to local folder..."
                 : "Open in File Explorer"}
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              disabled={isCopyingToLocalFolder}
+              onClick={() => {
+                void submitCopyToUsbFolder();
+              }}
+            >
+              <Copy size={14} />
+              {isCopyingToLocalFolder
+                ? "Copying to selected folder..."
+                : "Copy to USB stick/folder"}
             </button>
           </li>
         </ul>
