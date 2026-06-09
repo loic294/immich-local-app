@@ -479,6 +479,10 @@ export async function copyAssetsToClipboard(assetIds: string[]): Promise<void> {
   return invoke<void>("copy_assets_to_clipboard", { assetIds });
 }
 
+export async function copyTextToClipboard(text: string): Promise<void> {
+  return invoke<void>("copy_text_to_clipboard", { text });
+}
+
 export async function fetchAssetsByMonth(
   year: number,
   month: number,

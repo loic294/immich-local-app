@@ -13,6 +13,21 @@ pub async fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn copy_text_to_clipboard(text: String, app: tauri::AppHandle) -> Result<(), String> {
+    println!(
+        "[clipboard:text] copy_text_to_clipboard requested (len={})",
+        text.len()
+    );
+    let clipboard = app.state::<tauri_plugin_clipboard::Clipboard>();
+    clipboard.write_text(text).map_err(|err| {
+        println!("[clipboard:text] write_text failed: {}", err);
+        err
+    })?;
+    println!("[clipboard:text] write_text succeeded");
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn copy_assets_to_clipboard(
     asset_ids: Vec<String>,
     app: tauri::AppHandle,

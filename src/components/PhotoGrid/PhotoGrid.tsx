@@ -12,7 +12,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CirclePlay,
-  Copy,
   Film,
   Calendar,
   Info,
@@ -27,6 +26,7 @@ import { VerticalTimeline } from "./VerticalTimeline";
 import { FullscreenInfoPanel } from "./FullscreenInfoPanel";
 import { CanvasImageViewer } from "./CanvasImageViewer";
 import { ZoomControl } from "./ZoomControl";
+import { SelectionActions } from "../Layout/SelectionActions";
 import type {
   AssetCacheDetails,
   GridLayoutSection,
@@ -164,9 +164,6 @@ export function PhotoGrid({
   const [cachedAssetDetails, setCachedAssetDetails] =
     useState<AssetCacheDetails | null>(null);
   const [isLoadingCachedDetails, setIsLoadingCachedDetails] = useState(false);
-  const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "error">(
-    "idle",
-  );
   const [pendingJumpDateKey, setPendingJumpDateKey] = useState<string | null>(
     null,
   );
@@ -1540,55 +1537,7 @@ export function PhotoGrid({
 
   const closeLightbox = () => {
     setActiveIndex(null);
-    setCopyStatus("idle");
     resetFullscreenPlayback(false);
-  };
-
-  const handleCopyImageToClipboard = async () => {
-    if (!activeAsset || isVideoAsset(activeAsset)) {
-      return;
-    }
-
-    try {
-      let source = activeStillSrc ?? activeSrc;
-      if (!source) {
-        source = await getAssetThumbnail(activeAsset.id);
-        setActiveStillSrc(source);
-      }
-
-      const response = await fetch(source);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch image: ${response.status}`);
-      }
-
-      const blob = await response.blob();
-      if (
-        !navigator.clipboard ||
-        typeof navigator.clipboard.write !== "function" ||
-        typeof ClipboardItem === "undefined"
-      ) {
-        throw new Error("Clipboard image write is not supported");
-      }
-
-      const mimeType =
-        blob.type && blob.type.length > 0 ? blob.type : "image/png";
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          [mimeType]: blob,
-        }),
-      ]);
-
-      setCopyStatus("success");
-      window.setTimeout(() => {
-        setCopyStatus("idle");
-      }, 1600);
-    } catch (error) {
-      console.error("Failed to copy image to clipboard:", error);
-      setCopyStatus("error");
-      window.setTimeout(() => {
-        setCopyStatus("idle");
-      }, 2000);
-    }
   };
 
   const goPrev = () => {
@@ -2090,28 +2039,14 @@ export function PhotoGrid({
             ) : null}
 
             <div className="h-4 border-l border-white/25" />
-
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleCopyImageToClipboard();
-              }}
-              disabled={isVideoAsset(activeAsset)}
-              aria-label="Copy image to clipboard"
-            >
-              {copyStatus === "success" ? (
-                <Check size={16} />
-              ) : (
-                <Copy size={16} />
-              )}
-              {copyStatus === "success"
-                ? "Copied"
-                : copyStatus === "error"
-                  ? "Copy failed"
-                  : "Copy"}
-            </button>
+            <SelectionActions
+              selectedAssetIds={[activeAsset.id]}
+              selectedCount={1}
+              variant="preview"
+              modalZIndexClass="z-[10010]"
+              stopPropagation
+              disableCopy={isVideoAsset(activeAsset)}
+            />
 
             <button
               type="button"
@@ -2316,6 +2251,7 @@ export function PhotoGrid({
           </div>
         </div>
       ) : null}
+
       <DatePickerModal
         isOpen={showDatePicker}
         onClose={() => setShowDatePicker(false)}
