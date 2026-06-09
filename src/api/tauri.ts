@@ -14,6 +14,7 @@ import type {
   Settings,
   CacheStats,
   AssetCacheDetails,
+  LocalCopyResult,
 } from "../types";
 
 export type AuthResponse = {
@@ -477,6 +478,22 @@ export async function openUrl(url: string): Promise<void> {
 
 export async function copyAssetsToClipboard(assetIds: string[]): Promise<void> {
   return invoke<void>("copy_assets_to_clipboard", { assetIds });
+}
+
+export async function openFolderInFileExplorer(path: string): Promise<void> {
+  return invoke<void>("open_folder_in_file_explorer", { path });
+}
+
+export async function copyAssetsToLocalFolder(
+  assetIds: string[],
+  destinationFolder: string,
+  allowCachedFallback: boolean,
+): Promise<LocalCopyResult> {
+  return invoke<LocalCopyResult>("copy_assets_to_local_folder", {
+    assetIds,
+    destinationFolder,
+    allowCachedFallback,
+  });
 }
 
 export async function copyTextToClipboard(text: string): Promise<void> {

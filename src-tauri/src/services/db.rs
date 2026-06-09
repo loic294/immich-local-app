@@ -256,6 +256,11 @@ impl Database {
             [],
         )
         .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('user_local_folder_path', '')",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
 
         Ok(())
     }
@@ -1509,10 +1514,17 @@ impl Database {
             .map(|v| v == "true")
             .unwrap_or(true);
 
+        let user_local_folder_path = stmt
+            .query_row(params!["user_local_folder_path"], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_or_default();
+
         Ok(Settings {
             live_photo_autoplay,
             thumbnail_cache_path: thumbnail_cache_path.to_string_lossy().to_string(),
             video_cache_path: video_cache_path.to_string_lossy().to_string(),
+            user_local_folder_path,
         })
     }
 
@@ -1522,6 +1534,11 @@ impl Database {
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('live_photo_autoplay', ?1)",
             params![settings.live_photo_autoplay.to_string()],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('user_local_folder_path', ?1)",
+            params![settings.user_local_folder_path],
         )
         .map_err(|err| err.to_string())?;
 

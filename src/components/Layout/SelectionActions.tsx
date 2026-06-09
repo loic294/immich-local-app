@@ -1,13 +1,16 @@
 import { Check, Copy, Folder, Link, Plus, BookImage } from "lucide-react";
-import { useState, type MouseEvent } from "react";
+import { useRef, useState, type MouseEvent } from "react";
 import {
   addAssetsToAlbum,
+  copyAssetsToLocalFolder,
   copyAssetsToClipboard,
   copyTextToClipboard,
   createAlbumWithAssets,
   createShareLinkForAssets,
   fetchAlbums,
+  getSettings,
   getAssetThumbnail,
+  openFolderInFileExplorer,
 } from "../../api/tauri";
 import type { AlbumSummary } from "../../types";
 
@@ -51,6 +54,27 @@ export function SelectionActions({
   const [isSubmittingAlbum, setIsSubmittingAlbum] = useState(false);
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [isCopyingImages, setIsCopyingImages] = useState(false);
+  const [isCopyingToLocalFolder, setIsCopyingToLocalFolder] = useState(false);
+  const [localCopyStatusMessage, setLocalCopyStatusMessage] = useState<
+    string | null
+  >(null);
+  const [showLocalCopyIssuesModal, setShowLocalCopyIssuesModal] =
+    useState(false);
+  const [showLocalCopyFallbackModal, setShowLocalCopyFallbackModal] =
+    useState(false);
+  const [localCopyFallbackPrompt, setLocalCopyFallbackPrompt] = useState<{
+    originalUnavailableCount: number;
+    cacheFallbackAvailableCount: number;
+  } | null>(null);
+  const [localCopyIssueDetails, setLocalCopyIssueDetails] = useState<{
+    title: string;
+    lines: string[];
+  } | null>(null);
+  const [localCopyHasFallbackStep, setLocalCopyHasFallbackStep] =
+    useState(false);
+  const localCopyFallbackResolverRef = useRef<
+    ((decision: boolean) => void) | null
+  >(null);
   const [shareLink, setShareLink] = useState("");
   const [linkCopyStatus, setLinkCopyStatus] = useState<
     "idle" | "success" | "error"
@@ -58,6 +82,57 @@ export function SelectionActions({
   const [selectionError, setSelectionError] = useState<string | null>(null);
 
   const canRunSelectionAction = selectedAssetIds.length > 0;
+
+  const getLocalCopyProgress = (
+    status: string | null,
+    hasFallbackStep: boolean,
+  ): {
+    currentStep: number;
+    stepLabels: string[];
+  } => {
+    const stepLabels = hasFallbackStep
+      ? [
+          "Preparing destination",
+          "Copying accessible originals",
+          "Optional cached fallback",
+          "Opening destination folder",
+        ]
+      : [
+          "Preparing destination",
+          "Copying accessible originals",
+          "Opening destination folder",
+        ];
+
+    if (!status) {
+      return { currentStep: 2, stepLabels };
+    }
+
+    if (status.includes("Checking local folder")) {
+      return { currentStep: 1, stepLabels };
+    }
+
+    if (status.includes("Copying accessible original")) {
+      return { currentStep: 2, stepLabels };
+    }
+
+    if (hasFallbackStep) {
+      if (
+        status.includes("Waiting for fallback") ||
+        status.includes("cached fallback") ||
+        status.includes("Skipped cached fallback")
+      ) {
+        return { currentStep: 3, stepLabels };
+      }
+
+      if (status.includes("Opening destination folder")) {
+        return { currentStep: 4, stepLabels };
+      }
+    } else if (status.includes("Opening destination folder")) {
+      return { currentStep: 3, stepLabels };
+    }
+
+    return { currentStep: 2, stepLabels };
+  };
 
   const addButtonClass =
     variant === "preview"
@@ -233,6 +308,151 @@ export function SelectionActions({
     }
   };
 
+  const requestCachedFallbackDecision = (input: {
+    originalUnavailableCount: number;
+    cacheFallbackAvailableCount: number;
+  }): Promise<boolean> => {
+    setLocalCopyFallbackPrompt(input);
+    setShowLocalCopyFallbackModal(true);
+    return new Promise((resolve) => {
+      localCopyFallbackResolverRef.current = resolve;
+    });
+  };
+
+  const resolveCachedFallbackDecision = (decision: boolean) => {
+    const resolve = localCopyFallbackResolverRef.current;
+    localCopyFallbackResolverRef.current = null;
+    setShowLocalCopyFallbackModal(false);
+    setLocalCopyFallbackPrompt(null);
+    if (resolve) {
+      resolve(decision);
+    }
+  };
+
+  const submitOpenInFileExplorer = async () => {
+    if (!canRunSelectionAction) {
+      return;
+    }
+
+    setSelectionError(null);
+    setIsCopyingToLocalFolder(true);
+    setLocalCopyHasFallbackStep(false);
+    setLocalCopyStatusMessage("Checking local folder setting...");
+    try {
+      const settings = await getSettings();
+      const destinationFolder = settings.userLocalFolderPath.trim();
+      if (!destinationFolder) {
+        setLocalCopyIssueDetails({
+          title: "Local folder is not configured",
+          lines: [
+            "Set a Local Files Folder in Settings before using Open in file explorer.",
+          ],
+        });
+        setShowLocalCopyIssuesModal(true);
+        return;
+      }
+
+      setLocalCopyStatusMessage("Copying accessible original files...");
+      const initial = await copyAssetsToLocalFolder(
+        selectedAssetIds,
+        destinationFolder,
+        false,
+      );
+
+      let copiedOriginalCount = initial.copiedOriginalCount;
+      let copiedCachedCount = initial.copiedCachedCount;
+      let skippedCount = initial.skippedCount;
+      let failedCount = initial.failedCount;
+
+      if (
+        initial.hasFallbackCandidates &&
+        initial.cacheFallbackAvailableCount > 0 &&
+        initial.fallbackCandidateAssetIds.length > 0
+      ) {
+        setLocalCopyHasFallbackStep(true);
+        setLocalCopyStatusMessage(
+          "Some originals are unavailable. Waiting for fallback confirmation...",
+        );
+        const useFallback = await requestCachedFallbackDecision({
+          originalUnavailableCount: initial.originalUnavailableCount,
+          cacheFallbackAvailableCount: initial.cacheFallbackAvailableCount,
+        });
+
+        if (useFallback) {
+          setLocalCopyStatusMessage("Copying cached fallback files...");
+          const fallback = await copyAssetsToLocalFolder(
+            initial.fallbackCandidateAssetIds,
+            destinationFolder,
+            true,
+          );
+          copiedOriginalCount += fallback.copiedOriginalCount;
+          copiedCachedCount += fallback.copiedCachedCount;
+          skippedCount += fallback.skippedCount;
+          failedCount += fallback.failedCount;
+        } else {
+          setLocalCopyStatusMessage("Skipped cached fallback copy.");
+          skippedCount += initial.cacheFallbackAvailableCount;
+        }
+      }
+
+      const totalCopied = copiedOriginalCount + copiedCachedCount;
+      if (totalCopied > 0) {
+        setLocalCopyStatusMessage("Opening destination folder...");
+        await openFolderInFileExplorer(destinationFolder);
+        onSelectionActionCompleted?.();
+      }
+
+      const hasIssues = skippedCount > 0 || failedCount > 0;
+      if (hasIssues) {
+        const issueLines = [
+          `Originals copied: ${copiedOriginalCount}`,
+          `Cached copied: ${copiedCachedCount}`,
+          `Skipped: ${skippedCount}`,
+          `Failed: ${failedCount}`,
+        ];
+
+        if (initial.originalUnavailableCount > 0) {
+          issueLines.push(
+            `${initial.originalUnavailableCount} original file(s) were not accessible during this operation.`,
+          );
+        }
+
+        setLocalCopyIssueDetails({
+          title: "Copy completed with issues",
+          lines: issueLines,
+        });
+        setShowLocalCopyIssuesModal(true);
+      }
+
+      if (!hasIssues) {
+        setLocalCopyStatusMessage("Copy completed successfully.");
+        window.setTimeout(() => {
+          setLocalCopyStatusMessage(null);
+        }, 1800);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to copy files to local folder";
+      setSelectionError(message);
+      setLocalCopyIssueDetails({
+        title: "Copy failed",
+        lines: [message],
+      });
+      setShowLocalCopyIssuesModal(true);
+      setLocalCopyStatusMessage(null);
+    } finally {
+      setIsCopyingToLocalFolder(false);
+      if (!showLocalCopyIssuesModal && !showLocalCopyFallbackModal) {
+        setLocalCopyStatusMessage((current) =>
+          current === "Copy completed successfully." ? current : null,
+        );
+      }
+      setLocalCopyHasFallbackStep(false);
+    }
+  };
+
   const shareSubject =
     selectedCount === 1
       ? "this photo"
@@ -295,9 +515,17 @@ export function SelectionActions({
             </button>
           </li>
           <li>
-            <button type="button" disabled className="opacity-40">
+            <button
+              type="button"
+              disabled={isCopyingToLocalFolder}
+              onClick={() => {
+                void submitOpenInFileExplorer();
+              }}
+            >
               <Folder size={14} />
-              Open in file explorer
+              {isCopyingToLocalFolder
+                ? "Copying to local folder..."
+                : "Open in File Explorer"}
             </button>
           </li>
         </ul>
@@ -494,6 +722,139 @@ export function SelectionActions({
                       : "Create link"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showLocalCopyIssuesModal && localCopyIssueDetails ? (
+        <div
+          className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
+        >
+          <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
+            <h3 className="m-0 text-lg font-semibold">
+              {localCopyIssueDetails.title}
+            </h3>
+            <div className="mt-3 space-y-2 text-sm text-base-content/80">
+              {localCopyIssueDetails.lines.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  setShowLocalCopyIssuesModal(false);
+                  setLocalCopyIssueDetails(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showLocalCopyFallbackModal && localCopyFallbackPrompt ? (
+        <div
+          className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
+        >
+          <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
+            <h3 className="m-0 text-lg font-semibold">
+              Original files unavailable
+            </h3>
+            <div className="mt-3 space-y-2 text-sm text-base-content/80">
+              <p>
+                {localCopyFallbackPrompt.originalUnavailableCount} original
+                file(s) could not be accessed or downloaded.
+              </p>
+              <p>
+                {localCopyFallbackPrompt.cacheFallbackAvailableCount} cached
+                file(s) are available.
+              </p>
+              <p>Do you want to copy cached files instead?</p>
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => resolveCachedFallbackDecision(false)}
+              >
+                Skip cached copy
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => resolveCachedFallbackDecision(true)}
+              >
+                Copy cached files
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isCopyingToLocalFolder && !showLocalCopyFallbackModal ? (
+        <div
+          className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
+        >
+          <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
+            {(() => {
+              const { currentStep, stepLabels } = getLocalCopyProgress(
+                localCopyStatusMessage,
+                localCopyHasFallbackStep,
+              );
+              const totalSteps = stepLabels.length;
+              return (
+                <>
+                  <div className="badge badge-outline mb-2">
+                    Step {currentStep}/{totalSteps}
+                  </div>
+                  <h3 className="m-0 text-lg font-semibold">
+                    Copy in progress
+                  </h3>
+                  <div className="mt-3 flex items-center gap-3 text-sm text-base-content/80">
+                    <span className="loading loading-spinner loading-sm"></span>
+                    <span>
+                      {localCopyStatusMessage ??
+                        "Copying accessible files to your local folder..."}
+                    </span>
+                  </div>
+                  <ul className="list mt-4 rounded-box border border-base-300/60 bg-base-200/40">
+                    {stepLabels.map((label, index) => {
+                      const stepNumber = index + 1;
+                      const isActive = stepNumber === currentStep;
+                      const isDone = stepNumber < currentStep;
+
+                      return (
+                        <li key={label} className="list-row py-2">
+                          <span
+                            className={`status ${
+                              isDone
+                                ? "status-success"
+                                : isActive
+                                  ? "status-info"
+                                  : "status-neutral"
+                            }`}
+                          ></span>
+                          <span
+                            className={`text-sm ${
+                              isActive
+                                ? "font-medium text-base-content"
+                                : "text-base-content/70"
+                            }`}
+                          >
+                            {label}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              );
+            })()}
           </div>
         </div>
       ) : null}

@@ -1377,6 +1377,94 @@ impl ImmichClient {
         Ok(output_path.to_string_lossy().to_string())
     }
 
+    pub async fn get_asset_original_file_path(
+        &self,
+        asset_id: &str,
+        original_file_name: &str,
+    ) -> Result<String, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let cache_dir = original_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+
+        let safe_name = sanitize_cache_file_name(original_file_name);
+        let output = cache_dir.join(format!("{}-{}", asset_id, safe_name));
+        if output.exists() {
+            return Ok(output.to_string_lossy().to_string());
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let endpoints = [
+            format!("{}/api/assets/{}/original", session.server_url, asset_id),
+            format!("{}/api/asset/{}/original", session.server_url, asset_id),
+            format!(
+                "{}/api/assets/{}/download-original",
+                session.server_url, asset_id
+            ),
+            format!("{}/api/assets/{}/download", session.server_url, asset_id),
+        ];
+
+        let mut last_error: Option<String> = None;
+
+        for url in endpoints {
+            let response = self
+                .client
+                .get(&url)
+                .headers(headers.clone())
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.map_err(|err| err.to_string())?;
+                last_error = Some(format!(
+                    "download original failed: {} -> {} ({})",
+                    url,
+                    status,
+                    truncate_for_log(&body)
+                ));
+                continue;
+            }
+
+            let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+            if bytes.is_empty() {
+                last_error = Some(format!("download original returned empty body from {}", url));
+                continue;
+            }
+
+            fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
+            return Ok(output.to_string_lossy().to_string());
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            "download original failed for all attempted endpoints".to_string()
+        }))
+    }
+
+    pub async fn get_cached_thumbnail_path(&self, asset_id: &str) -> Result<Option<String>, String> {
+        let cache_dir = thumbnail_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+        Ok(read_cached_thumbnail_path(&cache_dir, asset_id)
+            .map(|path| path.to_string_lossy().to_string()))
+    }
+
+    pub async fn get_cached_video_path(&self, asset_id: &str) -> Result<Option<String>, String> {
+        let cache_dir = video_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+        read_cached_video_path(&cache_dir, asset_id)
+    }
+
     pub async fn update_asset_favorite(
         &self,
         asset_id: &str,
@@ -2450,6 +2538,33 @@ fn video_cache_dir() -> Result<PathBuf, String> {
         .join(".config")
         .join("immich-local-app")
         .join("videos"))
+}
+
+fn original_cache_dir() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
+    Ok(Path::new(&home)
+        .join(".config")
+        .join("immich-local-app")
+        .join("originals"))
+}
+
+fn sanitize_cache_file_name(input: &str) -> String {
+    let sanitized = input
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string();
+
+    if sanitized.is_empty() {
+        "asset.bin".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn read_cached_thumbnail(cache_dir: &Path, asset_id: &str) -> Result<Option<String>, String> {

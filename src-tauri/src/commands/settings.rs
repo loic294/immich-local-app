@@ -9,6 +9,7 @@ pub struct Settings {
     pub live_photo_autoplay: bool,
     pub thumbnail_cache_path: String,
     pub video_cache_path: String,
+    pub user_local_folder_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

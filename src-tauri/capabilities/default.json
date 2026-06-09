@@ -9,6 +9,7 @@
     "core:default",
     "core:event:default",
     "core:webview:allow-clear-all-browsing-data",
-    "deep-link:default"
+    "deep-link:default",
+    "dialog:default"
   ]
 }

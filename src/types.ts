@@ -117,6 +117,18 @@ export type Settings = {
   livePhotoAutoplay: boolean;
   thumbnailCachePath: string;
   videoCachePath: string;
+  userLocalFolderPath: string;
+};
+
+export type LocalCopyResult = {
+  copiedOriginalCount: number;
+  copiedCachedCount: number;
+  originalUnavailableCount: number;
+  cacheFallbackAvailableCount: number;
+  skippedCount: number;
+  failedCount: number;
+  hasFallbackCandidates: boolean;
+  fallbackCandidateAssetIds: string[];
 };
 
 export type CacheStats = {

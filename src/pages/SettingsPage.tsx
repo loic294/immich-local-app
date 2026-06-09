@@ -11,8 +11,10 @@ import {
   getCacheStats,
   getCachePath,
   getSettings,
+  openFolderInFileExplorer,
   updateSettings,
 } from "../api/tauri";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { CacheStats, Settings } from "../types";
 import type { AppPage } from "../components/Layout/Sidebar";
 import { useSyncStatus } from "../hooks/useSyncStatus";
@@ -28,6 +30,8 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [cachePath, setCachePath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingLocalFolder, setIsSavingLocalFolder] = useState(false);
+  const [localFolderDraft, setLocalFolderDraft] = useState("");
   const [isForcingFullSync, setIsForcingFullSync] = useState(false);
   const { forceFullSync, syncStatus, isSyncing, isChecking, progress, error } =
     useSyncStatus({ enableAutoCheck: false });
@@ -42,6 +46,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
           getCachePath(),
         ]);
         setSettings(settingsData);
+        setLocalFolderDraft(settingsData.userLocalFolderPath ?? "");
         setCacheStats(stats);
         setCachePath(path);
       } catch (error) {
@@ -68,6 +73,48 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
       console.error("Failed to update settings:", error);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSaveLocalFolderPath = async () => {
+    if (!settings) return;
+
+    const nextPath = localFolderDraft.trim();
+    if (nextPath === settings.userLocalFolderPath) {
+      return;
+    }
+
+    try {
+      setIsSavingLocalFolder(true);
+      const updated = await updateSettings({
+        ...settings,
+        userLocalFolderPath: nextPath,
+      });
+      setSettings(updated);
+      setLocalFolderDraft(updated.userLocalFolderPath ?? "");
+    } catch (error) {
+      console.error("Failed to save local folder path:", error);
+      window.alert("Failed to save local folder path.");
+    } finally {
+      setIsSavingLocalFolder(false);
+    }
+  };
+
+  const handlePickLocalFolderPath = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+
+      setLocalFolderDraft(selected);
+    } catch (error) {
+      console.error("Failed to open folder picker:", error);
+      window.alert("Failed to open folder picker.");
     }
   };
 
@@ -251,6 +298,68 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
           <div className="card-body">
             <h2 className="card-title">Cache & Storage</h2>
 
+            <div className="form-control mb-4">
+              <label className="label">
+                <span className="label-text font-medium">
+                  Local Files Folder
+                </span>
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={localFolderDraft}
+                  onChange={(event) => setLocalFolderDraft(event.target.value)}
+                  placeholder="Choose a folder for copied local files"
+                  className="input input-bordered input-sm flex-1 text-sm"
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => {
+                    void handlePickLocalFolderPath();
+                  }}
+                >
+                  Browse
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    void handleSaveLocalFolderPath();
+                  }}
+                  disabled={isSavingLocalFolder}
+                >
+                  {isSavingLocalFolder ? "Saving..." : "Save"}
+                </button>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  disabled={!settings?.userLocalFolderPath}
+                  onClick={() => {
+                    if (!settings?.userLocalFolderPath) {
+                      return;
+                    }
+                    void openFolderInFileExplorer(
+                      settings.userLocalFolderPath,
+                    ).catch((error) => {
+                      console.error("Failed to open local folder:", error);
+                      window.alert(
+                        "Failed to open local folder in file explorer.",
+                      );
+                    });
+                  }}
+                >
+                  Open local folder
+                </button>
+              </div>
+              <p className="mt-1 text-sm text-base-content/60">
+                Selected assets are copied here when using Open in file
+                explorer. This folder is separate from the app cache.
+              </p>
+            </div>
+
             {/* Cache Path */}
             <div className="form-control mb-4">
               <label className="label">
@@ -268,8 +377,14 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   className="btn btn-outline btn-sm gap-2"
                   onClick={() => {
                     if (cachePath) {
-                      // Open in file explorer
-                      window.location.href = `file://${cachePath}`;
+                      void openFolderInFileExplorer(cachePath).catch(
+                        (error) => {
+                          console.error("Failed to open cache folder:", error);
+                          window.alert(
+                            "Failed to open cache folder in file explorer.",
+                          );
+                        },
+                      );
                     }
                   }}
                 >
