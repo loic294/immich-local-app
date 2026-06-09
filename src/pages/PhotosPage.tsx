@@ -21,14 +21,25 @@ import { toMemoryItem, type MemoryItem } from "../utils/memory";
 import type { Session } from "../hooks/useSession";
 import { ASSET_PAGE_SIZE, useAssetWindow } from "../hooks/useAssetWindow";
 import { useRef } from "react";
+import type { AssetFilter } from "../types";
 
 interface PhotosPageProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
   onLogout: () => void;
+  activePage?: AppPage;
+  assetFilter?: AssetFilter;
+  searchLabel?: string;
 }
 
-export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
+export function PhotosPage({
+  session,
+  onNavigate,
+  onLogout,
+  activePage = "photos",
+  assetFilter = "all",
+  searchLabel = "Search",
+}: PhotosPageProps) {
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [archiveRefreshNonce, setArchiveRefreshNonce] = useState(0);
@@ -48,8 +59,18 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
 
-  const assetsWindow = useAssetWindow(true, searchTerm, refreshToken);
-  const assetDaysQuery = useAssetDays(true, searchTerm, refreshToken);
+  const assetsWindow = useAssetWindow(
+    true,
+    searchTerm,
+    refreshToken,
+    assetFilter,
+  );
+  const assetDaysQuery = useAssetDays(
+    true,
+    searchTerm,
+    refreshToken,
+    assetFilter,
+  );
   const memoriesQuery = useMemories(true);
 
   const assets = assetsWindow.assets;
@@ -144,7 +165,7 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage="photos" onNavigate={onNavigate} />
+      <Sidebar activePage={activePage} onNavigate={onNavigate} />
 
       <section className="flex min-h-0 w-full flex-col">
         <AppTopBar
@@ -224,7 +245,7 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
                     setSearchTerm("");
                   }}
                 >
-                  Search: {searchInput.trim()} x
+                  {searchLabel}: {searchInput.trim()} x
                 </button>
               ) : null}
             </div>
@@ -245,6 +266,7 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
           ) : (
             <PhotoGrid
               assets={assets}
+              hideArchivedAssets={assetFilter !== "archived"}
               onSelectedCountChange={setSelectedCount}
               onSelectedIdsChange={setSelectedAssetIds}
               selectionCommand={selectionCommand}
@@ -272,6 +294,7 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
                   dateKey,
                   ASSET_PAGE_SIZE,
                   trimmedSearch,
+                  assetFilter,
                 );
 
                 console.log("[PhotosPage] jump target resolved", {
@@ -311,16 +334,21 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
               }}
               loadFullLayout={useCallback(
                 (containerWidth: number) =>
-                  getFullGridLayout(searchTerm.trim() || null, containerWidth),
-                [searchTerm],
+                  getFullGridLayout(
+                    searchTerm.trim() || null,
+                    containerWidth,
+                    assetFilter,
+                  ),
+                [assetFilter, searchTerm],
               )}
               loadTimelineLayout={useCallback(
                 (containerWidth: number) =>
                   getCachedTimelineLayout(
                     searchTerm.trim() || null,
                     containerWidth,
+                    assetFilter,
                   ),
-                [searchTerm],
+                [assetFilter, searchTerm],
               )}
             />
           )}

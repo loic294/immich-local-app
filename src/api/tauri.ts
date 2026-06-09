@@ -15,6 +15,7 @@ import type {
   CacheStats,
   AssetCacheDetails,
   LocalCopyResult,
+  AssetFilter,
 } from "../types";
 
 export type AuthResponse = {
@@ -113,27 +114,33 @@ export async function getCachedAssets(
   page: number,
   pageSize: number,
   search: string | null,
+  filter?: AssetFilter | null,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("get_cached_assets", {
     page,
     pageSize,
     search,
+    filter,
   });
 }
 
 export async function getAllCachedAssets(
   search: string | null,
+  filter?: AssetFilter | null,
 ): Promise<AssetSummary[]> {
   return invoke<AssetSummary[]>("get_all_cached_assets", {
     search,
+    filter,
   });
 }
 
 export async function getCachedAssetDays(
   search: string | null,
+  filter?: AssetFilter | null,
 ): Promise<string[]> {
   return invoke<string[]>("get_cached_asset_days", {
     search,
+    filter,
   });
 }
 
@@ -141,31 +148,37 @@ export async function getCachedAssetJumpTarget(
   dateKey: string,
   pageSize: number,
   search: string | null,
+  filter?: AssetFilter | null,
 ): Promise<AssetDateJumpTarget | null> {
   return invoke<AssetDateJumpTarget | null>("get_cached_asset_jump_target", {
     dateKey,
     pageSize,
     search,
+    filter,
   });
 }
 
 export async function getCachedTimelineLayout(
   search: string | null,
   containerWidth: number,
+  filter?: AssetFilter | null,
 ): Promise<TimelineLayoutResponse> {
   return invoke<TimelineLayoutResponse>("get_cached_timeline_layout", {
     search,
     containerWidth,
+    filter,
   });
 }
 
 export async function getFullGridLayout(
   search: string | null,
   containerWidth: number,
+  filter?: AssetFilter | null,
 ): Promise<GridLayoutResponse> {
   return invoke<GridLayoutResponse>("get_cached_full_grid_layout", {
     search,
     containerWidth,
+    filter,
   });
 }
 

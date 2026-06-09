@@ -1,4 +1,5 @@
 import {
+  Archive,
   CalendarDays,
   FolderTree,
   Heart,
@@ -13,7 +14,14 @@ interface SidebarProps {
   onNavigate?: (page: AppPage) => void;
 }
 
-export type AppPage = "photos" | "albums" | "folders" | "calendar" | "settings";
+export type AppPage =
+  | "photos"
+  | "favorites"
+  | "deleted"
+  | "albums"
+  | "folders"
+  | "calendar"
+  | "settings";
 
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const navClass = (page: AppPage) =>
@@ -70,12 +78,20 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
           </div>
           <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
             <button
-              className="btn btn-md btn-block w-full max-w-none btn-ghost justify-start text-base font-semibold"
+              className={navClass("favorites")}
               type="button"
-              disabled
+              onClick={() => onNavigate?.("favorites")}
             >
               <Heart size={16} className="shrink-0" />
               <span>Favorites</span>
+            </button>
+            <button
+              className={navClass("deleted")}
+              type="button"
+              onClick={() => onNavigate?.("deleted")}
+            >
+              <Archive size={16} className="shrink-0" />
+              <span>Deleted</span>
             </button>
           </nav>
         </div>

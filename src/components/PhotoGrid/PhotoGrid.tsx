@@ -54,6 +54,7 @@ import {
 import { isThumbnailCached } from "../../api/tauri";
 type PhotoGridProps = {
   assets: AssetSummary[];
+  hideArchivedAssets?: boolean;
   isFetching: boolean;
   isFetchingPrevious?: boolean;
   hasNextPage: boolean;
@@ -103,6 +104,7 @@ type ScrollRestoreAnchor = {
 
 export function PhotoGrid({
   assets,
+  hideArchivedAssets = true,
   isFetching,
   isFetchingPrevious = false,
   hasNextPage,
@@ -508,6 +510,10 @@ export function PhotoGrid({
           return override ? { ...asset, ...override } : asset;
         })
         .filter((asset) => {
+          if (!hideArchivedAssets) {
+            return true;
+          }
+
           if (asset.isArchived) {
             return false;
           }
@@ -515,7 +521,7 @@ export function PhotoGrid({
           const visibility = (asset.visibility ?? "").toLowerCase();
           return visibility !== "archive";
         }),
-    [assetOverrides, assets],
+    [assetOverrides, assets, hideArchivedAssets],
   );
 
   const loadedCountText = useMemo(() => {

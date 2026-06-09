@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCachedAssets } from "../api/tauri";
-import type { AssetSummary } from "../types";
+import type { AssetFilter, AssetSummary } from "../types";
 
 export const ASSET_PAGE_SIZE = 30;
 
@@ -27,6 +27,7 @@ export function useAssetWindow(
   enabled: boolean,
   searchTerm: string,
   refreshToken?: string,
+  filter?: AssetFilter | null,
 ): UseAssetWindowReturn {
   const [pages, setPages] = useState<Record<number, AssetPageWindow>>({});
   const [orderedPages, setOrderedPages] = useState<number[]>([]);
@@ -45,17 +46,20 @@ export function useAssetWindow(
         page,
         pageSize: ASSET_PAGE_SIZE,
         search: trimmedSearch,
+        filter: filter ?? null,
       });
 
       const result = await getCachedAssets(
         page,
         ASSET_PAGE_SIZE,
         trimmedSearch,
+        filter ?? null,
       );
 
       const durationMs = Math.round(performance.now() - startedAt);
       console.log("[useAssetWindow] loadPage done", {
         page,
+        filter: filter ?? null,
         itemCount: result.items.length,
         hasNextPage: result.hasNextPage,
         durationMs,
@@ -67,7 +71,7 @@ export function useAssetWindow(
         hasNextPage: result.hasNextPage,
       };
     },
-    [searchTerm],
+    [filter, searchTerm],
   );
 
   const replaceWithPage = useCallback(

@@ -14,6 +14,31 @@ fn is_visible_in_grid(asset: &AssetSummary) -> bool {
     visibility != "archive"
 }
 
+#[derive(Clone, Copy, Debug)]
+enum AssetFilter {
+    All,
+    Favorites,
+    Archived,
+}
+
+fn parse_asset_filter(filter: Option<&str>) -> AssetFilter {
+    match filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("all")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "favorites" => AssetFilter::Favorites,
+        "archived" => AssetFilter::Archived,
+        _ => AssetFilter::All,
+    }
+}
+
+fn include_archived_in_grid(filter: AssetFilter) -> bool {
+    matches!(filter, AssetFilter::Archived)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetPage {
@@ -218,19 +243,21 @@ pub async fn get_cached_assets(
     page: u32,
     page_size: u32,
     search: Option<String>,
+    filter: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
     let started_at = Instant::now();
     let (items, has_next_page) = state
         .db
-        .get_assets(page, page_size, search.as_deref())
+        .get_assets(page, page_size, search.as_deref(), filter.as_deref())
         .map_err(|err| format!("cache read failed: {err}"))?;
 
     eprintln!(
-        "[assets.get_cached_assets] page={} page_size={} search={:?} item_count={} has_next_page={} duration_ms={}",
+        "[assets.get_cached_assets] page={} page_size={} search={:?} filter={:?} item_count={} has_next_page={} duration_ms={}",
         page,
         page_size,
         search,
+        filter,
         items.len(),
         has_next_page,
         started_at.elapsed().as_millis()
@@ -247,28 +274,31 @@ pub async fn get_cached_assets(
 #[tauri::command]
 pub async fn get_all_cached_assets(
     search: Option<String>,
+    filter: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<AssetSummary>, String> {
     state
         .db
-        .get_all_assets(search.as_deref())
+        .get_all_assets(search.as_deref(), filter.as_deref())
         .map_err(|err| format!("cache read failed: {err}"))
 }
 
 #[tauri::command]
 pub async fn get_cached_asset_days(
     search: Option<String>,
+    filter: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
     let started_at = Instant::now();
     let result = state
         .db
-        .get_asset_days(search.as_deref())
+        .get_asset_days(search.as_deref(), filter.as_deref())
         .map_err(|err| format!("asset day query failed: {err}"))?;
 
     eprintln!(
-        "[assets.get_cached_asset_days] search={:?} day_count={} duration_ms={}",
+        "[assets.get_cached_asset_days] search={:?} filter={:?} day_count={} duration_ms={}",
         search,
+        filter,
         result.len(),
         started_at.elapsed().as_millis()
     );
@@ -281,19 +311,21 @@ pub async fn get_cached_asset_jump_target(
     date_key: String,
     page_size: u32,
     search: Option<String>,
+    filter: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<AssetDateJumpTarget>, String> {
     let started_at = Instant::now();
     let page = state
         .db
-        .get_asset_jump_target_page(&date_key, page_size, search.as_deref())
+        .get_asset_jump_target_page(&date_key, page_size, search.as_deref(), filter.as_deref())
         .map_err(|err| format!("asset jump target query failed: {err}"))?;
 
     eprintln!(
-        "[assets.get_cached_asset_jump_target] date_key={} page_size={} search={:?} page={:?} duration_ms={}",
+        "[assets.get_cached_asset_jump_target] date_key={} page_size={} search={:?} filter={:?} page={:?} duration_ms={}",
         date_key,
         page_size,
         search,
+        filter,
         page,
         started_at.elapsed().as_millis()
     );
@@ -305,9 +337,11 @@ pub async fn get_cached_asset_jump_target(
 pub async fn get_cached_timeline_layout(
     search: Option<String>,
     container_width: f64,
+    filter: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<TimelineLayoutResponse, String> {
     let started_at = Instant::now();
+    let parsed_filter = parse_asset_filter(filter.as_deref());
     if container_width <= 0.0 {
         return Ok(TimelineLayoutResponse {
             total_rows: 0,
@@ -318,12 +352,12 @@ pub async fn get_cached_timeline_layout(
 
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref())
+        .get_all_assets(search.as_deref(), filter.as_deref())
         .map_err(|err| format!("timeline layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
         .into_iter()
-        .filter(is_visible_in_grid)
+        .filter(|asset| include_archived_in_grid(parsed_filter) || is_visible_in_grid(asset))
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,
@@ -383,8 +417,9 @@ pub async fn get_cached_timeline_layout(
     };
 
     eprintln!(
-        "[assets.get_cached_timeline_layout] search={:?} container_width={} days={} months={} total_rows={} duration_ms={}",
+        "[assets.get_cached_timeline_layout] search={:?} filter={:?} container_width={} days={} months={} total_rows={} duration_ms={}",
         search,
+        filter,
         container_width,
         response.days.len(),
         response.months.len(),
@@ -399,9 +434,11 @@ pub async fn get_cached_timeline_layout(
 pub async fn get_cached_full_grid_layout(
     search: Option<String>,
     container_width: f64,
+    filter: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
+    let parsed_filter = parse_asset_filter(filter.as_deref());
     if container_width <= 0.0 {
         return Ok(GridLayoutResponse {
             sections: Vec::new(),
@@ -410,12 +447,12 @@ pub async fn get_cached_full_grid_layout(
 
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref())
+        .get_all_assets(search.as_deref(), filter.as_deref())
         .map_err(|err| format!("full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
         .into_iter()
-        .filter(is_visible_in_grid)
+        .filter(|asset| include_archived_in_grid(parsed_filter) || is_visible_in_grid(asset))
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,
@@ -429,8 +466,9 @@ pub async fn get_cached_full_grid_layout(
     let response = calculate_grid_layout(layout_assets, container_width)?;
 
     eprintln!(
-        "[assets.get_cached_full_grid_layout] search={:?} container_width={} sections={} duration_ms={}",
+        "[assets.get_cached_full_grid_layout] search={:?} filter={:?} container_width={} sections={} duration_ms={}",
         search,
+        filter,
         container_width,
         response.sections.len(),
         started_at.elapsed().as_millis()

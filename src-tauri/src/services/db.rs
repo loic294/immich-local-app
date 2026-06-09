@@ -481,17 +481,18 @@ impl Database {
         page: u32,
         page_size: u32,
         search: Option<&str>,
+        filter: Option<&str>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
 
         let limit = i64::from(page_size) + 1;
         let search_pattern = search_pattern(search);
+        let filter_clause = asset_filter_where_clause(filter);
 
         let mut items = if let Some(pattern) = search_pattern.as_deref() {
-            let mut stmt = conn
-                .prepare(
-                    "
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -509,16 +510,22 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE
-                        original_file_name LIKE ?3 COLLATE NOCASE
-                        OR COALESCE(camera, '') LIKE ?3 COLLATE NOCASE
-                        OR COALESCE(lens, '') LIKE ?3 COLLATE NOCASE
-                        OR COALESCE(file_extension, '') LIKE ?3 COLLATE NOCASE
-                        OR COALESCE(people, '') LIKE ?3 COLLATE NOCASE
-                        OR COALESCE(tags, '') LIKE ?3 COLLATE NOCASE
+                        (
+                            original_file_name LIKE ?3 COLLATE NOCASE
+                            OR COALESCE(camera, '') LIKE ?3 COLLATE NOCASE
+                            OR COALESCE(lens, '') LIKE ?3 COLLATE NOCASE
+                            OR COALESCE(file_extension, '') LIKE ?3 COLLATE NOCASE
+                            OR COALESCE(people, '') LIKE ?3 COLLATE NOCASE
+                            OR COALESCE(tags, '') LIKE ?3 COLLATE NOCASE
+                        )
+                        AND ({})
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     LIMIT ?1 OFFSET ?2
                     ",
-                )
+                filter_clause
+            );
+            let mut stmt = conn
+                .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
             let rows = stmt
@@ -532,9 +539,8 @@ impl Database {
 
             branch_items
         } else {
-            let mut stmt = conn
-                .prepare(
-                    "
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -551,10 +557,14 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
+                    WHERE ({})
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     LIMIT ?1 OFFSET ?2
                     ",
-                )
+                filter_clause
+            );
+            let mut stmt = conn
+                .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
             let rows = stmt
@@ -577,14 +587,18 @@ impl Database {
         Ok((items, has_next_page))
     }
 
-    pub fn get_all_assets(&self, search: Option<&str>) -> Result<Vec<AssetSummary>, String> {
+    pub fn get_all_assets(
+        &self,
+        search: Option<&str>,
+        filter: Option<&str>,
+    ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
+        let filter_clause = asset_filter_where_clause(filter);
 
         let items = if let Some(pattern) = search_pattern.as_deref() {
-            let mut stmt = conn
-                .prepare(
-                    "
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -602,15 +616,21 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE
-                        original_file_name LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(camera, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(lens, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(file_extension, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(people, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
+                        (
+                            original_file_name LIKE ?1 COLLATE NOCASE
+                            OR COALESCE(camera, '') LIKE ?1 COLLATE NOCASE
+                            OR COALESCE(lens, '') LIKE ?1 COLLATE NOCASE
+                            OR COALESCE(file_extension, '') LIKE ?1 COLLATE NOCASE
+                            OR COALESCE(people, '') LIKE ?1 COLLATE NOCASE
+                            OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
+                        )
+                        AND ({})
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     ",
-                )
+                filter_clause
+            );
+            let mut stmt = conn
+                .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
             let rows = stmt
@@ -624,9 +644,8 @@ impl Database {
 
             branch_items
         } else {
-            let mut stmt = conn
-                .prepare(
-                    "
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -643,9 +662,13 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
+                    WHERE ({})
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     ",
-                )
+                filter_clause
+            );
+            let mut stmt = conn
+                .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
             let rows = stmt
@@ -663,29 +686,37 @@ impl Database {
         Ok(items)
     }
 
-    pub fn get_asset_days(&self, search: Option<&str>) -> Result<Vec<String>, String> {
+        pub fn get_asset_days(
+                &self,
+                search: Option<&str>,
+                filter: Option<&str>,
+        ) -> Result<Vec<String>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
+                let filter_clause = asset_filter_where_clause(filter);
 
         let days = if let Some(pattern) = search_pattern.as_deref() {
+                        let query = format!(
+                                "
+                                        SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
+                                        FROM assets
+                                        WHERE file_created_at IS NOT NULL
+                                            AND length(file_created_at) >= 10
+                                            AND (
+                                                original_file_name LIKE ?1 COLLATE NOCASE
+                                                OR COALESCE(camera, '') LIKE ?1 COLLATE NOCASE
+                                                OR COALESCE(lens, '') LIKE ?1 COLLATE NOCASE
+                                                OR COALESCE(file_extension, '') LIKE ?1 COLLATE NOCASE
+                                                OR COALESCE(people, '') LIKE ?1 COLLATE NOCASE
+                                                OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
+                                            )
+                                            AND ({})
+                                        ORDER BY day_key DESC
+                                        ",
+                                filter_clause
+                        );
             let mut stmt = conn
-                .prepare(
-                    "
-                    SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
-                    FROM assets
-                    WHERE file_created_at IS NOT NULL
-                      AND length(file_created_at) >= 10
-                      AND (
-                        original_file_name LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(camera, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(lens, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(file_extension, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(people, '') LIKE ?1 COLLATE NOCASE
-                        OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
-                      )
-                    ORDER BY day_key DESC
-                    ",
-                )
+                                .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
             let rows = stmt
@@ -699,16 +730,19 @@ impl Database {
 
             branch_days
         } else {
-            let mut stmt = conn
-                .prepare(
-                    "
+            let query = format!(
+                "
                     SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
                     FROM assets
                     WHERE file_created_at IS NOT NULL
                       AND length(file_created_at) >= 10
+                      AND ({})
                     ORDER BY day_key DESC
                     ",
-                )
+                filter_clause
+            );
+            let mut stmt = conn
+                .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
             let rows = stmt
@@ -779,12 +813,14 @@ impl Database {
         date_key: &str,
         page_size: u32,
         search: Option<&str>,
+        filter: Option<&str>,
     ) -> Result<Option<u32>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
+        let filter_clause = asset_filter_where_clause(filter);
 
         let exists = if let Some(pattern) = search_pattern.as_deref() {
-            conn.query_row(
+            let query = format!(
                 "
                 SELECT EXISTS(
                     SELECT 1
@@ -799,24 +835,26 @@ impl Database {
                         OR COALESCE(people, '') LIKE ?2 COLLATE NOCASE
                         OR COALESCE(tags, '') LIKE ?2 COLLATE NOCASE
                       )
+                      AND ({})
                 )
                 ",
-                params![date_key, pattern],
-                |row| row.get::<_, i32>(0),
-            )
+                filter_clause
+            );
+            conn.query_row(&query, params![date_key, pattern], |row| row.get::<_, i32>(0))
         } else {
-            conn.query_row(
+            let query = format!(
                 "
                 SELECT EXISTS(
                     SELECT 1
                     FROM assets
                     WHERE file_created_at IS NOT NULL
                       AND substr(file_created_at, 1, 10) = ?1
+                      AND ({})
                 )
                 ",
-                params![date_key],
-                |row| row.get::<_, i32>(0),
-            )
+                filter_clause
+            );
+            conn.query_row(&query, params![date_key], |row| row.get::<_, i32>(0))
         }
         .map_err(|err| err.to_string())?;
 
@@ -825,35 +863,37 @@ impl Database {
         }
 
         let newer_count = if let Some(pattern) = search_pattern.as_deref() {
-            conn.query_row(
-                "
-                SELECT COUNT(*)
-                FROM assets
-                WHERE file_created_at IS NOT NULL
-                  AND substr(file_created_at, 1, 10) > ?1
-                  AND (
-                    original_file_name LIKE ?2 COLLATE NOCASE
-                    OR COALESCE(camera, '') LIKE ?2 COLLATE NOCASE
-                    OR COALESCE(lens, '') LIKE ?2 COLLATE NOCASE
-                    OR COALESCE(file_extension, '') LIKE ?2 COLLATE NOCASE
-                    OR COALESCE(people, '') LIKE ?2 COLLATE NOCASE
-                    OR COALESCE(tags, '') LIKE ?2 COLLATE NOCASE
-                  )
-                ",
-                params![date_key, pattern],
-                |row| row.get::<_, i64>(0),
-            )
+                        let query = format!(
+                                "
+                                SELECT COUNT(*)
+                                FROM assets
+                                WHERE file_created_at IS NOT NULL
+                                    AND substr(file_created_at, 1, 10) > ?1
+                                    AND (
+                                        original_file_name LIKE ?2 COLLATE NOCASE
+                                        OR COALESCE(camera, '') LIKE ?2 COLLATE NOCASE
+                                        OR COALESCE(lens, '') LIKE ?2 COLLATE NOCASE
+                                        OR COALESCE(file_extension, '') LIKE ?2 COLLATE NOCASE
+                                        OR COALESCE(people, '') LIKE ?2 COLLATE NOCASE
+                                        OR COALESCE(tags, '') LIKE ?2 COLLATE NOCASE
+                                    )
+                                    AND ({})
+                                ",
+                                filter_clause
+                        );
+                        conn.query_row(&query, params![date_key, pattern], |row| row.get::<_, i64>(0))
         } else {
-            conn.query_row(
-                "
-                SELECT COUNT(*)
-                FROM assets
-                WHERE file_created_at IS NOT NULL
-                  AND substr(file_created_at, 1, 10) > ?1
-                ",
-                params![date_key],
-                |row| row.get::<_, i64>(0),
-            )
+                        let query = format!(
+                                "
+                                SELECT COUNT(*)
+                                FROM assets
+                                WHERE file_created_at IS NOT NULL
+                                    AND substr(file_created_at, 1, 10) > ?1
+                                    AND ({})
+                                ",
+                                filter_clause
+                        );
+                        conn.query_row(&query, params![date_key], |row| row.get::<_, i64>(0))
         }
         .map_err(|err| err.to_string())?;
 
@@ -1776,4 +1816,22 @@ fn search_pattern(search: Option<&str>) -> Option<String> {
     }
 
     Some(format!("%{}%", term))
+}
+
+fn asset_filter_where_clause(filter: Option<&str>) -> &'static str {
+    match filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("all")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "favorites" => {
+            "is_favorite = 1 AND COALESCE(is_archived, 0) = 0 AND LOWER(COALESCE(visibility, '')) != 'archive'"
+        }
+        "archived" => {
+            "COALESCE(is_archived, 0) = 1 OR LOWER(COALESCE(visibility, '')) = 'archive'"
+        }
+        _ => "1=1",
+    }
 }

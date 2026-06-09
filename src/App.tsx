@@ -10,6 +10,8 @@ import { CalendarPage } from "./pages/CalendarPage";
 import { FoldersPage } from "./pages/FoldersPage";
 import { PhotosPage } from "./pages/PhotosPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { FavoritesPage } from "./pages/FavoritesPage";
+import { DeletedPage } from "./pages/DeletedPage";
 
 export function App() {
   const [activePage, setActivePage] = useState<AppPage>("photos");
@@ -172,6 +174,26 @@ export function App() {
 
   if (activePage === "settings") {
     return <SettingsPage onNavigate={setActivePage} onLogout={logout} />;
+  }
+
+  if (activePage === "favorites") {
+    return (
+      <FavoritesPage
+        session={session}
+        onNavigate={setActivePage}
+        onLogout={logout}
+      />
+    );
+  }
+
+  if (activePage === "deleted") {
+    return (
+      <DeletedPage
+        session={session}
+        onNavigate={setActivePage}
+        onLogout={logout}
+      />
+    );
   }
 
   return (

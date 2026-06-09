@@ -141,6 +141,8 @@ export type CacheStats = {
 
 export type AssetVisibility = "timeline" | "archive" | "hidden" | "locked";
 
+export type AssetFilter = "all" | "favorites" | "archived";
+
 export type AssetCacheDetails = {
   id: string;
   originalFileName: string;
