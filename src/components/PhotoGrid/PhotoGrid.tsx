@@ -2742,7 +2742,10 @@ function AssetThumbnail({
       ) : null}
 
       {asset.isFavorite ? (
-        <div className="absolute bottom-1 right-1 z-10 text-error" aria-hidden="true">
+        <div
+          className="absolute bottom-1 right-1 z-10 text-error"
+          aria-hidden="true"
+        >
           <Heart size={14} fill="currentColor" />
         </div>
       ) : null}
