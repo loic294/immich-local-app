@@ -1,6 +1,6 @@
 import { X, Plus, Link, BookImage, Folder, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getAssetThumbnail } from "../../api/tauri";
+import { copyAssetsToClipboard, getAssetThumbnail } from "../../api/tauri";
 import type { Session } from "../../hooks/useSession";
 import type { AlbumSummary } from "../../types";
 import { Header } from "./Header";
@@ -51,6 +51,7 @@ export function AppTopBar({
   const [newAlbumName, setNewAlbumName] = useState("");
   const [isSubmittingAlbum, setIsSubmittingAlbum] = useState(false);
   const [isCreatingShare, setIsCreatingShare] = useState(false);
+  const [isCopyingImages, setIsCopyingImages] = useState(false);
   const [shareLink, setShareLink] = useState("");
   const [isArchiving, setIsArchiving] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -177,6 +178,25 @@ export function AppTopBar({
     }
   };
 
+  const submitCopyImagesToClipboard = async () => {
+    if (!canRunSelectionAction) {
+      return;
+    }
+
+    setSelectionError(null);
+    setIsCopyingImages(true);
+
+    try {
+      await copyAssetsToClipboard(selectedAssetIds);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to copy images";
+      setSelectionError(message);
+    } finally {
+      setIsCopyingImages(false);
+    }
+  };
+
   const submitArchive = async () => {
     if (!onArchiveSelected || !canRunSelectionAction) {
       return;
@@ -233,22 +253,48 @@ export function AppTopBar({
               <BookImage size={16} />
               Add to album
             </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-outline"
-              onClick={() => {
-                setSelectionError(null);
-                setShareLink("");
-                setShowShareModal(true);
-              }}
-            >
-              <Link size={16} />
-              Link Share with a link
-            </button>
-            <button type="button" className="btn btn-sm btn-outline" disabled>
-              <Folder size={16} />
-              Open in file explorer
-            </button>
+            <details className="dropdown dropdown-end">
+              <summary className="btn btn-sm btn-primary">
+                <Link size={16} />
+                Share
+              </summary>
+              <ul className="menu dropdown-content z-[130] mt-2 w-58 rounded-box border border-base-300 bg-base-100 p-1 shadow">
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectionError(null);
+                      setShareLink("");
+                      setShowShareModal(true);
+                    }}
+                  >
+                    <Link size={14} />
+                    Share with a link
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    disabled={isCopyingImages}
+                    onClick={() => {
+                      void submitCopyImagesToClipboard();
+                    }}
+                  >
+                    <BookImage size={14} />
+                    {isCopyingImages
+                      ? "Copying images..."
+                      : "Copy images to clipboard"}
+                  </button>
+                </li>
+                <li>
+                  <button type="button" disabled className="opacity-40">
+                    <Folder size={14} />
+                    Open in file explorer
+                  </button>
+                </li>
+              </ul>
+            </details>
+            <div className="h-5 w-px bg-base-300" />
             <button
               type="button"
               className="btn btn-sm btn-error"

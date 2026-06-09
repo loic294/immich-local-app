@@ -1230,6 +1230,63 @@ impl ImmichClient {
         Ok(to_data_url(&content_type, bytes.as_ref()))
     }
 
+    pub async fn get_asset_thumbnail_file_path(&self, asset_id: &str) -> Result<String, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let cache_dir = thumbnail_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+
+        if let Some(cached_path) = read_cached_thumbnail_path(&cache_dir, asset_id) {
+            return Ok(cached_path.to_string_lossy().to_string());
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!(
+            "{}/api/assets/{}/thumbnail?size=preview",
+            session.server_url, asset_id
+        );
+
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "thumbnail request failed for {} with status {}",
+                asset_id, status
+            ));
+        }
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("image/jpeg")
+            .to_string();
+
+        let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+        let ext = extension_from_mime(&content_type);
+        let output = cache_dir.join(format!("{}.{}", asset_id, ext));
+        fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
+
+        Ok(output.to_string_lossy().to_string())
+    }
+
     pub async fn get_asset_playback_file_path(&self, asset_id: &str) -> Result<String, String> {
         let session = self
             .session
@@ -2410,6 +2467,17 @@ fn read_cached_thumbnail(cache_dir: &Path, asset_id: &str) -> Result<Option<Stri
     }
 
     Ok(None)
+}
+
+fn read_cached_thumbnail_path(cache_dir: &Path, asset_id: &str) -> Option<PathBuf> {
+    for ext in ["jpg", "jpeg", "webp", "png"] {
+        let candidate = cache_dir.join(format!("{}.{}", asset_id, ext));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 fn read_cached_video_path(cache_dir: &Path, asset_id: &str) -> Result<Option<String>, String> {

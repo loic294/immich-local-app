@@ -22,7 +22,7 @@ use commands::folders::get_cached_folder_full_grid_layout;
 use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
 use commands::memories::fetch_memories;
 use commands::settings::{get_cache_path, get_cache_stats, get_settings, update_settings};
-use commands::shell::open_url;
+use commands::shell::{copy_assets_to_clipboard, open_url};
 use commands::sync::{
     check_for_new_assets, force_full_asset_sync, get_sync_status, start_asset_sync,
 };
@@ -44,6 +44,7 @@ pub fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_clipboard::init())
         .setup(|app| {
             match app.deep_link().get_current() {
                 Ok(Some(urls)) => {
@@ -102,6 +103,7 @@ pub fn main() {
             get_cache_stats,
             get_cache_path,
             open_url,
+            copy_assets_to_clipboard,
             fetch_assets_by_month,
             get_calendar_assets_paged,
             calculate_grid_layout,

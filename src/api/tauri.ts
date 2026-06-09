@@ -475,6 +475,10 @@ export async function openUrl(url: string): Promise<void> {
   return invoke<void>("open_url", { url });
 }
 
+export async function copyAssetsToClipboard(assetIds: string[]): Promise<void> {
+  return invoke<void>("copy_assets_to_clipboard", { assetIds });
+}
+
 export async function fetchAssetsByMonth(
   year: number,
   month: number,
