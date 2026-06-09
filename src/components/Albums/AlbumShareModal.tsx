@@ -371,7 +371,9 @@ export function AlbumShareModal({
                             void removeUser(user.id);
                           }}
                         >
-                          {removingUserId === user.id ? "Removing..." : "Remove"}
+                          {removingUserId === user.id
+                            ? "Removing..."
+                            : "Remove"}
                         </button>
                       </li>
                     ))}
