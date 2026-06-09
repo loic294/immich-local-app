@@ -7,6 +7,7 @@ use commands::albums::{
     create_share_link_for_assets, fetch_albums, get_album_assets_paged,
     get_album_share_link, get_album_share_users, get_cached_album_full_grid_layout,
     get_or_create_album_share_link, get_shareable_users, remove_user_from_album,
+    save_album_locally,
 };
 use commands::assets::{
     calculate_grid_layout, fetch_assets, fetch_assets_by_month, get_all_cached_assets,
@@ -108,6 +109,7 @@ pub fn main() {
             get_shareable_users,
             add_user_to_album,
             remove_user_from_album,
+            save_album_locally,
             get_unique_original_paths,
             get_folder_assets_paged,
             get_cached_folder_full_grid_layout,

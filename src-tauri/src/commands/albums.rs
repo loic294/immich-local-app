@@ -1,11 +1,26 @@
 use crate::commands::assets::{
     calculate_grid_layout, AssetPage, GridLayoutAssetInput, GridLayoutResponse,
 };
+use crate::commands::shell::copy_assets_to_local_folder_internal;
 use crate::services::immich_client::{
     AlbumOwnerSummary, AlbumShareUser, AlbumSummary, AlbumUserCandidate,
 };
 use crate::AppState;
+use chrono::{DateTime, Datelike};
+use serde::Serialize;
+use std::fs;
+use std::path::Path;
 use std::time::Instant;
+use tauri::Emitter;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumSaveProgress {
+    pub total_assets: u32,
+    pub copied_count: u32,
+    pub current_file: Option<String>,
+    pub status: String,
+}
 
 fn is_visible_in_grid(asset: &crate::services::immich_client::AssetSummary) -> bool {
     if asset.is_archived {
@@ -268,4 +283,151 @@ pub async fn remove_user_from_album(
         .remove_user_from_album(&album_id, &user_id)
         .await
         .map_err(|err| format!("remove user from album failed: {err}"))
+}
+
+fn sanitize_album_folder_name(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+#[tauri::command]
+pub async fn save_album_locally(
+    album_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    eprintln!("[album-save-locally] start album_id={}", album_id);
+
+    // Get all albums to find the one with matching ID
+    let albums = state
+        .db
+        .get_albums()
+        .map_err(|err| format!("[album-save-locally] failed to read albums from cache: {}", err))?;
+
+    let album = albums
+        .iter()
+        .find(|a| a.id == album_id)
+        .ok_or_else(|| format!("[album-save-locally] album not found: {}", album_id))?;
+
+    eprintln!(
+        "[album-save-locally] found album name={} start_date={:?}",
+        album.album_name, album.start_date
+    );
+
+    // Extract year from start_date
+    let year = if let Some(date_str) = &album.start_date {
+        match DateTime::parse_from_rfc3339(date_str) {
+            Ok(dt) => dt.year(),
+            Err(_) => {
+                eprintln!(
+                    "[album-save-locally] failed to parse date, using current year: {}",
+                    date_str
+                );
+                chrono::Local::now().year()
+            }
+        }
+    } else {
+        eprintln!("[album-save-locally] no start_date, using current year");
+        chrono::Local::now().year()
+    };
+
+    // Sanitize album name for filesystem
+    let sanitized_name = sanitize_album_folder_name(&album.album_name);
+
+    // Get user's configured local folder path from settings
+    let settings = state
+        .db
+        .get_settings()
+        .map_err(|err| format!("[album-save-locally] failed to get settings: {}", err))?;
+
+    let base_folder = if settings.user_local_folder_path.is_empty() {
+        eprintln!("[album-save-locally] user_local_folder_path is empty, using fallback ~/Albums");
+        let home = std::env::var("HOME")
+            .map_err(|_| "[album-save-locally] cannot resolve home directory".to_string())?;
+        Path::new(&home).join("Albums")
+    } else {
+        Path::new(&settings.user_local_folder_path).to_path_buf()
+    };
+
+    let destination = base_folder.join(year.to_string()).join(&sanitized_name);
+
+    eprintln!(
+        "[album-save-locally] creating destination folder: {}",
+        destination.to_string_lossy()
+    );
+
+    // Create the destination folder if it doesn't exist
+    fs::create_dir_all(&destination)
+        .map_err(|err| format!("[album-save-locally] failed to create folder: {}", err))?;
+
+    // Get all assets in the album
+    let assets = state
+        .immich
+        .get_album_assets(&album_id)
+        .await
+        .map_err(|err| format!("[album-save-locally] failed to get album assets: {}", err))?;
+
+    let asset_ids: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
+    eprintln!(
+        "[album-save-locally] found {} assets to copy",
+        asset_ids.len()
+    );
+
+    if asset_ids.is_empty() {
+        eprintln!("[album-save-locally] no assets in album, returning empty folder");
+        let result = destination.to_string_lossy().to_string();
+        eprintln!("[album-save-locally] done folder_path={}", result);
+        return Ok(result);
+    }
+
+    let total_assets = asset_ids.len() as u32;
+
+    // Emit initial progress event
+    let _ = app.emit(
+        "album_save_progress",
+        AlbumSaveProgress {
+            total_assets,
+            copied_count: 0,
+            current_file: None,
+            status: "Starting download...".to_string(),
+        },
+    );
+
+    // Call the copy function with allow_cached_fallback=true
+    let copy_result = copy_assets_to_local_folder_internal(
+        asset_ids,
+        destination.to_string_lossy().to_string(),
+        true,
+        state,
+        Some(app.clone()),
+    )
+    .await?;
+
+    // Emit completion progress event
+    let _ = app.emit(
+        "album_save_progress",
+        AlbumSaveProgress {
+            total_assets,
+            copied_count: copy_result.copied_original_count + copy_result.copied_cached_count,
+            current_file: None,
+            status: "Download complete".to_string(),
+        },
+    );
+
+    eprintln!(
+        "[album-save-locally] copy completed: copied_original={} copied_cached={} failed={}",
+        copy_result.copied_original_count, copy_result.copied_cached_count, copy_result.failed_count
+    );
+
+    let result = destination.to_string_lossy().to_string();
+    eprintln!("[album-save-locally] done folder_path={}", result);
+    Ok(result)
 }

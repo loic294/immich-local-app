@@ -1,8 +1,16 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
-import { Link, Share2 } from "lucide-react";
+import {
+  Link,
+  Share2,
+  HardDrive,
+  Check,
+  LoaderCircle,
+  FolderOpen,
+} from "lucide-react";
 import type { GridLayoutResponse } from "../types";
 import { AlbumCard } from "../components/Albums/AlbumCard";
 import { AlbumShareModal } from "../components/Albums/AlbumShareModal";
+import { AlbumSaveProgressModal } from "../components/Albums/AlbumSaveProgressModal";
 import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
@@ -18,7 +26,9 @@ import {
   createShareLinkForAssets,
   fetchAlbums,
   getCachedAlbumFullGridLayout,
+  openFolderInFileExplorer,
   openUrl,
+  saveAlbumLocally,
   updateAssetVisibility,
 } from "../api/tauri";
 
@@ -44,6 +54,59 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const [showShareAlbumModal, setShowShareAlbumModal] = useState(false);
   const [canManageSharing, setCanManageSharing] = useState(false);
+  const [savedAlbumPaths, setSavedAlbumPaths] = useState<Map<string, string>>(
+    new Map(),
+  );
+  const [isSavingAlbum, setIsSavingAlbum] = useState(false);
+  const [saveAlbumError, setSaveAlbumError] = useState<string | null>(null);
+  const [showSaveProgressModal, setShowSaveProgressModal] = useState(false);
+
+  const getValidSavedFolderPath = useCallback(
+    (albumId: string): string | null => {
+      const value = savedAlbumPaths.get(albumId);
+      if (typeof value !== "string") {
+        return null;
+      }
+      const normalized = value.trim();
+      return normalized.length > 0 ? normalized : null;
+    },
+    [savedAlbumPaths],
+  );
+
+  // Load saved albums from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("saved_album_paths");
+      if (saved) {
+        const paths = JSON.parse(saved) as Record<string, string>;
+        const normalizedEntries = Object.entries(paths).filter(
+          ([, folderPath]) =>
+            typeof folderPath === "string" && folderPath.trim().length > 0,
+        );
+        setSavedAlbumPaths(new Map(normalizedEntries));
+      }
+    } catch (err) {
+      console.error("[album-save-locally] Failed to load saved albums:", err);
+    }
+  }, []);
+
+  // Persist saved albums to localStorage whenever they change
+  useEffect(() => {
+    try {
+      const paths: Record<string, string> = {};
+      for (const [albumId, folderPath] of savedAlbumPaths.entries()) {
+        if (typeof folderPath === "string" && folderPath.trim().length > 0) {
+          paths[albumId] = folderPath;
+        }
+      }
+      localStorage.setItem("saved_album_paths", JSON.stringify(paths));
+    } catch (err) {
+      console.error(
+        "[album-save-locally] Failed to persist saved albums:",
+        err,
+      );
+    }
+  }, [savedAlbumPaths]);
 
   const albumGridFullLayout = useCallback<
     (containerWidth: number) => Promise<GridLayoutResponse>
@@ -230,6 +293,146 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     };
   }, [selectedAlbum, session.userId]);
 
+  const handleSaveAlbumLocally = async () => {
+    if (!selectedAlbum) {
+      console.warn("[album-save-locally] save requested with no album selected");
+      return;
+    }
+
+    console.log(
+      "[album-save-locally] save start",
+      "albumId=",
+      selectedAlbum.id,
+      "albumName=",
+      selectedAlbum.albumName,
+      "assetCount=",
+      selectedAlbum.assetCount ?? 0,
+    );
+
+    setIsSavingAlbum(true);
+    setSaveAlbumError(null);
+    setShowSaveProgressModal(true);
+
+    try {
+      const result = await saveAlbumLocally(selectedAlbum.id);
+      setSavedAlbumPaths((prev) => {
+        const updated = new Map(prev);
+        updated.set(selectedAlbum.id, result.folderPath);
+        return updated;
+      });
+      console.log(
+        "[album-save-locally] save success",
+        "albumId=",
+        selectedAlbum.id,
+        "folderPath=",
+        result.folderPath,
+      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setSaveAlbumError(errorMessage);
+      console.error(
+        "[album-save-locally] save failed",
+        "albumId=",
+        selectedAlbum.id,
+        "error=",
+        errorMessage,
+        err,
+      );
+    } finally {
+      setIsSavingAlbum(false);
+      // Keep progress modal visible for a short moment after completion
+      setTimeout(() => {
+        setShowSaveProgressModal(false);
+      }, 500);
+    }
+  };
+
+  const handleOpenAlbumFolder = async () => {
+    if (!selectedAlbum) {
+      console.error(
+        "[album-save-locally] open folder requested with no album selected",
+      );
+      return;
+    }
+
+    let folderPath = getValidSavedFolderPath(selectedAlbum.id);
+    console.log(
+      "[album-save-locally] open folder start",
+      "albumId=",
+      selectedAlbum.id,
+      "folderPath=",
+      folderPath,
+    );
+
+    if (!folderPath) {
+      console.warn(
+        "[album-save-locally] missing folder path in local storage, attempting to recover",
+        selectedAlbum.id,
+      );
+
+      try {
+        const result = await saveAlbumLocally(selectedAlbum.id);
+        folderPath = result.folderPath?.trim() ?? "";
+
+        if (!folderPath) {
+          throw new Error("Save completed but returned an empty folder path");
+        }
+
+        setSavedAlbumPaths((prev) => {
+          const updated = new Map(prev);
+          updated.set(selectedAlbum.id, folderPath as string);
+          return updated;
+        });
+        console.log(
+          "[album-save-locally] recovered folder path from save_album_locally",
+          selectedAlbum.id,
+          folderPath,
+        );
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error
+            ? err.message
+            : "Folder path not found for this album";
+        setSaveAlbumError(errorMsg);
+        console.error(
+          "[album-save-locally] failed to recover missing folder path",
+          selectedAlbum.id,
+          err,
+        );
+        return;
+      }
+    }
+
+    try {
+      await openFolderInFileExplorer(folderPath);
+      console.log(
+        "[album-save-locally] open folder success",
+        "albumId=",
+        selectedAlbum.id,
+        "folderPath=",
+        folderPath,
+      );
+    } catch (err) {
+      const errorMsg =
+        err instanceof Error ? err.message : "Failed to open folder";
+      setSaveAlbumError(errorMsg);
+      console.error(
+        "[album-save-locally] open folder failed",
+        "albumId=",
+        selectedAlbum.id,
+        "folderPath=",
+        folderPath,
+        "error=",
+        errorMsg,
+        err,
+      );
+    }
+  };
+
+  const isAlbumSavedLocally = selectedAlbum
+    ? Boolean(getValidSavedFolderPath(selectedAlbum.id))
+    : false;
+
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage="albums" onNavigate={onNavigate} />
@@ -306,17 +509,65 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                   </h1>
                 </div>
 
-                {canManageSharing ? (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary shrink-0"
-                    onClick={() => setShowShareAlbumModal(true)}
-                  >
-                    <Link size={16} />
-                    Share Album
-                  </button>
-                ) : null}
+                <div className="flex items-center gap-2 shrink-0">
+                  {!isAlbumSavedLocally ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary shrink-0"
+                      onClick={handleSaveAlbumLocally}
+                      disabled={isSavingAlbum}
+                    >
+                      {isSavingAlbum ? (
+                        <>
+                          <LoaderCircle size={16} className="animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <HardDrive size={16} />
+                          Save Locally
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost shrink-0"
+                      onClick={handleOpenAlbumFolder}
+                    >
+                      <FolderOpen size={16} />
+                      Open in File Explorer
+                    </button>
+                  )}
+
+                  {canManageSharing ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary shrink-0"
+                      onClick={() => setShowShareAlbumModal(true)}
+                    >
+                      <Link size={16} />
+                      Share Album
+                    </button>
+                  ) : null}
+                </div>
               </div>
+
+              {saveAlbumError ? (
+                <div role="alert" className="alert alert-error shrink-0">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <span className="text-sm break-words">
+                      {saveAlbumError}
+                    </span>
+                    <button
+                      className="link link-hover text-sm ml-auto shrink-0"
+                      onClick={() => setSaveAlbumError(null)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               {selectedAlbum.description ? (
                 <div data-test="album-description" className="shrink-0">
@@ -358,6 +609,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 albumId={selectedAlbum.id}
                 albumName={selectedAlbum.albumName}
                 onClose={() => setShowShareAlbumModal(false)}
+              />
+
+              <AlbumSaveProgressModal
+                open={showSaveProgressModal}
+                albumName={selectedAlbum.albumName}
               />
             </>
           ) : (

@@ -128,6 +128,10 @@ export type AlbumUserCandidate = {
   email: string | null;
 };
 
+export type AlbumSaveResponse = {
+  folderPath: string;
+};
+
 export type Settings = {
   livePhotoAutoplay: boolean;
   thumbnailCachePath: string;

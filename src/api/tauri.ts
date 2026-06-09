@@ -470,6 +470,15 @@ export async function removeUserFromAlbum(
   });
 }
 
+export async function saveAlbumLocally(
+  albumId: string,
+): Promise<{ folderPath: string }> {
+  const folderPath = await invoke<string>("save_album_locally", {
+    albumId,
+  });
+  return { folderPath };
+}
+
 export async function fetchUniqueOriginalPaths(): Promise<string[]> {
   return getCachedUniqueOriginalPaths();
 }

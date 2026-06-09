@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::AppState;
 use serde::Serialize;
 use tauri::Manager;
+use tauri::Emitter;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +65,23 @@ pub async fn copy_assets_to_local_folder(
     allow_cached_fallback: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<LocalCopyResult, String> {
+    copy_assets_to_local_folder_internal(
+        asset_ids,
+        destination_folder,
+        allow_cached_fallback,
+        state,
+        None,
+    )
+    .await
+}
+
+pub async fn copy_assets_to_local_folder_internal(
+    asset_ids: Vec<String>,
+    destination_folder: String,
+    allow_cached_fallback: bool,
+    state: tauri::State<'_, AppState>,
+    app: Option<tauri::AppHandle>,
+) -> Result<LocalCopyResult, String> {
     println!(
         "[local-copy] start asset_count={} destination={} allow_cached_fallback={}",
         asset_ids.len(),
@@ -92,12 +110,27 @@ pub async fn copy_assets_to_local_folder(
     let mut failed_count = 0u32;
     let mut pending_fallback: Vec<PendingFallback> = Vec::new();
 
+    let total_assets = asset_ids.len() as u32;
+
     for asset_id in asset_ids {
         let details = match state.db.get_asset_details(&asset_id) {
             Ok(Some(value)) => value,
             Ok(None) => {
                 println!("[local-copy] asset not found in cache asset_id={}", asset_id);
                 failed_count += 1;
+                // Emit progress
+                if let Some(ref app) = app {
+                    let copied = copied_original_count + copied_cached_count;
+                    let _ = app.emit(
+                        "album_save_progress",
+                        crate::commands::albums::AlbumSaveProgress {
+                            total_assets,
+                            copied_count: copied,
+                            current_file: None,
+                            status: format!("Copying... ({}/{})", copied, total_assets),
+                        },
+                    );
+                }
                 continue;
             }
             Err(err) => {
@@ -106,6 +139,19 @@ pub async fn copy_assets_to_local_folder(
                     asset_id, err
                 );
                 failed_count += 1;
+                // Emit progress
+                if let Some(ref app) = app {
+                    let copied = copied_original_count + copied_cached_count;
+                    let _ = app.emit(
+                        "album_save_progress",
+                        crate::commands::albums::AlbumSaveProgress {
+                            total_assets,
+                            copied_count: copied,
+                            current_file: None,
+                            status: format!("Copying... ({}/{})", copied, total_assets),
+                        },
+                    );
+                }
                 continue;
             }
         };
@@ -122,6 +168,19 @@ pub async fn copy_assets_to_local_folder(
                 .is_ok()
                 {
                     copied_original_count += 1;
+                    // Emit progress
+                    if let Some(ref app) = app {
+                        let copied = copied_original_count + copied_cached_count;
+                        let _ = app.emit(
+                            "album_save_progress",
+                            crate::commands::albums::AlbumSaveProgress {
+                                total_assets,
+                                copied_count: copied,
+                                current_file: Some(details.original_file_name.clone()),
+                                status: format!("Copying... ({}/{})", copied, total_assets),
+                            },
+                        );
+                    }
                     continue;
                 }
                 println!(
@@ -171,6 +230,19 @@ pub async fn copy_assets_to_local_folder(
                     .is_ok()
                     {
                         copied_original_count += 1;
+                        // Emit progress
+                        if let Some(ref app) = app {
+                            let copied = copied_original_count + copied_cached_count;
+                            let _ = app.emit(
+                                "album_save_progress",
+                                crate::commands::albums::AlbumSaveProgress {
+                                    total_assets,
+                                    copied_count: copied,
+                                    current_file: Some(details.original_file_name.clone()),
+                                    status: format!("Copying... ({}/{})", copied, total_assets),
+                                },
+                            );
+                        }
                         continue;
                     }
 
