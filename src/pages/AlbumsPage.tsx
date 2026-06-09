@@ -295,7 +295,9 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
   const handleSaveAlbumLocally = async () => {
     if (!selectedAlbum) {
-      console.warn("[album-save-locally] save requested with no album selected");
+      console.warn(
+        "[album-save-locally] save requested with no album selected",
+      );
       return;
     }
 
