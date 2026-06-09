@@ -5,6 +5,15 @@ use std::time::Instant;
 use crate::services::immich_client::AssetSummary;
 use crate::AppState;
 
+fn is_visible_in_grid(asset: &AssetSummary) -> bool {
+    if asset.is_archived {
+        return false;
+    }
+
+    let visibility = asset.visibility.as_deref().unwrap_or_default().to_ascii_lowercase();
+    visibility != "archive"
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetPage {
@@ -314,6 +323,7 @@ pub async fn get_cached_timeline_layout(
 
     let layout_assets = all_assets
         .into_iter()
+        .filter(is_visible_in_grid)
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,
@@ -405,6 +415,7 @@ pub async fn get_cached_full_grid_layout(
 
     let layout_assets = all_assets
         .into_iter()
+        .filter(is_visible_in_grid)
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,
@@ -449,6 +460,7 @@ pub async fn get_cached_calendar_full_grid_layout(
 
     let layout_assets = all_assets
         .into_iter()
+        .filter(is_visible_in_grid)
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,

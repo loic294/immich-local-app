@@ -5,6 +5,19 @@ use crate::services::immich_client::{AlbumOwnerSummary, AlbumSummary};
 use crate::AppState;
 use std::time::Instant;
 
+fn is_visible_in_grid(asset: &crate::services::immich_client::AssetSummary) -> bool {
+    if asset.is_archived {
+        return false;
+    }
+
+    let visibility = asset
+        .visibility
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    visibility != "archive"
+}
+
 #[tauri::command]
 pub async fn fetch_albums(state: tauri::State<'_, AppState>) -> Result<Vec<AlbumSummary>, String> {
     let cached = state
@@ -79,6 +92,7 @@ pub async fn get_cached_album_full_grid_layout(
 
     let layout_assets = all_assets
         .into_iter()
+        .filter(is_visible_in_grid)
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,

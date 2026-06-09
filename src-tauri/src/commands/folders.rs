@@ -3,6 +3,19 @@ use crate::commands::assets::{calculate_grid_layout, GridLayoutAssetInput, GridL
 use crate::AppState;
 use std::time::Instant;
 
+fn is_visible_in_grid(asset: &crate::services::immich_client::AssetSummary) -> bool {
+    if asset.is_archived {
+        return false;
+    }
+
+    let visibility = asset
+        .visibility
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    visibility != "archive"
+}
+
 #[tauri::command]
 pub async fn get_unique_original_paths(
     state: tauri::State<'_, AppState>,
@@ -54,6 +67,7 @@ pub async fn get_cached_folder_full_grid_layout(
 
     let layout_assets = all_assets
         .into_iter()
+        .filter(is_visible_in_grid)
         .map(|asset| GridLayoutAssetInput {
             id: asset.id,
             file_created_at: asset.file_created_at,
