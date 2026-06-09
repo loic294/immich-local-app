@@ -144,6 +144,32 @@ pub struct AlbumSummary {
     pub owner: Option<AlbumOwnerSummary>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub is_read_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumShareUser {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumUserCandidate {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -911,6 +937,495 @@ impl ImmichClient {
         }
 
         parse_share_url_from_payload(&body, &session.server_url)
+    }
+
+    pub async fn can_manage_album_sharing(&self, album_id: &str) -> Result<bool, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/albums/{}/users", session.server_url, album_id);
+        eprintln!(
+            "[album-share.can-manage] start album_id={} endpoint={}",
+            album_id, url
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+
+        if status.is_success() {
+            eprintln!(
+                "[album-share.can-manage] success album_id={} status={}",
+                album_id, status
+            );
+            return Ok(true);
+        }
+
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            eprintln!(
+                "[album-share.can-manage] forbidden album_id={} status={}",
+                album_id, status
+            );
+            return Ok(false);
+        }
+
+        Err(format!(
+            "can_manage_album_sharing failed with status {} ({})",
+            status,
+            truncate_for_log(&body)
+        ))
+    }
+
+    pub async fn get_or_create_album_share_link(&self, album_id: &str) -> Result<String, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        eprintln!(
+            "[album-share.link] start album_id={} action=get-or-create",
+            album_id
+        );
+
+        let list_url = format!("{}/api/shared-links", session.server_url);
+        let list_response = self
+            .client
+            .get(&list_url)
+            .headers(headers.clone())
+            .query(&[("type", "ALBUM"), ("albumId", album_id)])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let list_status = list_response.status();
+        let list_body = list_response.text().await.map_err(|err| err.to_string())?;
+
+        if list_status.is_success() {
+            if let Some(existing) =
+                parse_first_share_url_from_payload(&list_body, &session.server_url, album_id)?
+            {
+                eprintln!(
+                    "[album-share.link] existing album_id={} status={}",
+                    album_id, list_status
+                );
+                return Ok(existing);
+            }
+        } else {
+            eprintln!(
+                "[album-share.link] list-non-success album_id={} status={} body={}",
+                album_id,
+                list_status,
+                truncate_for_log(&list_body)
+            );
+        }
+
+        let fallback_response = self
+            .client
+            .get(&list_url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let fallback_status = fallback_response.status();
+        let fallback_body = fallback_response
+            .text()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if fallback_status.is_success() {
+            if let Some(existing) = parse_first_share_url_from_payload(
+                &fallback_body,
+                &session.server_url,
+                album_id,
+            )? {
+                eprintln!(
+                    "[album-share.link] existing album_id={} status={} via=fallback-unfiltered",
+                    album_id, fallback_status
+                );
+                return Ok(existing);
+            }
+        }
+
+        let create_url = format!("{}/api/shared-links", session.server_url);
+        let payload = serde_json::json!({
+            "type": "ALBUM",
+            "albumId": album_id,
+            "allowDownload": true,
+            "showMetadata": true,
+        });
+
+        let response = self
+            .client
+            .post(&create_url)
+            .headers(headers)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+
+        if !status.is_success() {
+            return Err(format!(
+                "create album share link failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        eprintln!(
+            "[album-share.link] created album_id={} status={}",
+            album_id, status
+        );
+
+        parse_share_url_from_payload(&body, &session.server_url)
+    }
+
+    pub async fn get_album_share_link(&self, album_id: &str) -> Result<Option<String>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        eprintln!(
+            "[album-share.link] start album_id={} action=get-existing",
+            album_id
+        );
+
+        let list_url = format!("{}/api/shared-links", session.server_url);
+        let list_response = self
+            .client
+            .get(&list_url)
+            .headers(headers.clone())
+            .query(&[("type", "ALBUM"), ("albumId", album_id)])
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let list_status = list_response.status();
+        let list_body = list_response.text().await.map_err(|err| err.to_string())?;
+
+        if list_status.is_success() {
+            let existing =
+                parse_first_share_url_from_payload(&list_body, &session.server_url, album_id)?;
+            if existing.is_some() {
+                eprintln!(
+                    "[album-share.link] success album_id={} action=get-existing has_link=true",
+                    album_id
+                );
+                return Ok(existing);
+            }
+        } else {
+            eprintln!(
+                "[album-share.link] get-existing filtered-non-success album_id={} status={} body={}",
+                album_id,
+                list_status,
+                truncate_for_log(&list_body)
+            );
+        }
+
+        let fallback_response = self
+            .client
+            .get(&list_url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let fallback_status = fallback_response.status();
+        let fallback_body = fallback_response
+            .text()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if !fallback_status.is_success() {
+            return Err(format!(
+                "get album share link failed with status {} ({})",
+                fallback_status,
+                truncate_for_log(&fallback_body)
+            ));
+        }
+
+        let existing =
+            parse_first_share_url_from_payload(&fallback_body, &session.server_url, album_id)?;
+        eprintln!(
+            "[album-share.link] success album_id={} action=get-existing has_link={} via=fallback-unfiltered",
+            album_id,
+            existing.is_some()
+        );
+
+        Ok(existing)
+    }
+
+    pub async fn get_album_share_users(&self, album_id: &str) -> Result<Vec<AlbumShareUser>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        eprintln!("[album-share.users] start album_id={} action=list", album_id);
+
+        let users_url = format!("{}/api/albums/{}/users", session.server_url, album_id);
+        let users_response = self
+            .client
+            .get(&users_url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let users_status = users_response.status();
+        let users_body = users_response.text().await.map_err(|err| err.to_string())?;
+
+        if users_status.is_success() {
+            let users = parse_album_share_users_payload(&users_body)?;
+            eprintln!(
+                "[album-share.users] success album_id={} count={} via=users-endpoint",
+                album_id,
+                users.len()
+            );
+            return Ok(users);
+        }
+
+        let details_url = format!("{}/api/albums/{}", session.server_url, album_id);
+        let details_response = self
+            .client
+            .get(&details_url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let details_status = details_response.status();
+        let details_body = details_response.text().await.map_err(|err| err.to_string())?;
+
+        if details_status.is_success() {
+            let users = parse_album_share_users_payload(&details_body)?;
+            eprintln!(
+                "[album-share.users] success album_id={} count={} via=album-details",
+                album_id,
+                users.len()
+            );
+            return Ok(users);
+        }
+
+        Err(format!(
+            "get album share users failed: /users -> {} ({}), /albums/{{id}} -> {} ({})",
+            users_status,
+            truncate_for_log(&users_body),
+            details_status,
+            truncate_for_log(&details_body)
+        ))
+    }
+
+    pub async fn get_shareable_users(&self) -> Result<Vec<AlbumUserCandidate>, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/users", session.server_url);
+        eprintln!("[album-share.candidates] start endpoint={}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+
+        if !status.is_success() {
+            return Err(format!(
+                "get users failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        let users = parse_user_candidates_payload(&body)?;
+        eprintln!(
+            "[album-share.candidates] success count={} endpoint={}",
+            users.len(),
+            url
+        );
+        Ok(users)
+    }
+
+    pub async fn add_user_to_album(
+        &self,
+        album_id: &str,
+        user_id: &str,
+        role: &str,
+    ) -> Result<(), String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/albums/{}/users", session.server_url, album_id);
+        let payloads = [
+            serde_json::json!({ "userId": user_id, "role": role }),
+            serde_json::json!({ "sharedUserIds": [user_id], "role": role }),
+            serde_json::json!({ "ids": [user_id], "role": role }),
+        ];
+
+        eprintln!(
+            "[album-share.users] start album_id={} action=add user_id={} role={}",
+            album_id, user_id, role
+        );
+
+        let mut last_error = String::new();
+        for payload in payloads {
+            let response = self
+                .client
+                .post(&url)
+                .headers(headers.clone())
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+
+            if status.is_success() {
+                eprintln!(
+                    "[album-share.users] success album_id={} action=add user_id={} status={}",
+                    album_id, user_id, status
+                );
+                return Ok(());
+            }
+
+            last_error = format!(
+                "add user failed with status {} payload={} ({})",
+                status,
+                payload,
+                truncate_for_log(&body)
+            );
+        }
+
+        Err(last_error)
+    }
+
+    pub async fn remove_user_from_album(&self, album_id: &str, user_id: &str) -> Result<(), String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        eprintln!(
+            "[album-share.users] start album_id={} action=remove user_id={}",
+            album_id, user_id
+        );
+
+        let delete_variants = vec![
+            (
+                format!("{}/api/albums/{}/users/{}", session.server_url, album_id, user_id),
+                None,
+            ),
+            (
+                format!("{}/api/albums/{}/user/{}", session.server_url, album_id, user_id),
+                None,
+            ),
+            (
+                format!("{}/api/albums/{}/users", session.server_url, album_id),
+                Some(serde_json::json!({ "userId": user_id })),
+            ),
+        ];
+
+        let mut last_error = String::new();
+        for (url, payload) in delete_variants {
+            let mut request = self.client.delete(&url).headers(headers.clone());
+            if let Some(payload) = payload {
+                request = request.json(&payload);
+            }
+
+            let response = request.send().await.map_err(|err| err.to_string())?;
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+
+            if status.is_success() {
+                eprintln!(
+                    "[album-share.users] success album_id={} action=remove user_id={} status={}",
+                    album_id, user_id, status
+                );
+                return Ok(());
+            }
+
+            last_error = format!(
+                "remove user failed with status {} endpoint={} ({})",
+                status,
+                url,
+                truncate_for_log(&body)
+            );
+        }
+
+        Err(last_error)
     }
 
     pub async fn get_unique_original_paths(&self) -> Result<Vec<String>, String> {
@@ -1987,6 +2502,99 @@ fn parse_album_from_payload(payload: &str) -> Result<AlbumSummary, String> {
 fn parse_share_url_from_payload(payload: &str, base_url: &str) -> Result<String, String> {
     let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
 
+    parse_share_url_from_value(&value, base_url)
+}
+
+fn parse_first_share_url_from_payload(
+    payload: &str,
+    base_url: &str,
+    album_id: &str,
+) -> Result<Option<String>, String> {
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+
+    if is_share_candidate_for_album(&value, album_id) {
+        if let Ok(url) = parse_share_url_from_value(&value, base_url) {
+            return Ok(Some(url));
+        }
+    }
+
+    if value.is_object() && !value.get("items").is_some() && !value.get("sharedLinks").is_some() {
+        if let Ok(url) = parse_share_url_from_value(&value, base_url) {
+            // Fallback when API returns a single link object without album relation details.
+            return Ok(Some(url));
+        }
+    }
+
+    let candidates = value
+        .get("items")
+        .and_then(Value::as_array)
+        .or_else(|| value.get("sharedLinks").and_then(Value::as_array))
+        .or_else(|| value.as_array());
+
+    if let Some(candidates) = candidates {
+        for candidate in candidates {
+            if is_share_candidate_for_album(candidate, album_id) {
+                if let Ok(url) = parse_share_url_from_value(candidate, base_url) {
+                    return Ok(Some(url));
+                }
+            }
+        }
+
+        // Last-resort fallback for old payloads that return exactly one item without album metadata.
+        if candidates.len() == 1 {
+            if let Some(candidate) = candidates.first() {
+                if let Ok(url) = parse_share_url_from_value(candidate, base_url) {
+                    return Ok(Some(url));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn is_share_candidate_for_album(value: &Value, album_id: &str) -> bool {
+    let direct_album_id = value
+        .get("albumId")
+        .and_then(Value::as_str)
+        .map(|v| v == album_id)
+        .unwrap_or(false);
+
+    if direct_album_id {
+        return true;
+    }
+
+    let nested_album_id = value
+        .get("album")
+        .and_then(|album| album.get("id"))
+        .and_then(Value::as_str)
+        .map(|v| v == album_id)
+        .unwrap_or(false);
+
+    if nested_album_id {
+        return true;
+    }
+
+    let entity_album_id = value
+        .get("entityId")
+        .and_then(Value::as_str)
+        .map(|v| v == album_id)
+        .unwrap_or(false);
+
+    if !entity_album_id {
+        return false;
+    }
+
+    value
+        .get("type")
+        .or_else(|| value.get("sharedLinkType"))
+        .and_then(Value::as_str)
+        .map(|kind| kind.eq_ignore_ascii_case("ALBUM"))
+        .unwrap_or(false)
+}
+
+fn parse_share_url_from_value(value: &Value, base_url: &str) -> Result<String, String> {
+
     let key = value
         .get("key")
         .and_then(Value::as_str)
@@ -2000,6 +2608,130 @@ fn parse_share_url_from_payload(payload: &str, base_url: &str) -> Result<String,
         .ok_or_else(|| "share link key missing from payload".to_string())?;
 
     Ok(format!("{}/share/{}", base_url, key))
+}
+
+fn parse_album_share_users_payload(payload: &str) -> Result<Vec<AlbumShareUser>, String> {
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    let mut users = Vec::new();
+
+    if value.get("id").is_some() {
+        if let Some(array) = value
+            .get("albumUsers")
+            .and_then(Value::as_array)
+            .or_else(|| value.get("sharedUsers").and_then(Value::as_array))
+            .or_else(|| value.get("users").and_then(Value::as_array))
+        {
+            users.extend(parse_album_share_user_array(array));
+        }
+        return Ok(users);
+    }
+
+    if let Some(array) = value
+        .get("items")
+        .and_then(Value::as_array)
+        .or_else(|| value.get("users").and_then(Value::as_array))
+        .or_else(|| value.as_array())
+    {
+        users.extend(parse_album_share_user_array(array));
+    }
+
+    Ok(users)
+}
+
+fn parse_album_share_user_array(values: &[Value]) -> Vec<AlbumShareUser> {
+    let mut users = Vec::new();
+    for value in values {
+        if let Some(parsed) = parse_album_share_user(value) {
+            users.push(parsed);
+        }
+    }
+    users
+}
+
+fn parse_album_share_user(value: &Value) -> Option<AlbumShareUser> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("user")
+                .and_then(|user| user.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })?;
+
+    let user_obj = value.get("user");
+
+    let name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            user_obj
+                .and_then(|user| user.get("name"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+
+    let email = value
+        .get("email")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            user_obj
+                .and_then(|user| user.get("email"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+
+    let role = value
+        .get("role")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("albumUserRole")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+
+    Some(AlbumShareUser {
+        id,
+        name,
+        email,
+        role,
+    })
+}
+
+fn parse_user_candidates_payload(payload: &str) -> Result<Vec<AlbumUserCandidate>, String> {
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    let users = value
+        .get("items")
+        .and_then(Value::as_array)
+        .or_else(|| value.get("users").and_then(Value::as_array))
+        .or_else(|| value.as_array())
+        .ok_or_else(|| "unknown users payload shape".to_string())?;
+
+    let mut out = Vec::new();
+    for user in users {
+        let Some(id) = user.get("id").and_then(Value::as_str).map(str::to_string) else {
+            continue;
+        };
+
+        let name = user
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let email = user
+            .get("email")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        out.push(AlbumUserCandidate { id, name, email });
+    }
+
+    Ok(out)
 }
 
 fn parse_album_assets(payload: &str) -> Result<Vec<AssetSummary>, String> {

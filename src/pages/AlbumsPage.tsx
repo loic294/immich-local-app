@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
+import { Link, Share2 } from "lucide-react";
 import type { GridLayoutResponse } from "../types";
 import { AlbumCard } from "../components/Albums/AlbumCard";
+import { AlbumShareModal } from "../components/Albums/AlbumShareModal";
 import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
@@ -11,6 +13,7 @@ import type { Session } from "../hooks/useSession";
 import type { AlbumSummary } from "../types";
 import {
   addAssetsToAlbum,
+  canManageAlbumSharing,
   createAlbumWithAssets,
   createShareLinkForAssets,
   fetchAlbums,
@@ -39,6 +42,8 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   } | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
+  const [showShareAlbumModal, setShowShareAlbumModal] = useState(false);
+  const [canManageSharing, setCanManageSharing] = useState(false);
 
   const albumGridFullLayout = useCallback<
     (containerWidth: number) => Promise<GridLayoutResponse>
@@ -192,6 +197,39 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     }
   }, [selectedAlbumId]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const evaluatePermission = async () => {
+      if (!selectedAlbum) {
+        setCanManageSharing(false);
+        return;
+      }
+
+      if (selectedAlbum.ownerId === session.userId) {
+        setCanManageSharing(true);
+        return;
+      }
+
+      try {
+        const canManage = await canManageAlbumSharing(selectedAlbum.id);
+        if (!cancelled) {
+          setCanManageSharing(canManage);
+        }
+      } catch {
+        if (!cancelled) {
+          setCanManageSharing(false);
+        }
+      }
+    };
+
+    void evaluatePermission();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAlbum, session.userId]);
+
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage="albums" onNavigate={onNavigate} />
@@ -253,18 +291,31 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
             <>
               <div
                 data-test="album-header"
-                className="mb-1 flex items-center gap-2 shrink-0"
+                className="mb-1 flex items-center justify-between gap-2 shrink-0"
               >
-                <PageBackButton
-                  ariaLabel="Back to albums"
-                  onClick={() => {
-                    setSelectedAlbumId(null);
-                    setSearchInput("");
-                  }}
-                />
-                <h1 className="m-0 text-xl font-bold text-base-content">
-                  {selectedAlbum.albumName}
-                </h1>
+                <div className="flex min-w-0 items-center gap-2">
+                  <PageBackButton
+                    ariaLabel="Back to albums"
+                    onClick={() => {
+                      setSelectedAlbumId(null);
+                      setSearchInput("");
+                    }}
+                  />
+                  <h1 className="m-0 truncate text-xl font-bold text-base-content">
+                    {selectedAlbum.albumName}
+                  </h1>
+                </div>
+
+                {canManageSharing ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary shrink-0"
+                    onClick={() => setShowShareAlbumModal(true)}
+                  >
+                    <Link size={16} />
+                    Share Album
+                  </button>
+                ) : null}
               </div>
 
               {selectedAlbum.description ? (
@@ -301,6 +352,13 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                   loadFullLayout={albumLoadFullLayout}
                 />
               )}
+
+              <AlbumShareModal
+                open={showShareAlbumModal}
+                albumId={selectedAlbum.id}
+                albumName={selectedAlbum.albumName}
+                onClose={() => setShowShareAlbumModal(false)}
+              />
             </>
           ) : (
             <section className="space-y-4 pb-2">

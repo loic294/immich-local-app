@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   AlbumSummary,
+  AlbumShareUser,
+  AlbumUserCandidate,
   AssetVisibility,
   AssetPage,
   AssetDateJumpTarget,
@@ -409,6 +411,62 @@ export async function createShareLinkForAssets(
 ): Promise<string> {
   return invoke<string>("create_share_link_for_assets", {
     assetIds,
+  });
+}
+
+export async function canManageAlbumSharing(albumId: string): Promise<boolean> {
+  return invoke<boolean>("can_manage_album_sharing", {
+    albumId,
+  });
+}
+
+export async function getOrCreateAlbumShareLink(
+  albumId: string,
+): Promise<string> {
+  return invoke<string>("get_or_create_album_share_link", {
+    albumId,
+  });
+}
+
+export async function getAlbumShareLink(
+  albumId: string,
+): Promise<string | null> {
+  return invoke<string | null>("get_album_share_link", {
+    albumId,
+  });
+}
+
+export async function getAlbumShareUsers(
+  albumId: string,
+): Promise<AlbumShareUser[]> {
+  return invoke<AlbumShareUser[]>("get_album_share_users", {
+    albumId,
+  });
+}
+
+export async function getShareableUsers(): Promise<AlbumUserCandidate[]> {
+  return invoke<AlbumUserCandidate[]>("get_shareable_users");
+}
+
+export async function addUserToAlbum(
+  albumId: string,
+  userId: string,
+  role: string,
+): Promise<void> {
+  return invoke<void>("add_user_to_album", {
+    albumId,
+    userId,
+    role,
+  });
+}
+
+export async function removeUserFromAlbum(
+  albumId: string,
+  userId: string,
+): Promise<void> {
+  return invoke<void>("remove_user_from_album", {
+    albumId,
+    userId,
   });
 }
 

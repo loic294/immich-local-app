@@ -111,6 +111,21 @@ export type AlbumSummary = {
   assetCount: number | null;
   owner: AlbumOwnerSummary | null;
   description: string | null;
+  role: string | null;
+  isReadOnly: boolean | null;
+};
+
+export type AlbumShareUser = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  role: string | null;
+};
+
+export type AlbumUserCandidate = {
+  id: string;
+  name: string | null;
+  email: string | null;
 };
 
 export type Settings = {

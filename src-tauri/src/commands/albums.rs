@@ -1,7 +1,9 @@
 use crate::commands::assets::{
     calculate_grid_layout, AssetPage, GridLayoutAssetInput, GridLayoutResponse,
 };
-use crate::services::immich_client::{AlbumOwnerSummary, AlbumSummary};
+use crate::services::immich_client::{
+    AlbumOwnerSummary, AlbumShareUser, AlbumSummary, AlbumUserCandidate,
+};
 use crate::AppState;
 use std::time::Instant;
 
@@ -47,6 +49,8 @@ pub async fn fetch_albums(state: tauri::State<'_, AppState>) -> Result<Vec<Album
                     email: album.owner_email,
                 }),
                 description: album.description,
+                role: None,
+                is_read_only: None,
             }
         })
         .collect())
@@ -178,4 +182,90 @@ pub async fn create_share_link_for_assets(
         .create_share_link_for_assets(&asset_ids)
         .await
         .map_err(|err| format!("create share link failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn can_manage_album_sharing(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    state
+        .immich
+        .can_manage_album_sharing(&album_id)
+        .await
+        .map_err(|err| format!("can manage album sharing failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn get_or_create_album_share_link(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    state
+        .immich
+        .get_or_create_album_share_link(&album_id)
+        .await
+        .map_err(|err| format!("get or create album share link failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn get_album_share_link(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state
+        .immich
+        .get_album_share_link(&album_id)
+        .await
+        .map_err(|err| format!("get album share link failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn get_album_share_users(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AlbumShareUser>, String> {
+    state
+        .immich
+        .get_album_share_users(&album_id)
+        .await
+        .map_err(|err| format!("get album share users failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn get_shareable_users(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AlbumUserCandidate>, String> {
+    state
+        .immich
+        .get_shareable_users()
+        .await
+        .map_err(|err| format!("get shareable users failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn add_user_to_album(
+    album_id: String,
+    user_id: String,
+    role: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .immich
+        .add_user_to_album(&album_id, &user_id, &role)
+        .await
+        .map_err(|err| format!("add user to album failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn remove_user_from_album(
+    album_id: String,
+    user_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .immich
+        .remove_user_from_album(&album_id, &user_id)
+        .await
+        .map_err(|err| format!("remove user from album failed: {err}"))
 }
