@@ -1,5 +1,5 @@
 import { ChevronRight, Folder, House } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
@@ -74,6 +74,12 @@ export function FoldersPage({
   const hasFolderAssets = allAssets.length > 0;
   const shouldShowPhotoGrid =
     assetsQuery.isLoading || assetsQuery.isFetchingNextPage || hasFolderAssets;
+
+  const loadFolderFullLayout = useCallback(
+    (containerWidth: number) =>
+      getCachedFolderFullGridLayout(currentPath, containerWidth),
+    [currentPath],
+  );
 
   useEffect(() => {
     if (!shouldShowPhotoGrid) {
@@ -284,9 +290,7 @@ export function FoldersPage({
               onLoadMore={() =>
                 assetsQuery.fetchNextPage().then(() => undefined)
               }
-              loadFullLayout={(containerWidth) =>
-                getCachedFolderFullGridLayout(currentPath, containerWidth)
-              }
+              loadFullLayout={loadFolderFullLayout}
             />
           ) : null}
 

@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { X, Plus, Link, BookImage, Folder, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getAssetThumbnail } from "../../api/tauri";
 import type { Session } from "../../hooks/useSession";
@@ -230,6 +230,7 @@ export function AppTopBar({
                 void openAlbumModal();
               }}
             >
+              <BookImage size={16} />
               Add to album
             </button>
             <button
@@ -241,9 +242,11 @@ export function AppTopBar({
                 setShowShareModal(true);
               }}
             >
-              Share with a link
+              <Link size={16} />
+              Link Share with a link
             </button>
             <button type="button" className="btn btn-sm btn-outline" disabled>
+              <Folder size={16} />
               Open in file explorer
             </button>
             <button
@@ -254,6 +257,7 @@ export function AppTopBar({
                 setShowArchiveModal(true);
               }}
             >
+              <Trash2 size={16} />
               Delete
             </button>
           </div>
@@ -348,6 +352,7 @@ export function AppTopBar({
                     void submitAddToAlbum();
                   }}
                 >
+                  <Plus size={16} />
                   Add to album
                 </button>
               </div>

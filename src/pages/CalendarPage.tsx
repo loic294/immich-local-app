@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
@@ -341,9 +341,11 @@ function MonthView({
               onLoadMore={() =>
                 assetsQuery.fetchNextPage().then(() => undefined)
               }
-              loadFullLayout={(containerWidth) =>
-                getCachedCalendarFullGridLayout(year, month, containerWidth)
-              }
+              loadFullLayout={useCallback(
+                (containerWidth: number) =>
+                  getCachedCalendarFullGridLayout(year, month, containerWidth),
+                [year, month],
+              )}
             />
           )}
         </section>

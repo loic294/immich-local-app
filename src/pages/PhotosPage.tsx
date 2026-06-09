@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAssetDays } from "../hooks/useAssetDays";
 import { useMemories } from "../hooks/useMemories";
 import { AppTopBar } from "../components/Layout/AppTopBar";
@@ -309,15 +309,19 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
                   ),
                 });
               }}
-              loadFullLayout={(containerWidth) =>
-                getFullGridLayout(searchTerm.trim() || null, containerWidth)
-              }
-              loadTimelineLayout={(containerWidth) =>
-                getCachedTimelineLayout(
-                  searchTerm.trim() || null,
-                  containerWidth,
-                )
-              }
+              loadFullLayout={useCallback(
+                (containerWidth: number) =>
+                  getFullGridLayout(searchTerm.trim() || null, containerWidth),
+                [searchTerm],
+              )}
+              loadTimelineLayout={useCallback(
+                (containerWidth: number) =>
+                  getCachedTimelineLayout(
+                    searchTerm.trim() || null,
+                    containerWidth,
+                  ),
+                [searchTerm],
+              )}
             />
           )}
         </section>

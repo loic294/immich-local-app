@@ -1,4 +1,5 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
+import type { GridLayoutResponse } from "../types";
 import { AlbumCard } from "../components/Albums/AlbumCard";
 import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
@@ -38,6 +39,18 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   } | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
+
+  const albumGridFullLayout = useCallback<
+    (containerWidth: number) => Promise<GridLayoutResponse>
+  >(
+    (containerWidth) =>
+      getCachedAlbumFullGridLayout(selectedAlbumId ?? "", containerWidth),
+    [selectedAlbumId],
+  );
+  const albumLoadFullLayout =
+    selectedAlbumId && searchInput.trim().length === 0
+      ? albumGridFullLayout
+      : undefined;
 
   const albumsQuery = useAlbums(true);
   const selectedAlbum = useMemo(
@@ -285,15 +298,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                   onLoadMore={() =>
                     albumAssetsQuery.fetchNextPage().then(() => undefined)
                   }
-                  loadFullLayout={
-                    selectedAlbumId && searchInput.trim().length === 0
-                      ? (containerWidth) =>
-                          getCachedAlbumFullGridLayout(
-                            selectedAlbumId,
-                            containerWidth,
-                          )
-                      : undefined
-                  }
+                  loadFullLayout={albumLoadFullLayout}
                 />
               )}
             </>
