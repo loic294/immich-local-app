@@ -1,6 +1,6 @@
 use crate::commands::assets::AssetPage;
+use crate::commands::assets::{calculate_grid_layout, GridLayoutAssetInput, GridLayoutResponse};
 use crate::AppState;
-use crate::commands::assets::{GridLayoutAssetInput, GridLayoutResponse, calculate_grid_layout};
 use std::time::Instant;
 
 #[tauri::command]
@@ -20,10 +20,11 @@ pub async fn get_folder_assets_paged(
     page_size: u32,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
-    let (cached_items, cached_has_next_page) = state
-        .db
-        .get_folder_assets(&path, page, page_size)
-        .map_err(|err| format!("folder asset cache read failed: {err}"))?;
+    let (cached_items, cached_has_next_page) =
+        state
+            .db
+            .get_folder_assets(&path, page, page_size)
+            .map_err(|err| format!("folder asset cache read failed: {err}"))?;
 
     Ok(AssetPage {
         page,
@@ -41,7 +42,9 @@ pub async fn get_cached_folder_full_grid_layout(
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
     if container_width <= 0.0 {
-        return Ok(GridLayoutResponse { sections: Vec::new() });
+        return Ok(GridLayoutResponse {
+            sections: Vec::new(),
+        });
     }
 
     let all_assets = state

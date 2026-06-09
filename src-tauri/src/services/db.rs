@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::services::immich_client::AssetSummary;
 use crate::commands::settings::Settings;
+use crate::services::immich_client::AssetSummary;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
@@ -159,10 +159,10 @@ impl Database {
             ",
         )
         .map_err(|err| err.to_string())?;
-        
+
         // Add missing columns to sync_state if they don't exist (migration)
         let conn = self.open()?;
-        
+
         // Check if last_checked_at column exists
         let has_last_checked = conn
             .prepare("PRAGMA table_info(sync_state)")
@@ -181,10 +181,7 @@ impl Database {
             .unwrap_or(false);
 
         if !has_last_checked {
-            let _ = conn.execute(
-                "ALTER TABLE sync_state ADD COLUMN last_checked_at TEXT",
-                [],
-            );
+            let _ = conn.execute("ALTER TABLE sync_state ADD COLUMN last_checked_at TEXT", []);
         }
 
         // Check if check_status column exists
@@ -210,22 +207,24 @@ impl Database {
                 [],
             );
         }
-        
+
         // Add missing columns to assets table if they don't exist (migration)
         let conn = self.open()?;
-        let mut stmt = conn.prepare("PRAGMA table_info(assets)")
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(assets)")
             .map_err(|err| err.to_string())?;
         let mut columns = Vec::new();
         stmt.query_map([], |row| {
             let col_name: String = row.get(1)?;
             columns.push(col_name);
             Ok(())
-        }).map_err(|err| err.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| err.to_string())?;
-        
+        })
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+
         drop(stmt);
-        
+
         // List of columns that might be missing
         let required_columns = vec![
             ("asset_type", "TEXT"),
@@ -242,14 +241,14 @@ impl Database {
             ("thumbhash", "TEXT"),
             ("exif_info_json", "TEXT"),
         ];
-        
+
         for (col_name, col_type) in required_columns {
             if !columns.contains(&col_name.to_string()) {
                 let alter_sql = format!("ALTER TABLE assets ADD COLUMN {} {}", col_name, col_type);
                 let _ = conn.execute(&alter_sql, []);
             }
         }
-        
+
         // Initialize default settings if not exist
         let conn = self.open()?;
         conn.execute(
@@ -257,7 +256,7 @@ impl Database {
             [],
         )
         .map_err(|err| err.to_string())?;
-        
+
         Ok(())
     }
 
@@ -285,11 +284,17 @@ impl Database {
         let server_url = stmt
             .query_row(params!["server_url"], |row| row.get::<_, String>(0))
             .ok();
-        let api_key = stmt
-            .query_row(params!["api_key"], |row| row.get::<_, String>(0))
-            .ok();
 
-        match (server_url, api_key) {
+        // Try OAuth token first, fall back to API key
+        let token = stmt
+            .query_row(params!["oauth_token"], |row| row.get::<_, String>(0))
+            .ok()
+            .or_else(|| {
+                stmt.query_row(params!["api_key"], |row| row.get::<_, String>(0))
+                    .ok()
+            });
+
+        match (server_url, token) {
             (Some(url), Some(key)) if !url.is_empty() && !key.is_empty() => Ok(Some((url, key))),
             _ => Ok(None),
         }
@@ -297,8 +302,31 @@ impl Database {
 
     pub fn clear_auth_credentials(&self) -> Result<(), String> {
         let conn = self.open()?;
-        conn.execute("DELETE FROM settings WHERE key IN ('server_url', 'api_key')", [])
+        conn.execute(
+            "DELETE FROM settings WHERE key IN ('server_url', 'api_key', 'oauth_token')",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    pub fn save_oauth_token(&self, server_url: &str, access_token: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('server_url', ?1)",
+            params![server_url],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('oauth_token', ?1)",
+            params![access_token],
+        )
+        .map_err(|err| err.to_string())?;
+
+        // Clear any old API key
+        conn.execute("DELETE FROM settings WHERE key = 'api_key'", [])
             .map_err(|err| err.to_string())?;
+
         Ok(())
     }
 
@@ -428,7 +456,11 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
-    pub fn update_asset_description(&self, asset_id: &str, description: Option<&str>) -> Result<(), String> {
+    pub fn update_asset_description(
+        &self,
+        asset_id: &str,
+        description: Option<&str>,
+    ) -> Result<(), String> {
         let conn = self.open()?;
         conn.execute(
             "UPDATE assets SET description = ?2, updated_at = strftime('%s', 'now') WHERE id = ?1",
@@ -689,7 +721,10 @@ impl Database {
         Ok(days)
     }
 
-    pub fn get_asset_details(&self, asset_id: &str) -> Result<Option<AssetSummaryExtended>, String> {
+    pub fn get_asset_details(
+        &self,
+        asset_id: &str,
+    ) -> Result<Option<AssetSummaryExtended>, String> {
         let conn = self.open()?;
         let mut stmt = conn
             .prepare(
@@ -931,8 +966,11 @@ impl Database {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|err| err.to_string())?;
 
-        tx.execute("DELETE FROM album_assets WHERE album_id = ?1", params![album_id])
-            .map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM album_assets WHERE album_id = ?1",
+            params![album_id],
+        )
+        .map_err(|err| err.to_string())?;
 
         for asset_id in asset_ids {
             tx.execute(
@@ -986,8 +1024,11 @@ impl Database {
         let tx = conn.transaction().map_err(|err| err.to_string())?;
 
         for (asset_id, person_ids) in asset_people {
-            tx.execute("DELETE FROM asset_people WHERE asset_id = ?1", params![asset_id])
-                .map_err(|err| err.to_string())?;
+            tx.execute(
+                "DELETE FROM asset_people WHERE asset_id = ?1",
+                params![asset_id],
+            )
+            .map_err(|err| err.to_string())?;
 
             for person_id in person_ids {
                 tx.execute(
@@ -1407,7 +1448,9 @@ impl Database {
         Ok(items)
     }
 
-    pub fn get_timeline_months(&self) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
+    pub fn get_timeline_months(
+        &self,
+    ) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
         let conn = self.open()?;
 
         let mut stmt = conn
@@ -1439,27 +1482,33 @@ impl Database {
 
     pub fn get_settings(&self) -> Result<Settings, String> {
         let conn = self.open()?;
-        
+
         let mut stmt = conn
             .prepare("SELECT value FROM settings WHERE key = ?1")
             .map_err(|err| err.to_string())?;
-        
+
         let home = std::env::var("HOME")
             .ok()
             .and_then(|h| {
                 let path = Path::new(&h).to_path_buf();
-                if path.exists() { Some(path) } else { None }
+                if path.exists() {
+                    Some(path)
+                } else {
+                    None
+                }
             })
             .ok_or_else(|| "Could not determine home directory".to_string())?;
-        
+
         let thumbnail_cache_path = home.join(".config/immich-local-app/thumbnails");
         let video_cache_path = home.join(".config/immich-local-app/videos");
-        
+
         let live_photo_autoplay = stmt
-            .query_row(params!["live_photo_autoplay"], |row| row.get::<_, String>(0))
+            .query_row(params!["live_photo_autoplay"], |row| {
+                row.get::<_, String>(0)
+            })
             .map(|v| v == "true")
             .unwrap_or(true);
-        
+
         Ok(Settings {
             live_photo_autoplay,
             thumbnail_cache_path: thumbnail_cache_path.to_string_lossy().to_string(),
@@ -1469,13 +1518,13 @@ impl Database {
 
     pub fn update_settings(&self, settings: &Settings) -> Result<Settings, String> {
         let conn = self.open()?;
-        
+
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('live_photo_autoplay', ?1)",
             params![settings.live_photo_autoplay.to_string()],
         )
         .map_err(|err| err.to_string())?;
-        
+
         self.get_settings()
     }
 
@@ -1561,10 +1610,7 @@ impl Database {
         Ok(sync_state)
     }
 
-    pub fn update_sync_progress(
-        &self,
-        processed_assets: i32,
-    ) -> Result<SyncState, String> {
+    pub fn update_sync_progress(&self, processed_assets: i32) -> Result<SyncState, String> {
         let conn = self.open()?;
         let now = chrono::Local::now().to_rfc3339();
 

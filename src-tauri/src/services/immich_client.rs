@@ -165,8 +165,13 @@ pub struct ImmichClient {
 
 impl ImmichClient {
     pub fn new() -> Self {
+        let client = reqwest::Client::builder()
+            .cookie_store(true)
+            .build()
+            .expect("failed to initialize HTTP client");
+
         Self {
-            client: reqwest::Client::new(),
+            client,
             session: Mutex::new(None),
             playback_downloads: Arc::new(Mutex::new(HashSet::new())),
             cached_album: Mutex::new(None),
@@ -195,7 +200,10 @@ impl ImmichClient {
             .map_err(|err| err.to_string())?;
 
         if !response.status().is_success() {
-            return Err(format!("api key validation failed with status {}", response.status()));
+            return Err(format!(
+                "api key validation failed with status {}",
+                response.status()
+            ));
         }
 
         let body = response.text().await.map_err(|err| err.to_string())?;
@@ -214,6 +222,128 @@ impl ImmichClient {
         let session = AuthSession {
             server_url: normalize_base(server_url),
             access_token: api_key.to_string(),
+            refresh_token: None,
+            user_id,
+            user_name,
+        };
+
+        let mut guard = self.session.lock().await;
+        *guard = Some(session.clone());
+
+        Ok(session)
+    }
+
+    pub async fn start_oauth(
+        &self,
+        server_url: &str,
+        redirect_uri: &str,
+    ) -> Result<String, String> {
+        let normalized_url = normalize_base(server_url);
+        let authorize_url = format!("{}/api/oauth/authorize", normalized_url);
+
+        let params = serde_json::json!({
+            "redirectUri": redirect_uri,
+        });
+
+        println!(
+            "[oauth:start] POST {} with body {}",
+            authorize_url,
+            params
+        );
+
+        let response = self
+            .client
+            .post(&authorize_url)
+            .json(&params)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        println!("[oauth:start] response status: {}", response.status());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            println!("[oauth:start] response body: {}", truncate_for_log(&body));
+            return Err(format!(
+                "OAuth authorization failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        println!("[oauth:start] response body: {}", truncate_for_log(&body));
+        let authorization_url = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| value.get("url").and_then(Value::as_str).map(str::to_string))
+            .ok_or_else(|| "OAuth response missing url".to_string())?;
+
+        println!("[oauth:start] parsed authorization url: {}", authorization_url);
+
+        Ok(authorization_url)
+    }
+
+    pub async fn finish_oauth(
+        &self,
+        server_url: &str,
+        callback_url: &str,
+    ) -> Result<AuthSession, String> {
+        let normalized_url = normalize_base(server_url);
+        let callback_endpoint = format!("{}/api/oauth/callback", normalized_url);
+        let callback_payload = serde_json::json!({
+            "url": callback_url,
+        });
+
+        println!(
+            "[oauth:finish] POST {} with body {}",
+            callback_endpoint,
+            callback_payload
+        );
+
+        let response = self
+            .client
+            .post(&callback_endpoint)
+            .json(&callback_payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        println!("[oauth:finish] response status: {}", response.status());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            println!("[oauth:finish] response body: {}", truncate_for_log(&body));
+            return Err(format!(
+                "OAuth callback failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        println!("[oauth:finish] response body: {}", truncate_for_log(&body));
+        let value: Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
+        let access_token = value
+            .get("accessToken")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "OAuth response missing accessToken".to_string())?
+            .to_string();
+        let user_id = value
+            .get("userId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "OAuth response missing userId".to_string())?
+            .to_string();
+        let user_name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+
+        let session = AuthSession {
+            server_url: normalized_url,
+            access_token,
             refresh_token: None,
             user_id,
             user_name,
@@ -253,7 +383,12 @@ impl ImmichClient {
             .await
     }
 
-    pub async fn get_assets_by_month(&self, year: i32, month: u32) -> Result<Vec<AssetSummary>, String> {        let session = self
+    pub async fn get_assets_by_month(
+        &self,
+        year: i32,
+        month: u32,
+    ) -> Result<Vec<AssetSummary>, String> {
+        let session = self
             .session
             .lock()
             .await
@@ -329,7 +464,9 @@ impl ImmichClient {
     ) -> Result<AssetListResult, String> {
         let needs_fetch = {
             let cache = self.cached_album.lock().await;
-            cache.as_ref().map_or(true, |(cached_album_id, _)| cached_album_id != album_id)
+            cache
+                .as_ref()
+                .map_or(true, |(cached_album_id, _)| cached_album_id != album_id)
         };
 
         if needs_fetch {
@@ -430,7 +567,9 @@ impl ImmichClient {
         // Check if we need to (re)fetch all folder assets
         let needs_fetch = {
             let cache = self.cached_folder.lock().await;
-            cache.as_ref().map_or(true, |(cached_path, _)| cached_path != path)
+            cache
+                .as_ref()
+                .map_or(true, |(cached_path, _)| cached_path != path)
         };
 
         if needs_fetch {
@@ -597,7 +736,10 @@ impl ImmichClient {
             .await
             .map_err(|err| err.to_string())?;
         let shared_status = shared_response.status();
-        let shared_body = shared_response.text().await.map_err(|err| err.to_string())?;
+        let shared_body = shared_response
+            .text()
+            .await
+            .map_err(|err| err.to_string())?;
         if !shared_status.is_success() {
             return Err(format!(
                 "shared album fetch failed with status {} ({})",
@@ -787,7 +929,10 @@ impl ImmichClient {
         parse_album_assets(&body)
     }
 
-    pub async fn get_assets_by_original_path(&self, path: &str) -> Result<Vec<AssetSummary>, String> {
+    pub async fn get_assets_by_original_path(
+        &self,
+        path: &str,
+    ) -> Result<Vec<AssetSummary>, String> {
         let session = self
             .session
             .lock()
@@ -825,7 +970,10 @@ impl ImmichClient {
         Ok(result.items)
     }
 
-    pub async fn get_profile_image_data_url(&self, user_id: &str) -> Result<Option<String>, String> {
+    pub async fn get_profile_image_data_url(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<String>, String> {
         let session = self
             .session
             .lock()
@@ -1103,9 +1251,8 @@ impl ImmichClient {
             ));
         }
 
-        serde_json::from_str(&body).map_err(|err| {
-            format!("failed to parse asset statistics: {}", err)
-        })
+        serde_json::from_str(&body)
+            .map_err(|err| format!("failed to parse asset statistics: {}", err))
     }
 
     pub async fn get_all_assets_paginated(
@@ -1144,8 +1291,11 @@ impl ImmichClient {
 
         // First, try to verify the asset exists with a GET request
         let get_url = format!("{}/api/asset/{}", session.server_url, asset_id);
-        eprintln!("[update_asset_inner] Verifying asset exists with GET: {}", get_url);
-        
+        eprintln!(
+            "[update_asset_inner] Verifying asset exists with GET: {}",
+            get_url
+        );
+
         let get_response = self
             .client
             .get(&get_url)
@@ -1153,12 +1303,14 @@ impl ImmichClient {
             .send()
             .await
             .map_err(|err| err.to_string())?;
-        
+
         let get_status = get_response.status();
         eprintln!("[update_asset_inner] GET response status: {}", get_status);
-        
+
         if get_status == 404 {
-            eprintln!("[update_asset_inner] Asset not found with GET /api/asset/, trying /api/assets/");
+            eprintln!(
+                "[update_asset_inner] Asset not found with GET /api/asset/, trying /api/assets/"
+            );
             let get_url_plural = format!("{}/api/assets/{}", session.server_url, asset_id);
             let get_response_plural = self
                 .client
@@ -1167,13 +1319,16 @@ impl ImmichClient {
                 .send()
                 .await
                 .map_err(|err| err.to_string())?;
-            eprintln!("[update_asset_inner] GET /api/assets/ response status: {}", get_response_plural.status());
+            eprintln!(
+                "[update_asset_inner] GET /api/assets/ response status: {}",
+                get_response_plural.status()
+            );
         }
 
         // Try PATCH on singular endpoint
         eprintln!("[update_asset_inner] Trying PATCH /api/asset/{}", asset_id);
         let url = format!("{}/api/asset/{}", session.server_url, asset_id);
-        
+
         let response = self
             .client
             .patch(&url)
@@ -1185,13 +1340,18 @@ impl ImmichClient {
 
         let status = response.status();
         let body = response.text().await.map_err(|err| err.to_string())?;
-        
+
         eprintln!("[update_asset_inner] PATCH /api/asset/ status: {}", status);
-        eprintln!("[update_asset_inner] PATCH /api/asset/ body: {}", truncate_for_log(&body));
-        
+        eprintln!(
+            "[update_asset_inner] PATCH /api/asset/ body: {}",
+            truncate_for_log(&body)
+        );
+
         if status == 404 {
-            eprintln!("[update_asset_inner] PATCH /api/asset/ returned 404, trying PUT /api/asset/");
-            
+            eprintln!(
+                "[update_asset_inner] PATCH /api/asset/ returned 404, trying PUT /api/asset/"
+            );
+
             let response = self
                 .client
                 .put(&url)
@@ -1203,13 +1363,18 @@ impl ImmichClient {
 
             let status = response.status();
             let body = response.text().await.map_err(|err| err.to_string())?;
-            
+
             eprintln!("[update_asset_inner] PUT /api/asset/ status: {}", status);
-            eprintln!("[update_asset_inner] PUT /api/asset/ body: {}", truncate_for_log(&body));
-            
+            eprintln!(
+                "[update_asset_inner] PUT /api/asset/ body: {}",
+                truncate_for_log(&body)
+            );
+
             if status == 404 {
-                eprintln!("[update_asset_inner] PUT /api/asset/ returned 404, trying PATCH /api/assets/");
-                
+                eprintln!(
+                    "[update_asset_inner] PUT /api/asset/ returned 404, trying PATCH /api/assets/"
+                );
+
                 let url_plural = format!("{}/api/assets/{}", session.server_url, asset_id);
                 let response = self
                     .client
@@ -1222,13 +1387,16 @@ impl ImmichClient {
 
                 let status = response.status();
                 let body = response.text().await.map_err(|err| err.to_string())?;
-                
+
                 eprintln!("[update_asset_inner] PATCH /api/assets/ status: {}", status);
-                eprintln!("[update_asset_inner] PATCH /api/assets/ body: {}", truncate_for_log(&body));
-                
+                eprintln!(
+                    "[update_asset_inner] PATCH /api/assets/ body: {}",
+                    truncate_for_log(&body)
+                );
+
                 if status == 404 {
                     eprintln!("[update_asset_inner] PATCH /api/assets/ returned 404, trying PUT /api/assets/");
-                    
+
                     let response = self
                         .client
                         .put(url_plural)
@@ -1240,10 +1408,13 @@ impl ImmichClient {
 
                     let status = response.status();
                     let body = response.text().await.map_err(|err| err.to_string())?;
-                    
+
                     eprintln!("[update_asset_inner] PUT /api/assets/ status: {}", status);
-                    eprintln!("[update_asset_inner] PUT /api/assets/ body: {}", truncate_for_log(&body));
-                    
+                    eprintln!(
+                        "[update_asset_inner] PUT /api/assets/ body: {}",
+                        truncate_for_log(&body)
+                    );
+
                     if !status.is_success() {
                         return Err(format!(
                             "asset update failed with status {} after trying all endpoints ({})",
@@ -1251,12 +1422,12 @@ impl ImmichClient {
                             truncate_for_log(&body)
                         ));
                     }
-                    
+
                     return parse_asset_summary_from_value(
                         &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
                     );
                 }
-                
+
                 if !status.is_success() {
                     return Err(format!(
                         "asset update failed with status {} ({})",
@@ -1264,12 +1435,12 @@ impl ImmichClient {
                         truncate_for_log(&body)
                     ));
                 }
-                
+
                 return parse_asset_summary_from_value(
                     &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
                 );
             }
-            
+
             if !status.is_success() {
                 return Err(format!(
                     "asset update failed with status {} ({})",
@@ -1277,12 +1448,12 @@ impl ImmichClient {
                     truncate_for_log(&body)
                 ));
             }
-            
+
             return parse_asset_summary_from_value(
                 &serde_json::from_str::<Value>(&body).map_err(|err| err.to_string())?,
             );
         }
-        
+
         if !status.is_success() {
             return Err(format!(
                 "asset update failed with status {} ({})",
@@ -1376,7 +1547,10 @@ impl ImmichClient {
             .map_err(|err| err.to_string())?;
 
         let assets_status = assets_response.status();
-        let assets_body = assets_response.text().await.map_err(|err| err.to_string())?;
+        let assets_body = assets_response
+            .text()
+            .await
+            .map_err(|err| err.to_string())?;
         eprintln!(
             "[immich.fetch_assets_inner] source=assets_fallback page={} page_size={} status={} body_len={}",
             page,
@@ -1469,8 +1643,8 @@ fn parse_memories(payload: &str) -> Result<Vec<MemorySummary>, String> {
 
     let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
     if let Some(items) = value.get("items") {
-        let mut memories =
-            serde_json::from_value::<Vec<MemorySummary>>(items.clone()).map_err(|err| err.to_string())?;
+        let mut memories = serde_json::from_value::<Vec<MemorySummary>>(items.clone())
+            .map_err(|err| err.to_string())?;
         memories.retain(|memory| !memory.assets.is_empty());
         return Ok(memories);
     }
@@ -1485,7 +1659,8 @@ fn parse_album_list(payload: &str) -> Result<Vec<AlbumSummary>, String> {
 
     let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
     if let Some(items) = value.get("items") {
-        return serde_json::from_value::<Vec<AlbumSummary>>(items.clone()).map_err(|err| err.to_string());
+        return serde_json::from_value::<Vec<AlbumSummary>>(items.clone())
+            .map_err(|err| err.to_string());
     }
 
     Err("unknown album payload shape".to_string())
@@ -1582,7 +1757,12 @@ fn enrich_asset_summary_from_value(mut asset: AssetSummary, value: &Value) -> As
                     .and_then(Value::as_u64)
                     .map(|v| v as u32)
             })
-            .or_else(|| value.get("height").and_then(Value::as_u64).map(|v| v as u32));
+            .or_else(|| {
+                value
+                    .get("height")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            });
     }
 
     if asset.original_path.is_none() {
@@ -1702,12 +1882,17 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
                     .and_then(Value::as_u64)
                     .map(|v| v as u32)
             })
-            .or_else(|| value.get("height").and_then(Value::as_u64).map(|v| v as u32)),
-            thumbhash: value
-                .get("thumbhash")
-                .and_then(Value::as_str)
-                .or_else(|| value.get("thumbHash").and_then(Value::as_str))
-                .map(str::to_string),
+            .or_else(|| {
+                value
+                    .get("height")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32)
+            }),
+        thumbhash: value
+            .get("thumbhash")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("thumbHash").and_then(Value::as_str))
+            .map(str::to_string),
     };
 
     asset = normalize_asset_summary(asset);
@@ -1763,7 +1948,12 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
             .and_then(|v| v.get("rating"))
             .and_then(Value::as_i64)
             .map(|v| v as i32)
-            .or_else(|| value.get("rating").and_then(Value::as_i64).map(|v| v as i32)),
+            .or_else(|| {
+                value
+                    .get("rating")
+                    .and_then(Value::as_i64)
+                    .map(|v| v as i32)
+            }),
         width: value
             .get("width")
             .and_then(Value::as_u64)
@@ -1799,7 +1989,11 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
         camera: exif_info
             .and_then(|v| v.get("model"))
             .and_then(Value::as_str)
-            .or_else(|| exif_info.and_then(|v| v.get("cameraModel")).and_then(Value::as_str))
+            .or_else(|| {
+                exif_info
+                    .and_then(|v| v.get("cameraModel"))
+                    .and_then(Value::as_str)
+            })
             .map(str::to_string),
         lens: exif_info
             .and_then(|v| v.get("lensModel"))
@@ -1815,7 +2009,12 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
                     .map(|v| v as i64)
             })
             .or_else(|| value.get("sizeInBytes").and_then(Value::as_i64))
-            .or_else(|| value.get("sizeInBytes").and_then(Value::as_u64).map(|v| v as i64)),
+            .or_else(|| {
+                value
+                    .get("sizeInBytes")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as i64)
+            }),
         file_extension,
         people,
         tags: extract_name_list(tags_items, &["name", "value"], &[]),
@@ -1885,17 +2084,18 @@ fn extract_items_array<'a>(value: Option<&'a Value>) -> &'a [Value] {
         return items.as_slice();
     }
 
-    if let Some(items) = value
-        .and_then(|v| v.get("items"))
-        .and_then(Value::as_array)
-    {
+    if let Some(items) = value.and_then(|v| v.get("items")).and_then(Value::as_array) {
         return items.as_slice();
     }
 
     &[]
 }
 
-fn extract_name_list(items: &[Value], direct_keys: &[&str], nested_object_keys: &[&str]) -> Option<String> {
+fn extract_name_list(
+    items: &[Value],
+    direct_keys: &[&str],
+    nested_object_keys: &[&str],
+) -> Option<String> {
     let mut names: Vec<String> = Vec::new();
 
     for item in items {
@@ -1946,9 +2146,7 @@ fn value_to_string(value: &Value) -> Option<String> {
         return Some(string_value.to_string());
     }
 
-    value
-        .as_f64()
-        .map(|number| number.to_string())
+    value.as_f64().map(|number| number.to_string())
 }
 
 fn extract_has_next_page(value: &Value) -> bool {
@@ -1998,13 +2196,13 @@ fn thumbnail_cache_dir() -> Result<PathBuf, String> {
         .join("thumbnails"))
 }
 
-    fn video_cache_dir() -> Result<PathBuf, String> {
-        let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
-        Ok(Path::new(&home)
+fn video_cache_dir() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
+    Ok(Path::new(&home)
         .join(".config")
         .join("immich-local-app")
         .join("videos"))
-    }
+}
 
 fn read_cached_thumbnail(cache_dir: &Path, asset_id: &str) -> Result<Option<String>, String> {
     for ext in ["jpg", "jpeg", "webp", "png"] {

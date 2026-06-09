@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useSession } from "./hooks/useSession";
 import { useSyncStatus } from "./hooks/useSyncStatus";
+import { ServerUrlScreen } from "./components/Auth/ServerUrlScreen";
 import { LoginScreen } from "./components/Auth/LoginScreen";
 import { LoadingScreen } from "./components/Layout/LoadingScreen";
 import type { AppPage } from "./components/Layout/Sidebar";
@@ -12,17 +13,31 @@ import { SettingsPage } from "./pages/SettingsPage";
 
 export function App() {
   const [activePage, setActivePage] = useState<AppPage>("photos");
+  const [showServerUrlScreen, setShowServerUrlScreen] = useState(false);
   const hasTriggeredResume = useRef(false);
   const {
     session,
     error,
     isAuthenticating,
     isRestoringSession,
+    serverUrl,
+    setServerUrl,
+    initiateOAuth,
+    completeOAuthWithCode,
     login,
     logout,
   } = useSession();
 
   const { syncStatus, startSync, checkForNewAssets } = useSyncStatus();
+
+  // If session is restored but serverUrl is still null, we're in OAuth step
+  useEffect(() => {
+    if (session && serverUrl) {
+      setShowServerUrlScreen(false);
+    } else if (!session && !serverUrl && !isRestoringSession) {
+      setShowServerUrlScreen(true);
+    }
+  }, [session, serverUrl, isRestoringSession]);
 
   // Resume unfinished sync on app launch (after app restart/crash)
   useEffect(() => {
@@ -88,10 +103,36 @@ export function App() {
   }
 
   if (!session) {
+    if (showServerUrlScreen && !serverUrl) {
+      return (
+        <main className="min-h-screen bg-base-200 p-6">
+          <ServerUrlScreen
+            onSubmit={async (url) => {
+              await setServerUrl(url);
+              setShowServerUrlScreen(false);
+            }}
+            isLoading={isAuthenticating}
+            error={error}
+          />
+        </main>
+      );
+    }
+
     return (
       <main className="min-h-screen bg-base-200 p-6">
         <LoginScreen
-          onSubmit={login}
+          serverUrl={serverUrl ?? "http://localhost:2283"}
+          onAuthorize={initiateOAuth}
+          onCodeSubmit={completeOAuthWithCode}
+          onApiKeySubmit={async (apiKey) => {
+            await login({
+              serverUrl: serverUrl ?? "http://localhost:2283",
+              apiKey,
+            });
+          }}
+          onBack={() => {
+            setShowServerUrlScreen(true);
+          }}
           isLoading={isAuthenticating}
           error={error}
         />

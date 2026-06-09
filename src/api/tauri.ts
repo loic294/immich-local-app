@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   AlbumSummary,
   AssetVisibility,
@@ -28,6 +29,10 @@ export type RestoreSessionResponse = {
   serverUrl: string;
 };
 
+export type OAuthUrlResponse = {
+  authorizationUrl: string;
+};
+
 // Thumbnail cache: asset ID -> data URL
 const thumbnailCache = new Map<string, string>();
 
@@ -41,6 +46,26 @@ let thumbnailDeduplicationHits = 0;
 
 export function isThumbnailCached(assetId: string): string | null {
   return thumbnailCache.get(assetId) ?? null;
+}
+
+export async function getOAuthAuthorizationUrl(
+  serverUrl: string,
+  redirectUri?: string,
+): Promise<OAuthUrlResponse> {
+  return invoke<OAuthUrlResponse>("get_oauth_authorization_url", {
+    serverUrl,
+    redirectUri,
+  });
+}
+
+export async function completeOAuthFlow(
+  serverUrl: string,
+  callbackUrl: string,
+): Promise<AuthResponse> {
+  return invoke<AuthResponse>("complete_oauth_flow", {
+    serverUrl,
+    callbackUrl,
+  });
 }
 
 export async function authenticate(
@@ -59,6 +84,10 @@ export async function restoreSession(): Promise<RestoreSessionResponse | null> {
 
 export async function logoutFromServer(): Promise<void> {
   return invoke<void>("logout");
+}
+
+export async function clearWebviewBrowsingData(): Promise<void> {
+  await getCurrentWebview().clearAllBrowsingData();
 }
 
 export async function getProfileImage(userId: string): Promise<string | null> {

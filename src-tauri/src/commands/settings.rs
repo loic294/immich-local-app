@@ -1,7 +1,7 @@
+use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use crate::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,16 +44,20 @@ pub async fn get_cache_stats() -> Result<CacheStats, String> {
         .ok()
         .and_then(|h| {
             let path = PathBuf::from(h);
-            if path.exists() { Some(path) } else { None }
+            if path.exists() {
+                Some(path)
+            } else {
+                None
+            }
         })
         .ok_or_else(|| "Could not determine home directory".to_string())?;
-    
+
     let thumbnails_dir = home.join(".config/immich-local-app/thumbnails");
     let videos_dir = home.join(".config/immich-local-app/videos");
 
     let (thumbnails_size, thumbnails_count) = calculate_dir_size(&thumbnails_dir)
         .map_err(|err| format!("Failed to calculate thumbnails size: {}", err))?;
-    
+
     let (videos_size, videos_count) = calculate_dir_size(&videos_dir)
         .map_err(|err| format!("Failed to calculate videos size: {}", err))?;
 
@@ -74,10 +78,14 @@ pub async fn get_cache_path() -> Result<String, String> {
         .ok()
         .and_then(|h| {
             let path = PathBuf::from(h);
-            if path.exists() { Some(path) } else { None }
+            if path.exists() {
+                Some(path)
+            } else {
+                None
+            }
         })
         .ok_or_else(|| "Could not determine home directory".to_string())?;
-    
+
     let cache_dir = home.join(".config/immich-local-app");
     cache_dir
         .to_str()

@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Immich Local App",
         "width": 1280,
         "height": 900,
@@ -33,5 +34,14 @@
     "active": true,
     "targets": "all",
     "icon": []
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "app.immich"
+        ]
+      }
+    }
   }
 }

@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Datelike, Local, Utc};
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use crate::services::immich_client::AssetSummary;
@@ -393,7 +393,9 @@ pub async fn get_cached_full_grid_layout(
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
     if container_width <= 0.0 {
-        return Ok(GridLayoutResponse { sections: Vec::new() });
+        return Ok(GridLayoutResponse {
+            sections: Vec::new(),
+        });
     }
 
     let all_assets = state
@@ -435,7 +437,9 @@ pub async fn get_cached_calendar_full_grid_layout(
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
     if container_width <= 0.0 {
-        return Ok(GridLayoutResponse { sections: Vec::new() });
+        return Ok(GridLayoutResponse {
+            sections: Vec::new(),
+        });
     }
 
     let all_assets = state
@@ -485,8 +489,7 @@ pub async fn get_asset_thumbnail(
     if elapsed_ms >= 150 {
         eprintln!(
             "[assets.get_asset_thumbnail] asset_id={} duration_ms={}",
-            asset_id,
-            elapsed_ms
+            asset_id, elapsed_ms
         );
     }
 
@@ -660,7 +663,9 @@ pub fn calculate_grid_layout(
     container_width: f64,
 ) -> Result<GridLayoutResponse, String> {
     if container_width <= 0.0 || assets.is_empty() {
-        return Ok(GridLayoutResponse { sections: Vec::new() });
+        return Ok(GridLayoutResponse {
+            sections: Vec::new(),
+        });
     }
 
     let sections = group_assets_by_day(&assets)
@@ -721,7 +726,11 @@ fn build_justified_rows(
     }
 
     let gap = 4.0;
-    let target_row_height = if container_width < 700.0 { 120.0 } else { 210.0 };
+    let target_row_height = if container_width < 700.0 {
+        120.0
+    } else {
+        210.0
+    };
     let mut rows: Vec<GridLayoutRow> = Vec::new();
 
     let mut row_items: Vec<&GridLayoutAssetInput> = Vec::new();
@@ -732,9 +741,11 @@ fn build_justified_rows(
         row_items.push(item);
         row_ratio_sum += ratio;
 
-        let projected_width = row_ratio_sum * target_row_height + gap * (row_items.len() as f64 - 1.0);
+        let projected_width =
+            row_ratio_sum * target_row_height + gap * (row_items.len() as f64 - 1.0);
         if projected_width >= container_width && row_items.len() > 1 {
-            let row_height = ((container_width - gap * (row_items.len() as f64 - 1.0)) / row_ratio_sum)
+            let row_height = ((container_width - gap * (row_items.len() as f64 - 1.0))
+                / row_ratio_sum)
                 .clamp(90.0, 280.0);
             rows.push(build_row(row_items, row_height));
             row_items = Vec::new();

@@ -1,4 +1,6 @@
-use crate::commands::assets::{calculate_grid_layout, AssetPage, GridLayoutAssetInput, GridLayoutResponse};
+use crate::commands::assets::{
+    calculate_grid_layout, AssetPage, GridLayoutAssetInput, GridLayoutResponse,
+};
 use crate::services::immich_client::{AlbumOwnerSummary, AlbumSummary};
 use crate::AppState;
 use std::time::Instant;
@@ -65,7 +67,9 @@ pub async fn get_cached_album_full_grid_layout(
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
     if container_width <= 0.0 {
-        return Ok(GridLayoutResponse { sections: Vec::new() });
+        return Ok(GridLayoutResponse {
+            sections: Vec::new(),
+        });
     }
 
     let all_assets = state
