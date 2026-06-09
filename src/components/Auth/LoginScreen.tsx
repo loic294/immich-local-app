@@ -121,9 +121,7 @@ export function LoginScreen({
               disabled={isLoading}
               className="btn btn-primary w-full"
             >
-              {isLoading
-                ? "Opening browser..."
-                : "Start OAuth in Browser"}
+              {isLoading ? "Opening browser..." : "Start OAuth in Browser"}
             </button>
             <button
               onClick={onBack}
