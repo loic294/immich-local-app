@@ -141,20 +141,44 @@ export function App() {
   }
 
   if (activePage === "albums") {
-    return <AlbumsPage session={session} onNavigate={setActivePage} />;
+    return (
+      <AlbumsPage
+        session={session}
+        onNavigate={setActivePage}
+        onLogout={logout}
+      />
+    );
   }
 
   if (activePage === "folders") {
-    return <FoldersPage session={session} onNavigate={setActivePage} />;
+    return (
+      <FoldersPage
+        session={session}
+        onNavigate={setActivePage}
+        onLogout={logout}
+      />
+    );
   }
 
   if (activePage === "calendar") {
-    return <CalendarPage session={session} onNavigate={setActivePage} />;
+    return (
+      <CalendarPage
+        session={session}
+        onNavigate={setActivePage}
+        onLogout={logout}
+      />
+    );
   }
 
   if (activePage === "settings") {
     return <SettingsPage onNavigate={setActivePage} onLogout={logout} />;
   }
 
-  return <PhotosPage session={session} onNavigate={setActivePage} />;
+  return (
+    <PhotosPage
+      session={session}
+      onNavigate={setActivePage}
+      onLogout={logout}
+    />
+  );
 }

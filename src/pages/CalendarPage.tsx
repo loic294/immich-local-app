@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Header } from "../components/Layout/Header";
+import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
@@ -14,6 +14,7 @@ import type { Session } from "../hooks/useSession";
 interface CalendarPageProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
+  onLogout: () => void;
 }
 
 const MONTH_NAMES = [
@@ -36,7 +37,11 @@ interface SelectedMonth {
   month: number; // 1-indexed
 }
 
-export function CalendarPage({ session, onNavigate }: CalendarPageProps) {
+export function CalendarPage({
+  session,
+  onNavigate,
+  onLogout,
+}: CalendarPageProps) {
   const [selected, setSelected] = useState<SelectedMonth | null>(null);
 
   const timelineQuery = useQuery({
@@ -72,6 +77,7 @@ export function CalendarPage({ session, onNavigate }: CalendarPageProps) {
       <MonthView
         session={session}
         onNavigate={onNavigate}
+        onLogout={onLogout}
         year={selected.year}
         month={selected.month}
         onBack={() => setSelected(null)}
@@ -84,12 +90,11 @@ export function CalendarPage({ session, onNavigate }: CalendarPageProps) {
       <Sidebar activePage="calendar" onNavigate={onNavigate} />
 
       <section className="flex min-w-0 h-screen flex-col">
-        <Header
+        <AppTopBar
+          session={session}
+          onLogout={onLogout}
           searchInput=""
           onSearchChange={() => {}}
-          serverUrl={session.serverUrl}
-          userId={session.userId}
-          userName={session.userName}
           searchPlaceholder="Calendar"
         />
 
@@ -155,6 +160,7 @@ export function CalendarPage({ session, onNavigate }: CalendarPageProps) {
 interface MonthViewProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
+  onLogout: () => void;
   year: number;
   month: number;
   onBack: () => void;
@@ -163,6 +169,7 @@ interface MonthViewProps {
 function MonthView({
   session,
   onNavigate,
+  onLogout,
   year,
   month,
   onBack,
@@ -239,12 +246,11 @@ function MonthView({
       <Sidebar activePage="calendar" onNavigate={onNavigate} />
 
       <section className="flex min-w-0 h-screen flex-col">
-        <Header
+        <AppTopBar
+          session={session}
+          onLogout={onLogout}
           searchInput=""
           onSearchChange={() => {}}
-          serverUrl={session.serverUrl}
-          userId={session.userId}
-          userName={session.userName}
           searchPlaceholder="Calendar"
         />
 

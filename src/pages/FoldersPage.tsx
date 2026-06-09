@@ -1,6 +1,6 @@
 import { ChevronRight, Folder, House } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Header } from "../components/Layout/Header";
+import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
@@ -12,9 +12,14 @@ import type { Session } from "../hooks/useSession";
 interface FoldersPageProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
+  onLogout: () => void;
 }
 
-export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
+export function FoldersPage({
+  session,
+  onNavigate,
+  onLogout,
+}: FoldersPageProps) {
   const [currentPath, setCurrentPath] = useState("/");
   const [searchInput, setSearchInput] = useState("");
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -123,12 +128,11 @@ export function FoldersPage({ session, onNavigate }: FoldersPageProps) {
       <Sidebar activePage="folders" onNavigate={onNavigate} />
 
       <section className="flex min-w-0 h-screen flex-col">
-        <Header
+        <AppTopBar
+          session={session}
+          onLogout={onLogout}
           searchInput={searchInput}
           onSearchChange={setSearchInput}
-          serverUrl={session.serverUrl}
-          userId={session.userId}
-          userName={session.userName}
           searchPlaceholder="Search folder photos"
         />
 

@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { AlbumCard } from "../components/Albums/AlbumCard";
-import { Header } from "../components/Layout/Header";
+import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
@@ -13,11 +13,12 @@ import { getCachedAlbumFullGridLayout, openUrl } from "../api/tauri";
 interface AlbumsPageProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
+  onLogout: () => void;
 }
 
 type AlbumFilter = "all" | "owned" | "shared";
 
-export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
+export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const [searchInput, setSearchInput] = useState("");
   const [filter, setFilter] = useState<AlbumFilter>("all");
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
@@ -161,12 +162,11 @@ export function AlbumsPage({ session, onNavigate }: AlbumsPageProps) {
       <Sidebar activePage="albums" onNavigate={onNavigate} />
 
       <section className="flex min-w-0 h-screen flex-col">
-        <Header
+        <AppTopBar
+          session={session}
+          onLogout={onLogout}
           searchInput={searchInput}
           onSearchChange={setSearchInput}
-          serverUrl={session.serverUrl}
-          userId={session.userId}
-          userName={session.userName}
           searchPlaceholder={
             selectedAlbumId ? "Search photos in this album" : "Search albums"
           }

@@ -1,4 +1,4 @@
-import { Search, Upload } from "lucide-react";
+import { LogOut, Search, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getProfileImage } from "../../api/tauri";
 
@@ -8,6 +8,7 @@ interface HeaderProps {
   serverUrl: string;
   userId: string;
   userName: string;
+  onLogout: () => void;
   searchPlaceholder?: string;
 }
 
@@ -17,6 +18,7 @@ export function Header({
   serverUrl,
   userId,
   userName,
+  onLogout,
   searchPlaceholder = "Search your photos",
 }: HeaderProps) {
   const [profileImage, setProfileImage] = useState<string | null>(null);
@@ -83,33 +85,47 @@ export function Header({
           <Upload size={14} className="shrink-0" />
           <span>Upload</span>
         </button>
-        <div className="flex items-center gap-2">
-          {profileImage ? (
-            <div className="avatar">
-              <div className="w-8 rounded-full">
-                <img
-                  src={profileImage}
-                  alt="Profile"
-                  className="object-cover"
-                />
+        <details className="dropdown dropdown-end">
+          <summary
+            className="btn btn-ghost btn-circle list-none"
+            aria-label="Open account menu"
+          >
+            {profileImage ? (
+              <div className="avatar">
+                <div className="w-8 rounded-full">
+                  <img
+                    src={profileImage}
+                    alt="Profile"
+                    className="object-cover"
+                  />
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="avatar placeholder">
-              <div className="w-8 rounded-full bg-primary text-primary-content text-xs font-bold">
-                {initials}
+            ) : (
+              <div className="avatar placeholder">
+                <div className="w-8 rounded-full bg-primary text-primary-content text-xs font-bold">
+                  {initials}
+                </div>
               </div>
-            </div>
-          )}
-          <div>
-            <p className="m-0 text-xs font-semibold text-base-content">
+            )}
+          </summary>
+          <div className="dropdown-content z-[20] mt-2 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow">
+            <p className="m-0 text-sm font-semibold text-base-content">
               {userName}
             </p>
-            <p className="m-0 max-w-40 truncate text-[11px] text-base-content/60">
+            <p className="m-0 truncate text-xs text-base-content/60">
               {serverUrl}
             </p>
+            <div className="divider my-2" />
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost justify-start text-error"
+              onClick={onLogout}
+            >
+              <LogOut size={14} className="shrink-0" />
+              <span>Sign out</span>
+            </button>
           </div>
-        </div>
+        </details>
       </div>
     </header>
   );

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAssetDays } from "../hooks/useAssetDays";
 import { useMemories } from "../hooks/useMemories";
-import { Header } from "../components/Layout/Header";
+import { AppTopBar } from "../components/Layout/AppTopBar";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { MemoriesStrip } from "../components/Memories/MemoriesStrip";
 import { MemoryFullscreenViewer } from "../components/Memories/MemoryFullscreenViewer";
@@ -20,9 +20,10 @@ import { useRef } from "react";
 interface PhotosPageProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
+  onLogout: () => void;
 }
 
-export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
+export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [memoryViewer, setMemoryViewer] = useState<{
@@ -134,12 +135,11 @@ export function PhotosPage({ session, onNavigate }: PhotosPageProps) {
       <Sidebar activePage="photos" onNavigate={onNavigate} />
 
       <section className="flex min-h-0 w-full flex-col">
-        <Header
+        <AppTopBar
+          session={session}
+          onLogout={onLogout}
           searchInput={searchInput}
           onSearchChange={setSearchInput}
-          serverUrl={session.serverUrl}
-          userId={session.userId}
-          userName={session.userName}
         />
 
         <section
