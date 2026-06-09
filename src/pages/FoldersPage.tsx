@@ -6,7 +6,14 @@ import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useFolderAssets } from "../hooks/useFolderAssets";
 import { useFolderPaths } from "../hooks/useFolderPaths";
-import { getCachedFolderFullGridLayout } from "../api/tauri";
+import {
+  addAssetsToAlbum,
+  createAlbumWithAssets,
+  createShareLinkForAssets,
+  fetchAlbums,
+  getCachedFolderFullGridLayout,
+  updateAssetVisibility,
+} from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 
 interface FoldersPageProps {
@@ -22,6 +29,12 @@ export function FoldersPage({
 }: FoldersPageProps) {
   const [currentPath, setCurrentPath] = useState("/");
   const [searchInput, setSearchInput] = useState("");
+  const [selectedCount, setSelectedCount] = useState(0);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [selectionCommand, setSelectionCommand] = useState<{
+    type: "clear" | "select-all";
+    nonce: number;
+  } | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const folderPathsQuery = useFolderPaths(true);
@@ -61,6 +74,14 @@ export function FoldersPage({
   const hasFolderAssets = allAssets.length > 0;
   const shouldShowPhotoGrid =
     assetsQuery.isLoading || assetsQuery.isFetchingNextPage || hasFolderAssets;
+
+  useEffect(() => {
+    if (!shouldShowPhotoGrid) {
+      setSelectedCount(0);
+      setSelectedAssetIds([]);
+      setSelectionCommand(null);
+    }
+  }, [shouldShowPhotoGrid]);
 
   // Calculate PhotoGrid height dynamically, same as AlbumsPage / PhotosPage
   useEffect(() => {
@@ -133,6 +154,40 @@ export function FoldersPage({
           onLogout={onLogout}
           searchInput={searchInput}
           onSearchChange={setSearchInput}
+          selectedAssetIds={selectedAssetIds}
+          selectedCount={selectedCount}
+          fetchAlbumsForSelection={fetchAlbums}
+          onAddSelectedToAlbum={async ({ albumId, newAlbumName }) => {
+            if (!selectedAssetIds.length) {
+              return;
+            }
+
+            if (newAlbumName) {
+              await createAlbumWithAssets(newAlbumName, selectedAssetIds);
+              return;
+            }
+
+            if (albumId) {
+              await addAssetsToAlbum(albumId, selectedAssetIds);
+            }
+          }}
+          onCreateShareLinkForSelected={async () =>
+            createShareLinkForAssets(selectedAssetIds)
+          }
+          onArchiveSelected={async () => {
+            await Promise.all(
+              selectedAssetIds.map((assetId) =>
+                updateAssetVisibility(assetId, "archive"),
+              ),
+            );
+            await assetsQuery.refetch();
+          }}
+          onClearSelection={() => {
+            setSelectionCommand({ type: "clear", nonce: Date.now() });
+          }}
+          onSelectAll={() => {
+            setSelectionCommand({ type: "select-all", nonce: Date.now() });
+          }}
           searchPlaceholder="Search folder photos"
         />
 
@@ -220,6 +275,9 @@ export function FoldersPage({
             <PhotoGrid
               key={currentPath}
               assets={allAssets}
+              onSelectedCountChange={setSelectedCount}
+              onSelectedIdsChange={setSelectedAssetIds}
+              selectionCommand={selectionCommand}
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
               maxHeight={photoGridHeight}

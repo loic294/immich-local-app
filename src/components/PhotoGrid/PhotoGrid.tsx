@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import {
   ArrowLeft,
   Check,
@@ -60,6 +67,12 @@ type PhotoGridProps = {
     containerWidth: number,
   ) => Promise<TimelineLayoutResponse>;
   maxHeight?: number;
+  onSelectedCountChange?: (count: number) => void;
+  onSelectedIdsChange?: (ids: string[]) => void;
+  selectionCommand?: {
+    type: "clear" | "select-all";
+    nonce: number;
+  } | null;
 };
 
 type VirtualEntry =
@@ -101,6 +114,9 @@ export function PhotoGrid({
   loadFullLayout,
   loadTimelineLayout,
   maxHeight = 0,
+  onSelectedCountChange,
+  onSelectedIdsChange,
+  selectionCommand,
 }: PhotoGridProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -176,6 +192,13 @@ export function PhotoGrid({
   const isUsingFullLayout = fullGridSections.length > 0;
   const [timelineLayout, setTimelineLayout] =
     useState<TimelineLayoutResponse | null>(null);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<
+    number | null
+  >(null);
+  const handledSelectionCommandRef = useRef(0);
 
   const requestFullscreenLoadMore = () => {
     if (pendingJumpDateKey) {
@@ -482,10 +505,19 @@ export function PhotoGrid({
 
   const displayAssets = useMemo(
     () =>
-      assets.map((asset) => {
-        const override = assetOverrides[asset.id];
-        return override ? { ...asset, ...override } : asset;
-      }),
+      assets
+        .map((asset) => {
+          const override = assetOverrides[asset.id];
+          return override ? { ...asset, ...override } : asset;
+        })
+        .filter((asset) => {
+          if (asset.isArchived) {
+            return false;
+          }
+
+          const visibility = (asset.visibility ?? "").toLowerCase();
+          return visibility !== "archive";
+        }),
     [assetOverrides, assets],
   );
 
@@ -500,6 +532,117 @@ export function PhotoGrid({
     () => new Map(displayAssets.map((asset) => [asset.id, asset])),
     [displayAssets],
   );
+  const assetIndexById = useMemo(
+    () =>
+      new Map(displayAssets.map((asset, index) => [asset.id, index] as const)),
+    [displayAssets],
+  );
+
+  useEffect(() => {
+    setSelectedAssetIds((current) => {
+      if (current.size === 0) {
+        return current;
+      }
+
+      const next = new Set<string>();
+      for (const id of current) {
+        if (assetIndexById.has(id)) {
+          next.add(id);
+        }
+      }
+
+      if (next.size === current.size) {
+        return current;
+      }
+
+      return next;
+    });
+  }, [assetIndexById]);
+
+  useEffect(() => {
+    onSelectedCountChange?.(selectedAssetIds.size);
+  }, [onSelectedCountChange, selectedAssetIds]);
+
+  useEffect(() => {
+    onSelectedIdsChange?.(Array.from(selectedAssetIds));
+  }, [onSelectedIdsChange, selectedAssetIds]);
+
+  useEffect(() => {
+    if (!selectionCommand) {
+      return;
+    }
+
+    if (selectionCommand.nonce === handledSelectionCommandRef.current) {
+      return;
+    }
+
+    handledSelectionCommandRef.current = selectionCommand.nonce;
+
+    if (selectionCommand.type === "clear") {
+      setSelectedAssetIds(new Set());
+      setSelectionAnchorIndex(null);
+      return;
+    }
+
+    if (selectionCommand.type === "select-all") {
+      const next = new Set(displayAssets.map((asset) => asset.id));
+      setSelectedAssetIds(next);
+      setSelectionAnchorIndex(displayAssets.length > 0 ? 0 : null);
+    }
+  }, [displayAssets, selectionCommand]);
+
+  const applySelection = (
+    assetId: string,
+    index: number,
+    modifiers: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
+  ) => {
+    const isToggle = modifiers.metaKey || modifiers.ctrlKey;
+
+    if (modifiers.shiftKey) {
+      const anchor =
+        selectionAnchorIndex !== null ? selectionAnchorIndex : index;
+      const start = Math.min(anchor, index);
+      const end = Math.max(anchor, index);
+      const rangeIds = displayAssets
+        .slice(start, end + 1)
+        .map((asset) => asset.id);
+
+      setSelectedAssetIds((current) => {
+        const next = isToggle ? new Set(current) : new Set<string>();
+        for (const id of rangeIds) {
+          next.add(id);
+        }
+        return next;
+      });
+      setSelectionAnchorIndex(index);
+      return;
+    }
+
+    if (isToggle) {
+      setSelectedAssetIds((current) => {
+        const next = new Set(current);
+        if (next.has(assetId)) {
+          next.delete(assetId);
+        } else {
+          next.add(assetId);
+        }
+        return next;
+      });
+      setSelectionAnchorIndex(index);
+      return;
+    }
+
+    setSelectedAssetIds((current) => {
+      const next = new Set(current);
+      if (next.has(assetId)) {
+        next.delete(assetId);
+      } else {
+        next.add(assetId);
+      }
+      return next;
+    });
+    setSelectionAnchorIndex(index);
+  };
 
   const availableDates = useMemo(
     () =>
@@ -1781,18 +1924,47 @@ export function PhotoGrid({
                       return null;
                     }
 
+                    const assetIndex = assetIndexById.get(asset.id) ?? -1;
+                    const isSelected = selectedAssetIds.has(asset.id);
+
                     return (
                       <article
                         key={asset.id}
-                        className="overflow-hidden bg-base-300 flex-none"
+                        className={`group relative overflow-hidden bg-base-300 flex-none rounded-sm ${isSelected ? "border-4 border-primary" : ""}`}
                         style={{
                           width: `${rowItem.width}px`,
                         }}
                       >
                         <AssetThumbnail
                           asset={asset}
-                          onOpen={() => {
+                          isSelected={isSelected}
+                          onOpen={(event) => {
+                            if (
+                              event.shiftKey ||
+                              event.metaKey ||
+                              event.ctrlKey
+                            ) {
+                              if (assetIndex >= 0) {
+                                applySelection(asset.id, assetIndex, {
+                                  shiftKey: event.shiftKey,
+                                  metaKey: event.metaKey,
+                                  ctrlKey: event.ctrlKey,
+                                });
+                              }
+                              return;
+                            }
                             openLightbox(asset.id);
+                          }}
+                          onToggleSelection={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (assetIndex >= 0) {
+                              applySelection(asset.id, assetIndex, {
+                                shiftKey: event.shiftKey,
+                                metaKey: event.metaKey,
+                                ctrlKey: event.ctrlKey,
+                              });
+                            }
                           }}
                           durationSeconds={videoDurations[asset.id]}
                           onDuration={(seconds) => {
@@ -2158,7 +2330,9 @@ export function PhotoGrid({
 
 function AssetThumbnail({
   asset,
+  isSelected,
   onOpen,
+  onToggleSelection,
   durationSeconds,
   onDuration,
   onDimensions,
@@ -2168,7 +2342,9 @@ function AssetThumbnail({
   jumpMetrics,
 }: {
   asset: AssetSummary;
-  onOpen: () => void;
+  isSelected: boolean;
+  onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
+  onToggleSelection: (event: MouseEvent<HTMLDivElement>) => void;
   durationSeconds?: number;
   onDuration: (seconds: number) => void;
   onDimensions: (width: number, height: number) => void;
@@ -2470,6 +2646,21 @@ function AssetThumbnail({
       }}
       aria-label={`Open ${asset.originalFileName} in full screen`}
     >
+      <div
+        role="button"
+        tabIndex={-1}
+        aria-label={isSelected ? "Deselect photo" : "Select photo"}
+        aria-pressed={isSelected}
+        className={`absolute left-1 top-1 z-20 flex h-5 w-5 cursor-pointer items-center justify-center rounded border text-[10px] transition ${
+          isSelected
+            ? "border-primary bg-primary text-primary-content opacity-100"
+            : "border-white/70 bg-black/45 text-white opacity-0 group-hover:opacity-100"
+        }`}
+        onClick={onToggleSelection}
+      >
+        {isSelected ? <Check size={12} /> : null}
+      </div>
+
       {isLivePhoto && isHovering && isPlayingLivePhoto && livePhotoVideoSrc ? (
         <video
           ref={previewVideoRef}

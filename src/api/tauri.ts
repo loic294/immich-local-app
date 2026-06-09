@@ -370,6 +370,34 @@ export async function fetchAlbums(): Promise<AlbumSummary[]> {
   return getCachedAlbums();
 }
 
+export async function createAlbumWithAssets(
+  albumName: string,
+  assetIds: string[],
+): Promise<AlbumSummary> {
+  return invoke<AlbumSummary>("create_album_with_assets", {
+    albumName,
+    assetIds,
+  });
+}
+
+export async function addAssetsToAlbum(
+  albumId: string,
+  assetIds: string[],
+): Promise<void> {
+  return invoke<void>("add_assets_to_album", {
+    albumId,
+    assetIds,
+  });
+}
+
+export async function createShareLinkForAssets(
+  assetIds: string[],
+): Promise<string> {
+  return invoke<string>("create_share_link_for_assets", {
+    assetIds,
+  });
+}
+
 export async function fetchUniqueOriginalPaths(): Promise<string[]> {
   return getCachedUniqueOriginalPaths();
 }

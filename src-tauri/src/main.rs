@@ -2,7 +2,10 @@ mod commands;
 mod db;
 mod services;
 
-use commands::albums::{fetch_albums, get_album_assets_paged, get_cached_album_full_grid_layout};
+use commands::albums::{
+    add_assets_to_album, create_album_with_assets, create_share_link_for_assets, fetch_albums,
+    get_album_assets_paged, get_cached_album_full_grid_layout,
+};
 use commands::assets::{
     calculate_grid_layout, fetch_assets, fetch_assets_by_month, get_all_cached_assets,
     get_asset_playback, get_asset_thumbnail, get_cached_asset_days, get_cached_asset_details,
@@ -88,6 +91,9 @@ pub fn main() {
             fetch_albums,
             get_album_assets_paged,
             get_cached_album_full_grid_layout,
+            create_album_with_assets,
+            add_assets_to_album,
+            create_share_link_for_assets,
             get_unique_original_paths,
             get_folder_assets_paged,
             get_cached_folder_full_grid_layout,

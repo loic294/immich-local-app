@@ -8,7 +8,15 @@ import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
 import type { Session } from "../hooks/useSession";
 import type { AlbumSummary } from "../types";
-import { getCachedAlbumFullGridLayout, openUrl } from "../api/tauri";
+import {
+  addAssetsToAlbum,
+  createAlbumWithAssets,
+  createShareLinkForAssets,
+  fetchAlbums,
+  getCachedAlbumFullGridLayout,
+  openUrl,
+  updateAssetVisibility,
+} from "../api/tauri";
 
 interface AlbumsPageProps {
   session: Session;
@@ -22,6 +30,12 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const [searchInput, setSearchInput] = useState("");
   const [filter, setFilter] = useState<AlbumFilter>("all");
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
+  const [selectedCount, setSelectedCount] = useState(0);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [selectionCommand, setSelectionCommand] = useState<{
+    type: "clear" | "select-all";
+    nonce: number;
+  } | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
 
@@ -157,6 +171,14 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
       .map(([year, albums]) => ({ year, albums }));
   }, [filteredAlbums]);
 
+  useEffect(() => {
+    if (!selectedAlbumId) {
+      setSelectedCount(0);
+      setSelectedAssetIds([]);
+      setSelectionCommand(null);
+    }
+  }, [selectedAlbumId]);
+
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage="albums" onNavigate={onNavigate} />
@@ -167,6 +189,40 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           onLogout={onLogout}
           searchInput={searchInput}
           onSearchChange={setSearchInput}
+          selectedAssetIds={selectedAssetIds}
+          selectedCount={selectedCount}
+          fetchAlbumsForSelection={fetchAlbums}
+          onAddSelectedToAlbum={async ({ albumId, newAlbumName }) => {
+            if (!selectedAssetIds.length) {
+              return;
+            }
+
+            if (newAlbumName) {
+              await createAlbumWithAssets(newAlbumName, selectedAssetIds);
+              return;
+            }
+
+            if (albumId) {
+              await addAssetsToAlbum(albumId, selectedAssetIds);
+            }
+          }}
+          onCreateShareLinkForSelected={async () =>
+            createShareLinkForAssets(selectedAssetIds)
+          }
+          onArchiveSelected={async () => {
+            await Promise.all(
+              selectedAssetIds.map((assetId) =>
+                updateAssetVisibility(assetId, "archive"),
+              ),
+            );
+            await albumAssetsQuery.refetch();
+          }}
+          onClearSelection={() => {
+            setSelectionCommand({ type: "clear", nonce: Date.now() });
+          }}
+          onSelectAll={() => {
+            setSelectionCommand({ type: "select-all", nonce: Date.now() });
+          }}
           searchPlaceholder={
             selectedAlbumId ? "Search photos in this album" : "Search albums"
           }
@@ -220,6 +276,9 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               ) : (
                 <PhotoGrid
                   assets={filteredAlbumAssets}
+                  onSelectedCountChange={setSelectedCount}
+                  onSelectedIdsChange={setSelectedAssetIds}
+                  selectionCommand={selectionCommand}
                   isFetching={albumAssetsQuery.isFetchingNextPage}
                   hasNextPage={Boolean(albumAssetsQuery.hasNextPage)}
                   maxHeight={photoGridHeight}

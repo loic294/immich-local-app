@@ -762,6 +762,157 @@ impl ImmichClient {
         Ok(albums)
     }
 
+    pub async fn create_album_with_assets(
+        &self,
+        album_name: &str,
+        asset_ids: &[String],
+    ) -> Result<AlbumSummary, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/albums", session.server_url);
+        let payload = serde_json::json!({
+            "albumName": album_name,
+            "assetIds": asset_ids,
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "create album failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        parse_album_from_payload(&body)
+    }
+
+    pub async fn add_assets_to_album(
+        &self,
+        album_id: &str,
+        asset_ids: &[String],
+    ) -> Result<(), String> {
+        if asset_ids.is_empty() {
+            return Ok(());
+        }
+
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/albums/{}/assets", session.server_url, album_id);
+        let payload = serde_json::json!({
+            "ids": asset_ids,
+        });
+
+        let methods = [reqwest::Method::PUT, reqwest::Method::POST];
+        let mut last_error = String::new();
+
+        for method in methods {
+            let response = self
+                .client
+                .request(method.clone(), &url)
+                .headers(headers.clone())
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+
+            if status.is_success() {
+                return Ok(());
+            }
+
+            last_error = format!(
+                "add assets to album failed with method {} status {} ({})",
+                method.as_str(),
+                status,
+                truncate_for_log(&body)
+            );
+        }
+
+        Err(last_error)
+    }
+
+    pub async fn create_share_link_for_assets(&self, asset_ids: &[String]) -> Result<String, String> {
+        if asset_ids.is_empty() {
+            return Err("no assets selected".to_string());
+        }
+
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/shared-links", session.server_url);
+        let payload = serde_json::json!({
+            "type": "INDIVIDUAL",
+            "assetIds": asset_ids,
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+
+        if !status.is_success() {
+            return Err(format!(
+                "create share link failed with status {} ({})",
+                status,
+                truncate_for_log(&body)
+            ));
+        }
+
+        parse_share_url_from_payload(&body, &session.server_url)
+    }
+
     pub async fn get_unique_original_paths(&self) -> Result<Vec<String>, String> {
         let session = self
             .session
@@ -1664,6 +1815,46 @@ fn parse_album_list(payload: &str) -> Result<Vec<AlbumSummary>, String> {
     }
 
     Err("unknown album payload shape".to_string())
+}
+
+fn parse_album_from_payload(payload: &str) -> Result<AlbumSummary, String> {
+    if let Ok(album) = serde_json::from_str::<AlbumSummary>(payload) {
+        return Ok(album);
+    }
+
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+
+    if let Some(album) = value.get("album") {
+        return serde_json::from_value::<AlbumSummary>(album.clone())
+            .map_err(|err| err.to_string());
+    }
+
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        if let Some(first) = items.first() {
+            return serde_json::from_value::<AlbumSummary>(first.clone())
+                .map_err(|err| err.to_string());
+        }
+    }
+
+    Err("unknown album payload shape".to_string())
+}
+
+fn parse_share_url_from_payload(payload: &str, base_url: &str) -> Result<String, String> {
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+
+    let key = value
+        .get("key")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("id").and_then(Value::as_str))
+        .or_else(|| {
+            value
+                .get("share")
+                .and_then(|share| share.get("key"))
+                .and_then(Value::as_str)
+        })
+        .ok_or_else(|| "share link key missing from payload".to_string())?;
+
+    Ok(format!("{}/share/{}", base_url, key))
 }
 
 fn parse_album_assets(payload: &str) -> Result<Vec<AssetSummary>, String> {

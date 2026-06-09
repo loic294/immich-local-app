@@ -6,8 +6,13 @@ import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useCalendarAssets } from "../hooks/useCalendarAssets";
 import {
+  addAssetsToAlbum,
+  createAlbumWithAssets,
+  createShareLinkForAssets,
+  fetchAlbums,
   getCachedCalendarFullGridLayout,
   getCachedTimelineMonths,
+  updateAssetVisibility,
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 
@@ -176,6 +181,12 @@ function MonthView({
 }: MonthViewProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
+  const [selectedCount, setSelectedCount] = useState(0);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [selectionCommand, setSelectionCommand] = useState<{
+    type: "clear" | "select-all";
+    nonce: number;
+  } | null>(null);
 
   const assetsQuery = useCalendarAssets(true, year, month);
   const assets = useMemo(
@@ -251,6 +262,40 @@ function MonthView({
           onLogout={onLogout}
           searchInput=""
           onSearchChange={() => {}}
+          selectedAssetIds={selectedAssetIds}
+          selectedCount={selectedCount}
+          fetchAlbumsForSelection={fetchAlbums}
+          onAddSelectedToAlbum={async ({ albumId, newAlbumName }) => {
+            if (!selectedAssetIds.length) {
+              return;
+            }
+
+            if (newAlbumName) {
+              await createAlbumWithAssets(newAlbumName, selectedAssetIds);
+              return;
+            }
+
+            if (albumId) {
+              await addAssetsToAlbum(albumId, selectedAssetIds);
+            }
+          }}
+          onCreateShareLinkForSelected={async () =>
+            createShareLinkForAssets(selectedAssetIds)
+          }
+          onArchiveSelected={async () => {
+            await Promise.all(
+              selectedAssetIds.map((assetId) =>
+                updateAssetVisibility(assetId, "archive"),
+              ),
+            );
+            await assetsQuery.refetch();
+          }}
+          onClearSelection={() => {
+            setSelectionCommand({ type: "clear", nonce: Date.now() });
+          }}
+          onSelectAll={() => {
+            setSelectionCommand({ type: "select-all", nonce: Date.now() });
+          }}
           searchPlaceholder="Calendar"
         />
 
@@ -287,6 +332,9 @@ function MonthView({
           ) : (
             <PhotoGrid
               assets={assets}
+              onSelectedCountChange={setSelectedCount}
+              onSelectedIdsChange={setSelectedAssetIds}
+              selectionCommand={selectionCommand}
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
               maxHeight={photoGridHeight}

@@ -7,9 +7,14 @@ import { MemoriesStrip } from "../components/Memories/MemoriesStrip";
 import { MemoryFullscreenViewer } from "../components/Memories/MemoryFullscreenViewer";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import {
+  addAssetsToAlbum,
+  createAlbumWithAssets,
+  createShareLinkForAssets,
+  fetchAlbums,
   getCachedAssetJumpTarget,
   getCachedTimelineLayout,
   getFullGridLayout,
+  updateAssetVisibility,
 } from "../api/tauri";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { toMemoryItem, type MemoryItem } from "../utils/memory";
@@ -26,12 +31,19 @@ interface PhotosPageProps {
 export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  const [archiveRefreshNonce, setArchiveRefreshNonce] = useState(0);
+  const [selectedCount, setSelectedCount] = useState(0);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [selectionCommand, setSelectionCommand] = useState<{
+    type: "clear" | "select-all";
+    nonce: number;
+  } | null>(null);
   const [memoryViewer, setMemoryViewer] = useState<{
     memoryIndex: number;
     assetIndex: number;
   } | null>(null);
   const { syncStatus } = useSyncStatus();
-  const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}`;
+  const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}:${archiveRefreshNonce}`;
 
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
@@ -140,6 +152,40 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
           onLogout={onLogout}
           searchInput={searchInput}
           onSearchChange={setSearchInput}
+          selectedAssetIds={selectedAssetIds}
+          selectedCount={selectedCount}
+          fetchAlbumsForSelection={fetchAlbums}
+          onAddSelectedToAlbum={async ({ albumId, newAlbumName }) => {
+            if (!selectedAssetIds.length) {
+              return;
+            }
+
+            if (newAlbumName) {
+              await createAlbumWithAssets(newAlbumName, selectedAssetIds);
+              return;
+            }
+
+            if (albumId) {
+              await addAssetsToAlbum(albumId, selectedAssetIds);
+            }
+          }}
+          onCreateShareLinkForSelected={async () =>
+            createShareLinkForAssets(selectedAssetIds)
+          }
+          onArchiveSelected={async () => {
+            await Promise.all(
+              selectedAssetIds.map((assetId) =>
+                updateAssetVisibility(assetId, "archive"),
+              ),
+            );
+            setArchiveRefreshNonce((current) => current + 1);
+          }}
+          onClearSelection={() => {
+            setSelectionCommand({ type: "clear", nonce: Date.now() });
+          }}
+          onSelectAll={() => {
+            setSelectionCommand({ type: "select-all", nonce: Date.now() });
+          }}
         />
 
         <section
@@ -199,6 +245,9 @@ export function PhotosPage({ session, onNavigate, onLogout }: PhotosPageProps) {
           ) : (
             <PhotoGrid
               assets={assets}
+              onSelectedCountChange={setSelectedCount}
+              onSelectedIdsChange={setSelectedAssetIds}
+              selectionCommand={selectionCommand}
               isFetching={assetsWindow.isFetchingNextPage}
               isFetchingPrevious={assetsWindow.isFetchingPreviousPage}
               hasPreviousPage={assetsWindow.hasPreviousPage}
