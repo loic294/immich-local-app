@@ -13,6 +13,7 @@ import {
   ChevronRight,
   CirclePlay,
   Film,
+  Heart,
   Calendar,
   Info,
   ZoomIn,
@@ -2737,6 +2738,12 @@ function AssetThumbnail({
         <div className="absolute right-1 top-1 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] text-white">
           <Film size={12} />
           <span>LIVE</span>
+        </div>
+      ) : null}
+
+      {asset.isFavorite ? (
+        <div className="absolute bottom-1 right-1 z-10 text-error" aria-hidden="true">
+          <Heart size={14} fill="currentColor" />
         </div>
       ) : null}
 

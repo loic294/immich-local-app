@@ -8,7 +8,11 @@ type DeletedPageProps = {
   onLogout: () => void;
 };
 
-export function DeletedPage({ session, onNavigate, onLogout }: DeletedPageProps) {
+export function DeletedPage({
+  session,
+  onNavigate,
+  onLogout,
+}: DeletedPageProps) {
   return (
     <PhotosPage
       session={session}
