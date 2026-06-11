@@ -8,6 +8,7 @@ import {
   Settings,
 } from "lucide-react";
 import { SyncStatusCard } from "./SyncStatusCard";
+import logoUrl from "../../assets/logo_with_title.svg";
 
 interface SidebarProps {
   activePage: AppPage;
@@ -33,8 +34,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
     <aside className="hidden h-screen border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
       <div className="flex h-full min-h-0 w-full flex-col gap-3 p-3">
         <div className="flex h-10 items-center gap-2 px-2 text-3xl font-bold text-primary">
-          <div className="h-7 w-7 rounded-full bg-linear-to-br from-error via-warning to-info" />
-          <span>immich.local</span>
+          <img src={logoUrl} alt="" className="h-10" />
         </div>
 
         <div className="min-h-0 flex-1 w-full overflow-y-auto pr-1">

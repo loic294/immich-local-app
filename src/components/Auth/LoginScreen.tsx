@@ -1,4 +1,5 @@
 import { useState, FormEvent } from "react";
+import logoUrl from "../../assets/logo.svg";
 
 type LoginScreenProps = {
   serverUrl: string;
@@ -46,6 +47,7 @@ export function LoginScreen({
   return (
     <section className="card mx-auto mt-20 w-full max-w-md border border-base-300 bg-base-100 shadow-xl">
       <div className="card-body">
+        <img src={logoUrl} alt="" className="mb-2 h-14 w-14 rounded-lg" />
         <h1 className="card-title text-2xl">Sign in to Immich</h1>
         <p className="text-sm text-base-content/70">
           Connect to your Immich server at {serverUrl}
