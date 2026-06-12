@@ -1,18 +1,53 @@
 name: Release
 
-# Build, sign, and publish desktop bundles when a version tag is pushed.
-# The Cloudflare Worker serves these release assets to the in-app updater.
+# Every push/merge to main builds, signs, and publishes a new desktop release.
+# The version is auto-incremented (patch bump) from the latest git tag and baked
+# into each build so the in-app updater (served by the Cloudflare Worker) can
+# compare versions correctly.
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
-# Allow creating the GitHub Release and uploading assets.
+# Allow creating the git tag, GitHub Release, and uploading assets.
 permissions:
   contents: write
 
+# Serialize releases so concurrent pushes don't compute the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: bump
+        shell: bash
+        run: |
+          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$latest" ]; then
+            next="0.1.0"
+            echo "[release] no existing tag, starting at $next"
+          else
+            v=${latest#v}
+            IFS='.' read -r major minor patch <<< "$v"
+            patch=$((patch + 1))
+            next="${major}.${minor}.${patch}"
+            echo "[release] latest tag $latest -> next $next"
+          fi
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+
   release:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +81,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Apply computed version
+        shell: bash
+        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
+
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -61,9 +100,9 @@ jobs:
           # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Immich Local App ${{ github.ref_name }}"
-          releaseBody: "See the assets to download and install this version."
+          tagName: v${{ needs.prepare.outputs.version }}
+          releaseName: "Immich Local App v${{ needs.prepare.outputs.version }}"
+          releaseBody: "Automated release from main. See the assets to download and install this version."
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
