@@ -1746,27 +1746,7 @@ impl Database {
 }
 
 fn dirs_home() -> Option<PathBuf> {
-    // Unix/macOS expose HOME; Windows exposes USERPROFILE (and as a last
-    // resort HOMEDRIVE + HOMEPATH). Checking all keeps cache/db paths working
-    // across platforms.
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return Some(PathBuf::from(home));
-        }
-    }
-    if let Ok(profile) = std::env::var("USERPROFILE") {
-        if !profile.is_empty() {
-            return Some(PathBuf::from(profile));
-        }
-    }
-    if let (Ok(drive), Ok(path)) =
-        (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
-    {
-        if !drive.is_empty() && !path.is_empty() {
-            return Some(PathBuf::from(format!("{drive}{path}")));
-        }
-    }
-    None
+    crate::util::home_dir()
 }
 
 fn map_asset_summary(row: &rusqlite::Row<'_>) -> Result<AssetSummary, rusqlite::Error> {

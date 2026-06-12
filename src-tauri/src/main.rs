@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod services;
+mod util;
 
 use commands::albums::{
     add_assets_to_album, add_user_to_album, can_manage_album_sharing, create_album_with_assets,

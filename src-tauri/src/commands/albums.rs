@@ -350,9 +350,9 @@ pub async fn save_album_locally(
 
     let base_folder = if settings.user_local_folder_path.is_empty() {
         eprintln!("[album-save-locally] user_local_folder_path is empty, using fallback ~/Albums");
-        let home = std::env::var("HOME")
-            .map_err(|_| "[album-save-locally] cannot resolve home directory".to_string())?;
-        Path::new(&home).join("Albums")
+        let home = crate::util::home_dir()
+            .ok_or_else(|| "[album-save-locally] cannot resolve home directory".to_string())?;
+        home.join("Albums")
     } else {
         Path::new(&settings.user_local_folder_path).to_path_buf()
     };

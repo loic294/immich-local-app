@@ -41,16 +41,8 @@ pub async fn update_settings(
 
 #[tauri::command]
 pub async fn get_cache_stats() -> Result<CacheStats, String> {
-    let home = std::env::var("HOME")
-        .ok()
-        .and_then(|h| {
-            let path = PathBuf::from(h);
-            if path.exists() {
-                Some(path)
-            } else {
-                None
-            }
-        })
+    let home = crate::util::home_dir()
+        .filter(|path| path.exists())
         .ok_or_else(|| "Could not determine home directory".to_string())?;
 
     let thumbnails_dir = home.join(".config/immich-local-app/thumbnails");
@@ -75,16 +67,8 @@ pub async fn get_cache_stats() -> Result<CacheStats, String> {
 
 #[tauri::command]
 pub async fn get_cache_path() -> Result<String, String> {
-    let home = std::env::var("HOME")
-        .ok()
-        .and_then(|h| {
-            let path = PathBuf::from(h);
-            if path.exists() {
-                Some(path)
-            } else {
-                None
-            }
-        })
+    let home = crate::util::home_dir()
+        .filter(|path| path.exists())
         .ok_or_else(|| "Could not determine home directory".to_string())?;
 
     let cache_dir = home.join(".config/immich-local-app");

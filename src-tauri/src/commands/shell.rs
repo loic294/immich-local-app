@@ -476,8 +476,9 @@ fn copy_file_paths_with_plugin(_app: &tauri::AppHandle, _paths: &[String]) -> Re
 }
 
 fn create_clipboard_staging_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
-    let base = Path::new(&home)
+    let home =
+        crate::util::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())?;
+    let base = home
         .join(".config")
         .join("immich-local-app")
         .join("clipboard-export");
