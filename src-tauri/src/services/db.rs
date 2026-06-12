@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -1532,16 +1532,8 @@ impl Database {
             .prepare("SELECT value FROM settings WHERE key = ?1")
             .map_err(|err| err.to_string())?;
 
-        let home = std::env::var("HOME")
-            .ok()
-            .and_then(|h| {
-                let path = Path::new(&h).to_path_buf();
-                if path.exists() {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
+        let home = dirs_home()
+            .filter(|path| path.exists())
             .ok_or_else(|| "Could not determine home directory".to_string())?;
 
         let thumbnail_cache_path = home.join(".config/immich-local-app/thumbnails");
@@ -1754,8 +1746,25 @@ impl Database {
 }
 
 fn dirs_home() -> Option<PathBuf> {
+    // Unix/macOS expose HOME; Windows exposes USERPROFILE (and as a last
+    // resort HOMEDRIVE + HOMEPATH). Checking all keeps cache/db paths working
+    // across platforms.
     if let Ok(home) = std::env::var("HOME") {
-        return Some(Path::new(&home).to_path_buf());
+        if !home.is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        if !profile.is_empty() {
+            return Some(PathBuf::from(profile));
+        }
+    }
+    if let (Ok(drive), Ok(path)) =
+        (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
+    {
+        if !drive.is_empty() && !path.is_empty() {
+            return Some(PathBuf::from(format!("{drive}{path}")));
+        }
     }
     None
 }

@@ -3256,25 +3256,45 @@ fn normalize_base(input: &str) -> String {
     input.trim_end_matches('/').to_string()
 }
 
+fn home_dir() -> Result<PathBuf, String> {
+    // Unix/macOS expose HOME; Windows exposes USERPROFILE (and as a last
+    // resort HOMEDRIVE + HOMEPATH).
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home));
+        }
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        if !profile.is_empty() {
+            return Ok(PathBuf::from(profile));
+        }
+    }
+    if let (Ok(drive), Ok(path)) =
+        (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
+    {
+        if !drive.is_empty() && !path.is_empty() {
+            return Ok(PathBuf::from(format!("{drive}{path}")));
+        }
+    }
+    Err("cannot resolve home directory".to_string())
+}
+
 fn thumbnail_cache_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
-    Ok(Path::new(&home)
+    Ok(home_dir()?
         .join(".config")
         .join("immich-local-app")
         .join("thumbnails"))
 }
 
 fn video_cache_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
-    Ok(Path::new(&home)
+    Ok(home_dir()?
         .join(".config")
         .join("immich-local-app")
         .join("videos"))
 }
 
 fn original_cache_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "cannot resolve home directory".to_string())?;
-    Ok(Path::new(&home)
+    Ok(home_dir()?
         .join(".config")
         .join("immich-local-app")
         .join("originals"))
