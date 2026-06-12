@@ -79,7 +79,7 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm i
 
       - name: Apply computed version
         shell: bash
