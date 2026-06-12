@@ -54,8 +54,13 @@ jobs:
         include:
           - platform: macos-latest
             args: "--target universal-apple-darwin"
+            rust_targets: "aarch64-apple-darwin,x86_64-apple-darwin"
           - platform: windows-latest
-            args: ""
+            args: "--target x86_64-pc-windows-msvc"
+            rust_targets: "x86_64-pc-windows-msvc"
+          - platform: windows-latest
+            args: "--target aarch64-pc-windows-msvc"
+            rust_targets: "aarch64-pc-windows-msvc"
 
     runs-on: ${{ matrix.platform }}
 
@@ -71,7 +76,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
