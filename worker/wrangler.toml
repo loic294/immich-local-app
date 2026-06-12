@@ -1,0 +1,11 @@
+name = "immich-local-app-updates"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Public, non-secret config. Set the private releases repo here.
+[vars]
+GITHUB_REPO = "loic294/immich-local-app"
+
+# GH_TOKEN is a SECRET — do not put it here. Set it with:
+#   wrangler secret put GH_TOKEN
+# Use a fine-grained PAT scoped to the releases repo with read-only "Contents".

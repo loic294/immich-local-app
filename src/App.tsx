@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { useSession } from "./hooks/useSession";
 import { useSyncStatus } from "./hooks/useSyncStatus";
+import { useAppUpdate } from "./hooks/useAppUpdate";
 import { ServerUrlScreen } from "./components/Auth/ServerUrlScreen";
 import { LoginScreen } from "./components/Auth/LoginScreen";
 import { LoadingScreen } from "./components/Layout/LoadingScreen";
+import { UpdateNotifier } from "./components/Layout/UpdateNotifier";
 import type { AppPage } from "./components/Layout/Sidebar";
 import { AlbumsPage } from "./pages/AlbumsPage";
 import { CalendarPage } from "./pages/CalendarPage";
@@ -31,6 +33,18 @@ export function App() {
   } = useSession();
 
   const { syncStatus, startSync, checkForNewAssets } = useSyncStatus();
+
+  const appUpdate = useAppUpdate();
+  const hasCheckedForUpdate = useRef(false);
+
+  // Check for app updates once on launch, then silently download any update.
+  useEffect(() => {
+    if (hasCheckedForUpdate.current) {
+      return;
+    }
+    hasCheckedForUpdate.current = true;
+    void appUpdate.checkForUpdate(true);
+  }, [appUpdate]);
 
   // If session is restored but serverUrl is still null, we're in OAuth step
   useEffect(() => {
@@ -144,63 +158,86 @@ export function App() {
 
   if (activePage === "albums") {
     return (
-      <AlbumsPage
-        session={session}
-        onNavigate={setActivePage}
-        onLogout={logout}
-      />
+      <>
+        <AlbumsPage
+          session={session}
+          onNavigate={setActivePage}
+          onLogout={logout}
+        />
+        <UpdateNotifier update={appUpdate} />
+      </>
     );
   }
 
   if (activePage === "folders") {
     return (
-      <FoldersPage
-        session={session}
-        onNavigate={setActivePage}
-        onLogout={logout}
-      />
+      <>
+        <FoldersPage
+          session={session}
+          onNavigate={setActivePage}
+          onLogout={logout}
+        />
+        <UpdateNotifier update={appUpdate} />
+      </>
     );
   }
 
   if (activePage === "calendar") {
     return (
-      <CalendarPage
-        session={session}
-        onNavigate={setActivePage}
-        onLogout={logout}
-      />
+      <>
+        <CalendarPage
+          session={session}
+          onNavigate={setActivePage}
+          onLogout={logout}
+        />
+        <UpdateNotifier update={appUpdate} />
+      </>
     );
   }
 
   if (activePage === "settings") {
-    return <SettingsPage onNavigate={setActivePage} onLogout={logout} />;
+    return (
+      <>
+        <SettingsPage onNavigate={setActivePage} onLogout={logout} />
+        <UpdateNotifier update={appUpdate} />
+      </>
+    );
   }
 
   if (activePage === "favorites") {
     return (
-      <FavoritesPage
-        session={session}
-        onNavigate={setActivePage}
-        onLogout={logout}
-      />
+      <>
+        <FavoritesPage
+          session={session}
+          onNavigate={setActivePage}
+          onLogout={logout}
+        />
+        <UpdateNotifier update={appUpdate} />
+      </>
     );
   }
 
   if (activePage === "deleted") {
     return (
-      <DeletedPage
-        session={session}
-        onNavigate={setActivePage}
-        onLogout={logout}
-      />
+      <>
+        <DeletedPage
+          session={session}
+          onNavigate={setActivePage}
+          onLogout={logout}
+        />
+        <UpdateNotifier update={appUpdate} />
+      </>
     );
   }
 
   return (
-    <PhotosPage
-      session={session}
-      onNavigate={setActivePage}
-      onLogout={logout}
-    />
+    <>
+      <PhotosPage
+        session={session}
+        onNavigate={setActivePage}
+        onLogout={logout}
+      />
+      <UpdateNotifier update={appUpdate} />
+    </>
   );
 }

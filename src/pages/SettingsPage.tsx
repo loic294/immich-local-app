@@ -6,7 +6,9 @@ import {
   ArrowLeft,
   RefreshCcw,
   Check,
+  Download,
 } from "lucide-react";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   getCacheStats,
   getCachePath,
@@ -18,6 +20,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { CacheStats, Settings } from "../types";
 import type { AppPage } from "../components/Layout/Sidebar";
 import { useSyncStatus } from "../hooks/useSyncStatus";
+import { useAppUpdate } from "../hooks/useAppUpdate";
 
 interface SettingsPageProps {
   onNavigate?: (page: AppPage) => void;
@@ -33,8 +36,10 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [isSavingLocalFolder, setIsSavingLocalFolder] = useState(false);
   const [localFolderDraft, setLocalFolderDraft] = useState("");
   const [isForcingFullSync, setIsForcingFullSync] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const { forceFullSync, syncStatus, isSyncing, isChecking, progress, error } =
     useSyncStatus({ enableAutoCheck: false });
+  const appUpdate = useAppUpdate();
 
   useEffect(() => {
     const loadData = async () => {
@@ -57,6 +62,14 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     };
 
     loadData();
+  }, []);
+
+  useEffect(() => {
+    getVersion()
+      .then(setAppVersion)
+      .catch((error) => {
+        console.error("Failed to read app version:", error);
+      });
   }, []);
 
   const handleToggleLivePhotoAutoplay = async () => {
@@ -485,11 +498,90 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
           </div>
         </div>
 
+        {/* App Updates */}
+        <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
+          <div className="card-body">
+            <h2 className="card-title">App Updates</h2>
+            <p className="text-sm text-base-content/70 mb-1">
+              Current version: {appVersion ?? "…"}
+            </p>
+
+            {appUpdate.status === "checking" && (
+              <div className="flex items-center gap-2 mb-3">
+                <span className="loading loading-spinner loading-xs"></span>
+                <span className="text-xs text-base-content/70">
+                  Checking for updates…
+                </span>
+              </div>
+            )}
+
+            {appUpdate.status === "downloading" && (
+              <div className="mb-3">
+                <progress
+                  className="progress progress-primary progress-sm mb-1"
+                  value={appUpdate.progress ?? 0}
+                  max="100"
+                ></progress>
+                <div className="text-xs text-base-content/70">
+                  Downloading update {appUpdate.newVersion}…
+                </div>
+              </div>
+            )}
+
+            {appUpdate.status === "uptodate" && (
+              <div className="flex items-center gap-2 mb-3">
+                <Check size={16} className="text-success" />
+                <span className="text-xs font-medium text-success">
+                  You are on the latest version.
+                </span>
+              </div>
+            )}
+
+            {appUpdate.status === "error" && (
+              <div className="alert alert-error alert-sm mb-3">
+                <span className="text-xs">
+                  {appUpdate.error ?? "Failed to check for updates."}
+                </span>
+              </div>
+            )}
+
+            {appUpdate.status === "ready" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void appUpdate.installAndRelaunch();
+                }}
+                className="btn btn-primary gap-2"
+              >
+                <RefreshCcw size={16} />
+                Restart to install {appUpdate.newVersion}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  void appUpdate.checkForUpdate(true);
+                }}
+                disabled={
+                  appUpdate.status === "checking" ||
+                  appUpdate.status === "downloading"
+                }
+                className="btn btn-outline gap-2"
+              >
+                <Download size={16} />
+                Check for Updates
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* About */}
         <div className="card border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
             <h2 className="card-title">About</h2>
-            <p className="text-sm text-base-content/70">immich.local v0.1.0</p>
+            <p className="text-sm text-base-content/70">
+              immich.local v{appVersion ?? "0.1.0"}
+            </p>
             <p className="text-xs text-base-content/60 mt-2">
               A local photo browsing app for Immich servers with support for
               live photos, albums, and offline caching.

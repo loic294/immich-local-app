@@ -10,6 +10,8 @@
     "core:event:default",
     "core:webview:allow-clear-all-browsing-data",
     "deep-link:default",
-    "dialog:default"
+    "dialog:default",
+    "updater:default",
+    "process:default"
   ]
 }
