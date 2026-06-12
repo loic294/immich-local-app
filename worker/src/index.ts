@@ -111,7 +111,9 @@ function selectAsset(
     const candidates = assets.filter(
       (a) => a.name.endsWith("-setup.exe") || a.name.endsWith(".msi"),
     );
-    main = candidates.find((a) => matchesArch(a.name)) ?? candidates[0];
+    // Never fall back across architectures: serving an x64 installer to an
+    // arm64 machine (or vice versa) causes boot crashes under emulation.
+    main = candidates.find((a) => matchesArch(a.name));
   } else if (target === "linux") {
     const candidates = assets.filter((a) => a.name.endsWith(".AppImage"));
     main = candidates.find((a) => matchesArch(a.name)) ?? candidates[0];
