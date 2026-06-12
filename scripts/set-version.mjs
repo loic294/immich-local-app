@@ -24,10 +24,15 @@ setJsonVersion("src-tauri/tauri.conf.json");
 // Cargo.toml: only the [package] version sits at the start of a line.
 const cargoPath = "src-tauri/Cargo.toml";
 const cargo = readFileSync(cargoPath, "utf8");
-const updated = cargo.replace(/^version = ".*"/m, `version = "${version}"`);
-if (updated === cargo) {
-  console.error(`[set-version] failed to update version in ${cargoPath}`);
+const versionPattern = /^version = ".*"/m;
+if (!versionPattern.test(cargo)) {
+  console.error(
+    `[set-version] no [package] version line found in ${cargoPath}`,
+  );
   process.exit(1);
 }
-writeFileSync(cargoPath, updated);
+writeFileSync(
+  cargoPath,
+  cargo.replace(versionPattern, `version = "${version}"`),
+);
 console.log(`[set-version] ${cargoPath} -> ${version}`);
