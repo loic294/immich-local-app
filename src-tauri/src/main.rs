@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod commands;
 mod db;
 mod services;
@@ -49,6 +51,19 @@ pub fn main() {
     let immich = Arc::new(ImmichClient::new());
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("immich-local-app".to_string()),
+                    },
+                ))
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                ))
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -58,19 +73,19 @@ pub fn main() {
         .setup(|app| {
             match app.deep_link().get_current() {
                 Ok(Some(urls)) => {
-                    println!("[oauth:deep-link:rust] startup urls={:?}", urls);
+                    log::info!("[oauth:deep-link:rust] startup urls={:?}", urls);
                 }
                 Ok(None) => {
-                    println!("[oauth:deep-link:rust] startup urls=<none>");
+                    log::info!("[oauth:deep-link:rust] startup urls=<none>");
                 }
                 Err(err) => {
-                    println!("[oauth:deep-link:rust] get_current error={}", err);
+                    log::error!("[oauth:deep-link:rust] get_current error={}", err);
                 }
             }
 
             app.deep_link().on_open_url(|event| {
                 let urls = event.urls();
-                println!("[oauth:deep-link:rust] on_open_url urls={:?}", urls);
+                log::info!("[oauth:deep-link:rust] on_open_url urls={:?}", urls);
             });
 
             Ok(())

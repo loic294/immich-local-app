@@ -45,7 +45,7 @@ pub async fn get_sync_status(
 pub async fn start_asset_sync(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<SyncStatusResponse, String> {
-    eprintln!("start_asset_sync invoked");
+    log::warn!("start_asset_sync invoked");
     start_asset_sync_internal(state, false).await
 }
 
@@ -53,7 +53,7 @@ pub async fn start_asset_sync(
 pub async fn force_full_asset_sync(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<SyncStatusResponse, String> {
-    eprintln!("force_full_asset_sync invoked");
+    log::warn!("force_full_asset_sync invoked");
     start_asset_sync_internal(state, true).await
 }
 
@@ -61,20 +61,20 @@ async fn start_asset_sync_internal(
     state: tauri::State<'_, crate::AppState>,
     force_full_sync: bool,
 ) -> Result<SyncStatusResponse, String> {
-    eprintln!(
+    log::warn!(
         "start_asset_sync_internal(force_full_sync={})",
         force_full_sync
     );
     // Get total asset count from Immich
     let statistics = state.immich.get_asset_statistics().await.map_err(|err| {
-        eprintln!("Failed to get asset statistics: {}", err);
+        log::warn!("Failed to get asset statistics: {}", err);
         format!("Failed to get asset statistics: {}", err)
     })?;
 
-    eprintln!("Got statistics, total assets: {}", statistics.total);
+    log::warn!("Got statistics, total assets: {}", statistics.total);
 
     let current_state = state.db.get_sync_state().map_err(|err| {
-        eprintln!("Failed to get sync state: {}", err);
+        log::warn!("Failed to get sync state: {}", err);
         format!("Failed to get sync state: {}", err)
     })?;
 
@@ -88,17 +88,17 @@ async fn start_asset_sync_internal(
             .db
             .resume_sync_state(statistics.total)
             .map_err(|err| {
-                eprintln!("Failed to resume sync state: {}", err);
+                log::warn!("Failed to resume sync state: {}", err);
                 format!("Failed to resume sync state: {}", err)
             })?
     } else {
         state.db.init_sync_state(statistics.total).map_err(|err| {
-            eprintln!("Failed to initialize sync state: {}", err);
+            log::warn!("Failed to initialize sync state: {}", err);
             format!("Failed to initialize sync state: {}", err)
         })?
     };
 
-    eprintln!(
+    log::warn!(
         "Sync state ready (processed: {} / {})",
         sync_state.processed_assets, sync_state.total_assets
     );
@@ -115,11 +115,11 @@ async fn start_asset_sync_internal(
     let immich = state.immich.clone();
 
     tauri::async_runtime::spawn(async move {
-        eprintln!("Starting background sync task from page {}", start_page);
+        log::warn!("Starting background sync task from page {}", start_page);
         if let Err(e) =
             sync_all_assets_background(immich, db, start_page, sync_state.processed_assets).await
         {
-            eprintln!("Background sync task failed: {}", e);
+            log::warn!("Background sync task failed: {}", e);
         }
     });
 
@@ -135,14 +135,14 @@ async fn sync_all_assets_background(
     match immich.get_all_people().await {
         Ok(people) => {
             if let Err(err) = db.upsert_people(&people) {
-                eprintln!("Failed to cache people list: {}", err);
+                log::warn!("Failed to cache people list: {}", err);
             }
         }
-        Err(err) => eprintln!("Failed to fetch people list: {}", err),
+        Err(err) => log::warn!("Failed to fetch people list: {}", err),
     }
 
     if let Err(err) = refresh_album_cache(immich.clone(), db.clone()).await {
-        eprintln!("Failed to refresh album cache: {}", err);
+        log::warn!("Failed to refresh album cache: {}", err);
     }
 
     let mut page = start_page;
@@ -150,23 +150,23 @@ async fn sync_all_assets_background(
     let mut processed_count = initial_processed_count;
 
     loop {
-        eprintln!("Fetching page {} of assets", page);
+        log::warn!("Fetching page {} of assets", page);
 
         // Fetch a page of assets
         let result = immich
             .get_all_assets_paginated(page, page_size)
             .await
             .map_err(|err| {
-                eprintln!("Failed to fetch assets: {}", err);
+                log::warn!("Failed to fetch assets: {}", err);
                 format!("Failed to fetch assets: {}", err)
             })?;
 
         if result.items.is_empty() {
-            eprintln!("No more assets to fetch");
+            log::warn!("No more assets to fetch");
             break;
         }
 
-        eprintln!("Got {} assets in page {}", result.items.len(), page);
+        log::warn!("Got {} assets in page {}", result.items.len(), page);
 
         // Hydrate each asset with full metadata from asset detail endpoint.
         let enriched_assets = enrich_assets_with_full_metadata(immich.clone(), result.items).await;
@@ -182,27 +182,27 @@ async fn sync_all_assets_background(
         // Save assets to database
         db.upsert_assets_with_metadata(&extended_assets)
             .map_err(|err| {
-                eprintln!("Failed to save assets: {}", err);
+                log::warn!("Failed to save assets: {}", err);
                 format!("Failed to save assets: {}", err)
             })?;
 
         db.replace_asset_people(&asset_people_links)
             .map_err(|err| {
-                eprintln!("Failed to save asset-people links: {}", err);
+                log::warn!("Failed to save asset-people links: {}", err);
                 format!("Failed to save asset-people links: {}", err)
             })?;
 
         processed_count += extended_assets.len() as i32;
-        eprintln!("Processed {} total assets", processed_count);
+        log::warn!("Processed {} total assets", processed_count);
 
         // Update progress in database
         db.update_sync_progress(processed_count).map_err(|err| {
-            eprintln!("Failed to update sync progress: {}", err);
+            log::warn!("Failed to update sync progress: {}", err);
             format!("Failed to update sync progress: {}", err)
         })?;
 
         if !result.has_next_page {
-            eprintln!("No more pages to fetch");
+            log::warn!("No more pages to fetch");
             break;
         }
 
@@ -210,13 +210,13 @@ async fn sync_all_assets_background(
     }
 
     // Mark sync as complete
-    eprintln!("Sync complete, marking as finished");
+    log::warn!("Sync complete, marking as finished");
     db.complete_sync().map_err(|err| {
-        eprintln!("Failed to complete sync: {}", err);
+        log::warn!("Failed to complete sync: {}", err);
         format!("Failed to complete sync: {}", err)
     })?;
 
-    eprintln!("Background sync task completed successfully");
+    log::warn!("Background sync task completed successfully");
     Ok(())
 }
 
@@ -235,7 +235,7 @@ async fn refresh_album_cache(
     for album in &albums {
         match immich.get_album_assets(&album.id).await {
             Ok(assets) => {
-                eprintln!(
+                log::warn!(
                     "[refresh_album_cache] album_id={} fetched {} assets",
                     album.id,
                     assets.len()
@@ -245,7 +245,7 @@ async fn refresh_album_cache(
                 let enrich_started_at = Instant::now();
                 let enriched_assets =
                     enrich_assets_with_full_metadata(immich.clone(), assets.clone()).await;
-                eprintln!(
+                log::warn!(
                     "[refresh_album_cache] album_id={} enriched_count={} duration_ms={}",
                     album.id,
                     enriched_assets.len(),
@@ -265,7 +265,7 @@ async fn refresh_album_cache(
 
                 // Store enriched assets in database
                 if let Err(err) = db.upsert_assets_with_metadata(&extended_assets) {
-                    eprintln!(
+                    log::warn!(
                         "Failed to cache album assets for album {}: {}",
                         album.id, err
                     );
@@ -274,7 +274,7 @@ async fn refresh_album_cache(
 
                 // Store people-asset links
                 if let Err(err) = db.replace_asset_people(&asset_people_links) {
-                    eprintln!(
+                    log::warn!(
                         "Failed to cache asset-people links for album {}: {}",
                         album.id, err
                     );
@@ -286,19 +286,19 @@ async fn refresh_album_cache(
                     .map(|asset| asset.id.clone())
                     .collect::<Vec<_>>();
                 if let Err(err) = db.replace_album_assets(&album.id, &asset_ids) {
-                    eprintln!(
+                    log::warn!(
                         "Failed to cache album asset links for album {}: {}",
                         album.id, err
                     );
                 }
 
-                eprintln!(
+                log::warn!(
                     "[refresh_album_cache] album_id={} completed successfully",
                     album.id
                 );
             }
             Err(err) => {
-                eprintln!("Failed to fetch assets for album {}: {}", album.id, err);
+                log::warn!("Failed to fetch assets for album {}: {}", album.id, err);
             }
         }
     }
@@ -311,11 +311,11 @@ pub async fn check_for_new_assets(
     state: tauri::State<'_, AppState>,
 ) -> Result<SyncStatusResponse, String> {
     let check_started_at = Instant::now();
-    eprintln!("[sync.check_for_new_assets] start");
+    log::warn!("[sync.check_for_new_assets] start");
 
     // Mark check as in progress
     state.db.start_check()?;
-    eprintln!("[sync.check_for_new_assets] status set to checking");
+    log::warn!("[sync.check_for_new_assets] status set to checking");
 
     // Get current statistics from Immich
     let statistics = state.immich.get_asset_statistics().await.map_err(|_| {
@@ -324,7 +324,7 @@ pub async fn check_for_new_assets(
         "Failed to get asset statistics".to_string()
     })?;
 
-    eprintln!(
+    log::warn!(
         "[sync.check_for_new_assets] server statistics total={} photos={:?} videos={:?}",
         statistics.total, statistics.photos, statistics.videos
     );
@@ -335,7 +335,7 @@ pub async fn check_for_new_assets(
         format!("Failed to get sync state: {}", err)
     })?;
 
-    eprintln!(
+    log::warn!(
         "[sync.check_for_new_assets] current sync state total_assets={} processed_assets={} is_syncing={} check_status={}",
         current_state.total_assets,
         current_state.processed_assets,
@@ -347,7 +347,7 @@ pub async fn check_for_new_assets(
     if statistics.total <= current_state.total_assets {
         // No new assets, just update checked timestamp
         let updated_state = state.db.complete_check(statistics.total)?;
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] no new assets detected (server_total={} local_total={}) duration_ms={}",
             statistics.total,
             current_state.total_assets,
@@ -356,7 +356,7 @@ pub async fn check_for_new_assets(
         return Ok(SyncStatusResponse::from(updated_state));
     }
 
-    eprintln!(
+    log::warn!(
         "[sync.check_for_new_assets] new assets detected delta={}",
         statistics.total - current_state.total_assets
     );
@@ -367,13 +367,13 @@ pub async fn check_for_new_assets(
     if let Ok(people) = state.immich.get_all_people().await {
         let people_count = people.len();
         let _ = state.db.upsert_people(&people);
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] refreshed people count={} duration_ms={}",
             people_count,
             people_started_at.elapsed().as_millis()
         );
     } else {
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] people refresh failed duration_ms={}",
             people_started_at.elapsed().as_millis()
         );
@@ -381,12 +381,12 @@ pub async fn check_for_new_assets(
 
     let album_refresh_started_at = Instant::now();
     if let Err(err) = refresh_album_cache(state.immich.clone(), state.db.clone()).await {
-        eprintln!(
+        log::warn!(
             "Failed to refresh album cache during new asset check: {}",
             err
         );
     } else {
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] album cache refresh done duration_ms={}",
             album_refresh_started_at.elapsed().as_millis()
         );
@@ -399,7 +399,7 @@ pub async fn check_for_new_assets(
 
     loop {
         let page_started_at = Instant::now();
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] fetching page={} page_size={}",
             page, page_size
         );
@@ -426,7 +426,7 @@ pub async fn check_for_new_assets(
             .unwrap_or("<none>");
         total_fetched_items += item_count;
 
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] fetched page={} item_count={} has_next_page={} first_id={} last_id={} fetch_duration_ms={}",
             page,
             item_count,
@@ -437,7 +437,7 @@ pub async fn check_for_new_assets(
         );
 
         if result.items.is_empty() {
-            eprintln!(
+            log::warn!(
                 "[sync.check_for_new_assets] stopping because page {} returned no items",
                 page
             );
@@ -448,7 +448,7 @@ pub async fn check_for_new_assets(
         let enrich_started_at = Instant::now();
         let enriched_assets =
             enrich_assets_with_full_metadata(state.immich.clone(), result.items).await;
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] enriched page={} enriched_count={} duration_ms={}",
             page,
             enriched_assets.len(),
@@ -483,7 +483,7 @@ pub async fn check_for_new_assets(
             })?;
 
         total_written_items += extended_assets.len();
-        eprintln!(
+        log::warn!(
             "[sync.check_for_new_assets] wrote page={} asset_rows={} people_links={} write_duration_ms={}",
             page,
             extended_assets.len(),
@@ -492,7 +492,7 @@ pub async fn check_for_new_assets(
         );
 
         if !result.has_next_page {
-            eprintln!(
+            log::warn!(
                 "[sync.check_for_new_assets] stopping because has_next_page=false on page={}",
                 page
             );
@@ -504,7 +504,7 @@ pub async fn check_for_new_assets(
 
     // Complete the check
     let updated_state = state.db.complete_check(statistics.total)?;
-    eprintln!(
+    log::warn!(
         "[sync.check_for_new_assets] complete fetched_items={} written_items={} duration_ms={}",
         total_fetched_items,
         total_written_items,
@@ -533,7 +533,7 @@ async fn enrich_assets_with_full_metadata(
             let metadata = match immich_client.get_asset_metadata(&asset.id).await {
                 Ok(value) => value,
                 Err(err) => {
-                    eprintln!(
+                    log::warn!(
                         "Failed to fetch metadata for asset {}: {}. Falling back to summary fields.",
                         asset.id, err
                     );
@@ -549,7 +549,7 @@ async fn enrich_assets_with_full_metadata(
     while let Some(join_result) = join_set.join_next().await {
         match join_result {
             Ok(asset) => enriched_assets.push(asset),
-            Err(err) => eprintln!("Metadata enrichment task join failed: {}", err),
+            Err(err) => log::warn!("Metadata enrichment task join failed: {}", err),
         }
     }
 

@@ -37,7 +37,7 @@ struct PendingFallback {
 
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
-    println!("[oauth:shell] opening external url={}", url);
+    log::info!("[oauth:shell] opening external url={}", url);
     open::that(&url).map_err(|err| format!("failed to open url: {err}"))
 }
 
@@ -51,7 +51,7 @@ pub async fn open_folder_in_file_explorer(path: String) -> Result<(), String> {
         return Err("Path is not a folder".to_string());
     }
 
-    println!(
+    log::info!(
         "[explorer:open] opening folder in file explorer path={}",
         target.to_string_lossy()
     );
@@ -82,7 +82,7 @@ pub async fn copy_assets_to_local_folder_internal(
     state: tauri::State<'_, AppState>,
     app: Option<tauri::AppHandle>,
 ) -> Result<LocalCopyResult, String> {
-    println!(
+    log::info!(
         "[local-copy] start asset_count={} destination={} allow_cached_fallback={}",
         asset_ids.len(),
         destination_folder,
@@ -116,7 +116,7 @@ pub async fn copy_assets_to_local_folder_internal(
         let details = match state.db.get_asset_details(&asset_id) {
             Ok(Some(value)) => value,
             Ok(None) => {
-                println!("[local-copy] asset not found in cache asset_id={}", asset_id);
+                log::info!("[local-copy] asset not found in cache asset_id={}", asset_id);
                 failed_count += 1;
                 // Emit progress
                 if let Some(ref app) = app {
@@ -134,7 +134,7 @@ pub async fn copy_assets_to_local_folder_internal(
                 continue;
             }
             Err(err) => {
-                println!(
+                log::info!(
                     "[local-copy] failed to read cached details asset_id={} error={}",
                     asset_id, err
                 );
@@ -183,7 +183,7 @@ pub async fn copy_assets_to_local_folder_internal(
                     }
                     continue;
                 }
-                println!(
+                log::info!(
                     "[local-copy] copy from original failed asset_id={} source={}",
                     details.id,
                     path.to_string_lossy()
@@ -194,18 +194,18 @@ pub async fn copy_assets_to_local_folder_internal(
         }
 
         if details.original_path.is_none() {
-            println!(
+            log::info!(
                 "[local-copy] original path missing asset_id={}",
                 details.id
             );
         } else if let Some(path) = details.original_path.as_deref() {
-            println!(
+            log::info!(
                 "[local-copy] original path not accessible asset_id={} path={}",
                 details.id, path
             );
         }
 
-        println!(
+        log::info!(
             "[local-copy] attempting server original download asset_id={}",
             details.id
         );
@@ -215,7 +215,7 @@ pub async fn copy_assets_to_local_folder_internal(
             .await
         {
             Ok(downloaded_original_path) => {
-                println!(
+                log::info!(
                     "[local-copy] downloaded original from server asset_id={} path={}",
                     details.id, downloaded_original_path
                 );
@@ -246,7 +246,7 @@ pub async fn copy_assets_to_local_folder_internal(
                         continue;
                     }
 
-                    println!(
+                    log::info!(
                         "[local-copy] failed to copy downloaded original asset_id={} source={}",
                         details.id,
                         downloaded_original_path
@@ -255,14 +255,14 @@ pub async fn copy_assets_to_local_folder_internal(
                     continue;
                 }
 
-                println!(
+                log::info!(
                     "[local-copy] downloaded original path missing on disk asset_id={} path={}",
                     details.id,
                     downloaded_original_path
                 );
             }
             Err(err) => {
-                println!(
+                log::info!(
                     "[local-copy] server original download failed asset_id={} error={}",
                     details.id, err
                 );
@@ -280,7 +280,7 @@ pub async fn copy_assets_to_local_folder_internal(
         {
             Ok(value) => value,
             Err(err) => {
-                println!(
+                log::info!(
                     "[local-copy] cache check failed asset_id={} error={}",
                     details.id, err
                 );
@@ -296,7 +296,7 @@ pub async fn copy_assets_to_local_folder_internal(
                 cache_path: candidate,
             });
         } else {
-            println!(
+            log::info!(
                 "[local-copy] no cached fallback candidate asset_id={} type={:?} duration_present={}",
                 details.id,
                 details.r#type,
@@ -315,7 +315,7 @@ pub async fn copy_assets_to_local_folder_internal(
         for fallback in pending_fallback {
             let source = Path::new(&fallback.cache_path);
             if !source.exists() || !source.is_file() {
-                println!(
+                log::info!(
                     "[local-copy] cached fallback disappeared asset_id={} path={}",
                     fallback.asset_id,
                     fallback.cache_path
@@ -335,7 +335,7 @@ pub async fn copy_assets_to_local_folder_internal(
     }
 
     let has_fallback_candidates = cache_fallback_available_count > 0;
-    println!(
+    log::info!(
         "[local-copy] done copied_original={} copied_cached={} originals_unavailable={} cache_fallback_candidates={} skipped={} failed={} fallback_enabled={}",
         copied_original_count,
         copied_cached_count,
@@ -360,16 +360,16 @@ pub async fn copy_assets_to_local_folder_internal(
 
 #[tauri::command]
 pub async fn copy_text_to_clipboard(text: String, app: tauri::AppHandle) -> Result<(), String> {
-    println!(
+    log::info!(
         "[clipboard:text] copy_text_to_clipboard requested (len={})",
         text.len()
     );
     let clipboard = app.state::<tauri_plugin_clipboard::Clipboard>();
     clipboard.write_text(text).map_err(|err| {
-        println!("[clipboard:text] write_text failed: {}", err);
+        log::info!("[clipboard:text] write_text failed: {}", err);
         err
     })?;
-    println!("[clipboard:text] write_text succeeded");
+    log::info!("[clipboard:text] write_text succeeded");
     Ok(())
 }
 
@@ -379,18 +379,18 @@ pub async fn copy_assets_to_clipboard(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    println!(
+    log::info!(
         "[clipboard] copy_assets_to_clipboard requested with {} asset(s)",
         asset_ids.len()
     );
 
     if asset_ids.is_empty() {
-        println!("[clipboard] rejected copy request: no assets selected");
+        log::info!("[clipboard] rejected copy request: no assets selected");
         return Err("No assets selected".to_string());
     }
 
     let staging_dir = create_clipboard_staging_dir()?;
-    println!(
+    log::info!(
         "[clipboard] staging files for clipboard in {}",
         staging_dir.to_string_lossy()
     );
@@ -399,13 +399,13 @@ pub async fn copy_assets_to_clipboard(
     let mut paths: Vec<String> = Vec::with_capacity(asset_ids.len());
 
     for asset_id in asset_ids {
-        println!("[clipboard] resolving thumbnail path for asset_id={}", asset_id);
+        log::info!("[clipboard] resolving thumbnail path for asset_id={}", asset_id);
         let thumbnail_path = state
             .immich
             .get_asset_thumbnail_file_path(&asset_id)
             .await
             .map_err(|err| {
-                println!(
+                log::info!(
                     "[clipboard] failed to resolve thumbnail path for asset_id={}: {}",
                     asset_id, err
                 );
@@ -413,7 +413,7 @@ pub async fn copy_assets_to_clipboard(
             })?;
 
         let asset = state.immich.get_asset(&asset_id).await.map_err(|err| {
-            println!(
+            log::info!(
                 "[clipboard] failed to resolve asset details for asset_id={}: {}",
                 asset_id, err
             );
@@ -426,7 +426,7 @@ pub async fn copy_assets_to_clipboard(
             &staging_dir,
             &mut used_names,
         )?;
-        println!(
+        log::info!(
             "[clipboard] staged asset_id={} as {}",
             asset_id,
             staged_path.to_string_lossy()
@@ -434,16 +434,16 @@ pub async fn copy_assets_to_clipboard(
         paths.push(staged_path.to_string_lossy().to_string());
     }
 
-    println!(
+    log::info!(
         "[clipboard] attempting plugin clipboard write for {} path(s)",
         paths.len()
     );
     copy_file_paths_with_plugin(&app, &paths).map_err(|err| {
-        println!("[clipboard] plugin clipboard write failed: {}", err);
+        log::info!("[clipboard] plugin clipboard write failed: {}", err);
         err
     })?;
 
-    println!(
+    log::info!(
         "[clipboard] plugin clipboard write succeeded for {} file(s)",
         paths.len()
     );
@@ -563,7 +563,7 @@ async fn resolve_cached_fallback_candidate(
         CacheKind::Thumbnail => thumbnail.clone().or(video.clone()),
     };
 
-    println!(
+    log::info!(
         "[local-copy] cache probe asset_id={} inferred_kind={:?} thumbnail_cached={} video_cached={}",
         asset_id,
         inferred,

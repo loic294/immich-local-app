@@ -63,7 +63,7 @@ pub async fn restore_session(
         return Ok(None);
     };
 
-    println!(
+    log::info!(
         "[auth:restore] restoring session for server_url={} (oauth={})",
         server_url, is_oauth
     );
@@ -123,7 +123,7 @@ pub async fn get_oauth_authorization_url(
     app_state: tauri::State<'_, AppState>,
 ) -> Result<OAuthUrlResponse, String> {
     let redirect_uri = redirect_uri.unwrap_or_else(|| "app.immich://oauth-callback".to_string());
-    println!(
+    log::info!(
         "[oauth:command:start] server_url={} redirect_uri={}",
         server_url, redirect_uri
     );
@@ -133,7 +133,7 @@ pub async fn get_oauth_authorization_url(
         .await
         .map_err(|err| format!("failed to start OAuth: {err}"))?;
 
-    println!(
+    log::info!(
         "[oauth:command:start] authorization_url={} ",
         authorization_url
     );
@@ -147,7 +147,7 @@ pub async fn complete_oauth_flow(
     callback_url: String,
     app_state: tauri::State<'_, AppState>,
 ) -> Result<AuthResponse, String> {
-    println!(
+    log::info!(
         "[oauth:command:finish] server_url={} callback_url={}",
         server_url, callback_url
     );
@@ -164,7 +164,7 @@ pub async fn complete_oauth_flow(
         .map_err(|err| format!("failed to persist OAuth token: {err}"))?;
 
     let preview = session.access_token.chars().take(8).collect::<String>();
-    println!(
+    log::info!(
         "[oauth:command:finish] success user_id={} user_name={:?}",
         session.user_id, session.user_name
     );

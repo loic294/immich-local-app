@@ -252,7 +252,7 @@ pub async fn get_cached_assets(
         .get_assets(page, page_size, search.as_deref(), filter.as_deref())
         .map_err(|err| format!("cache read failed: {err}"))?;
 
-    eprintln!(
+    log::warn!(
         "[assets.get_cached_assets] page={} page_size={} search={:?} filter={:?} item_count={} has_next_page={} duration_ms={}",
         page,
         page_size,
@@ -295,7 +295,7 @@ pub async fn get_cached_asset_days(
         .get_asset_days(search.as_deref(), filter.as_deref())
         .map_err(|err| format!("asset day query failed: {err}"))?;
 
-    eprintln!(
+    log::warn!(
         "[assets.get_cached_asset_days] search={:?} filter={:?} day_count={} duration_ms={}",
         search,
         filter,
@@ -320,7 +320,7 @@ pub async fn get_cached_asset_jump_target(
         .get_asset_jump_target_page(&date_key, page_size, search.as_deref(), filter.as_deref())
         .map_err(|err| format!("asset jump target query failed: {err}"))?;
 
-    eprintln!(
+    log::warn!(
         "[assets.get_cached_asset_jump_target] date_key={} page_size={} search={:?} filter={:?} page={:?} duration_ms={}",
         date_key,
         page_size,
@@ -416,7 +416,7 @@ pub async fn get_cached_timeline_layout(
         months,
     };
 
-    eprintln!(
+    log::warn!(
         "[assets.get_cached_timeline_layout] search={:?} filter={:?} container_width={} days={} months={} total_rows={} duration_ms={}",
         search,
         filter,
@@ -465,7 +465,7 @@ pub async fn get_cached_full_grid_layout(
 
     let response = calculate_grid_layout(layout_assets, container_width)?;
 
-    eprintln!(
+    log::warn!(
         "[assets.get_cached_full_grid_layout] search={:?} filter={:?} container_width={} sections={} duration_ms={}",
         search,
         filter,
@@ -511,7 +511,7 @@ pub async fn get_cached_calendar_full_grid_layout(
 
     let response = calculate_grid_layout(layout_assets, container_width)?;
 
-    eprintln!(
+    log::warn!(
         "[assets.get_cached_calendar_full_grid_layout] year={} month={} container_width={} sections={} duration_ms={}",
         year,
         month,
@@ -537,7 +537,7 @@ pub async fn get_asset_thumbnail(
 
     let elapsed_ms = started_at.elapsed().as_millis();
     if elapsed_ms >= 150 {
-        eprintln!(
+        log::warn!(
             "[assets.get_asset_thumbnail] asset_id={} duration_ms={}",
             asset_id, elapsed_ms
         );

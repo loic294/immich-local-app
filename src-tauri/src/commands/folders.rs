@@ -80,7 +80,7 @@ pub async fn get_cached_folder_full_grid_layout(
 
     let response = calculate_grid_layout(layout_assets, container_width)?;
 
-    eprintln!(
+    log::warn!(
         "[folders.get_cached_folder_full_grid_layout] path={} container_width={} sections={} duration_ms={}",
         path,
         container_width,

@@ -124,7 +124,7 @@ pub async fn get_cached_album_full_grid_layout(
 
     let response = calculate_grid_layout(layout_assets, container_width)?;
 
-    eprintln!(
+    log::warn!(
         "[albums.get_cached_album_full_grid_layout] album_id={} container_width={} sections={} duration_ms= {}",
         album_id,
         container_width,
@@ -304,7 +304,7 @@ pub async fn save_album_locally(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    eprintln!("[album-save-locally] start album_id={}", album_id);
+    log::warn!("[album-save-locally] start album_id={}", album_id);
 
     // Get all albums to find the one with matching ID
     let albums = state
@@ -317,7 +317,7 @@ pub async fn save_album_locally(
         .find(|a| a.id == album_id)
         .ok_or_else(|| format!("[album-save-locally] album not found: {}", album_id))?;
 
-    eprintln!(
+    log::warn!(
         "[album-save-locally] found album name={} start_date={:?}",
         album.album_name, album.start_date
     );
@@ -327,7 +327,7 @@ pub async fn save_album_locally(
         match DateTime::parse_from_rfc3339(date_str) {
             Ok(dt) => dt.year(),
             Err(_) => {
-                eprintln!(
+                log::warn!(
                     "[album-save-locally] failed to parse date, using current year: {}",
                     date_str
                 );
@@ -335,7 +335,7 @@ pub async fn save_album_locally(
             }
         }
     } else {
-        eprintln!("[album-save-locally] no start_date, using current year");
+        log::warn!("[album-save-locally] no start_date, using current year");
         chrono::Local::now().year()
     };
 
@@ -349,7 +349,7 @@ pub async fn save_album_locally(
         .map_err(|err| format!("[album-save-locally] failed to get settings: {}", err))?;
 
     let base_folder = if settings.user_local_folder_path.is_empty() {
-        eprintln!("[album-save-locally] user_local_folder_path is empty, using fallback ~/Albums");
+        log::warn!("[album-save-locally] user_local_folder_path is empty, using fallback ~/Albums");
         let home = crate::util::home_dir()
             .ok_or_else(|| "[album-save-locally] cannot resolve home directory".to_string())?;
         home.join("Albums")
@@ -359,7 +359,7 @@ pub async fn save_album_locally(
 
     let destination = base_folder.join(year.to_string()).join(&sanitized_name);
 
-    eprintln!(
+    log::warn!(
         "[album-save-locally] creating destination folder: {}",
         destination.to_string_lossy()
     );
@@ -376,15 +376,15 @@ pub async fn save_album_locally(
         .map_err(|err| format!("[album-save-locally] failed to get album assets: {}", err))?;
 
     let asset_ids: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
-    eprintln!(
+    log::warn!(
         "[album-save-locally] found {} assets to copy",
         asset_ids.len()
     );
 
     if asset_ids.is_empty() {
-        eprintln!("[album-save-locally] no assets in album, returning empty folder");
+        log::warn!("[album-save-locally] no assets in album, returning empty folder");
         let result = destination.to_string_lossy().to_string();
-        eprintln!("[album-save-locally] done folder_path={}", result);
+        log::warn!("[album-save-locally] done folder_path={}", result);
         return Ok(result);
     }
 
@@ -422,12 +422,12 @@ pub async fn save_album_locally(
         },
     );
 
-    eprintln!(
+    log::warn!(
         "[album-save-locally] copy completed: copied_original={} copied_cached={} failed={}",
         copy_result.copied_original_count, copy_result.copied_cached_count, copy_result.failed_count
     );
 
     let result = destination.to_string_lossy().to_string();
-    eprintln!("[album-save-locally] done folder_path={}", result);
+    log::warn!("[album-save-locally] done folder_path={}", result);
     Ok(result)
 }

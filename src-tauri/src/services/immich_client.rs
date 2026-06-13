@@ -286,7 +286,7 @@ impl ImmichClient {
         server_url: &str,
         token: &str,
     ) -> Result<AuthSession, String> {
-        println!(
+        log::info!(
             "[auth:restore] restoring oauth session for server_url={}",
             server_url
         );
@@ -331,7 +331,7 @@ impl ImmichClient {
         let mut guard = self.session.lock().await;
         *guard = Some(session.clone());
 
-        println!(
+        log::info!(
             "[auth:restore] oauth session restored for user_id={}",
             session.user_id
         );
@@ -350,7 +350,7 @@ impl ImmichClient {
             "redirectUri": redirect_uri,
         });
 
-        println!(
+        log::info!(
             "[oauth:start] POST {} with body {}",
             authorize_url,
             params
@@ -364,12 +364,12 @@ impl ImmichClient {
             .await
             .map_err(|err| err.to_string())?;
 
-        println!("[oauth:start] response status: {}", response.status());
+        log::info!("[oauth:start] response status: {}", response.status());
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            println!("[oauth:start] response body: {}", truncate_for_log(&body));
+            log::info!("[oauth:start] response body: {}", truncate_for_log(&body));
             return Err(format!(
                 "OAuth authorization failed with status {} ({})",
                 status,
@@ -378,13 +378,13 @@ impl ImmichClient {
         }
 
         let body = response.text().await.map_err(|err| err.to_string())?;
-        println!("[oauth:start] response body: {}", truncate_for_log(&body));
+        log::info!("[oauth:start] response body: {}", truncate_for_log(&body));
         let authorization_url = serde_json::from_str::<Value>(&body)
             .ok()
             .and_then(|value| value.get("url").and_then(Value::as_str).map(str::to_string))
             .ok_or_else(|| "OAuth response missing url".to_string())?;
 
-        println!("[oauth:start] parsed authorization url: {}", authorization_url);
+        log::info!("[oauth:start] parsed authorization url: {}", authorization_url);
 
         Ok(authorization_url)
     }
@@ -400,7 +400,7 @@ impl ImmichClient {
             "url": callback_url,
         });
 
-        println!(
+        log::info!(
             "[oauth:finish] POST {} with body {}",
             callback_endpoint,
             callback_payload
@@ -414,12 +414,12 @@ impl ImmichClient {
             .await
             .map_err(|err| err.to_string())?;
 
-        println!("[oauth:finish] response status: {}", response.status());
+        log::info!("[oauth:finish] response status: {}", response.status());
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            println!("[oauth:finish] response body: {}", truncate_for_log(&body));
+            log::info!("[oauth:finish] response body: {}", truncate_for_log(&body));
             return Err(format!(
                 "OAuth callback failed with status {} ({})",
                 status,
@@ -428,7 +428,7 @@ impl ImmichClient {
         }
 
         let body = response.text().await.map_err(|err| err.to_string())?;
-        println!("[oauth:finish] response body: {}", truncate_for_log(&body));
+        log::info!("[oauth:finish] response body: {}", truncate_for_log(&body));
         let value: Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
         let access_token = value
             .get("accessToken")
@@ -1047,7 +1047,7 @@ impl ImmichClient {
         );
 
         let url = format!("{}/api/albums/{}/users", session.server_url, album_id);
-        eprintln!(
+        log::warn!(
             "[album-share.can-manage] start album_id={} endpoint={}",
             album_id, url
         );
@@ -1064,7 +1064,7 @@ impl ImmichClient {
         let body = response.text().await.map_err(|err| err.to_string())?;
 
         if status.is_success() {
-            eprintln!(
+            log::warn!(
                 "[album-share.can-manage] success album_id={} status={}",
                 album_id, status
             );
@@ -1072,7 +1072,7 @@ impl ImmichClient {
         }
 
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            eprintln!(
+            log::warn!(
                 "[album-share.can-manage] forbidden album_id={} status={}",
                 album_id, status
             );
@@ -1100,7 +1100,7 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        eprintln!(
+        log::warn!(
             "[album-share.link] start album_id={} action=get-or-create",
             album_id
         );
@@ -1121,14 +1121,14 @@ impl ImmichClient {
             if let Some(existing) =
                 parse_first_share_url_from_payload(&list_body, &session.server_url, album_id)?
             {
-                eprintln!(
+                log::warn!(
                     "[album-share.link] existing album_id={} status={}",
                     album_id, list_status
                 );
                 return Ok(existing);
             }
         } else {
-            eprintln!(
+            log::warn!(
                 "[album-share.link] list-non-success album_id={} status={} body={}",
                 album_id,
                 list_status,
@@ -1155,7 +1155,7 @@ impl ImmichClient {
                 &session.server_url,
                 album_id,
             )? {
-                eprintln!(
+                log::warn!(
                     "[album-share.link] existing album_id={} status={} via=fallback-unfiltered",
                     album_id, fallback_status
                 );
@@ -1191,7 +1191,7 @@ impl ImmichClient {
             ));
         }
 
-        eprintln!(
+        log::warn!(
             "[album-share.link] created album_id={} status={}",
             album_id, status
         );
@@ -1213,7 +1213,7 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        eprintln!(
+        log::warn!(
             "[album-share.link] start album_id={} action=get-existing",
             album_id
         );
@@ -1234,14 +1234,14 @@ impl ImmichClient {
             let existing =
                 parse_first_share_url_from_payload(&list_body, &session.server_url, album_id)?;
             if existing.is_some() {
-                eprintln!(
+                log::warn!(
                     "[album-share.link] success album_id={} action=get-existing has_link=true",
                     album_id
                 );
                 return Ok(existing);
             }
         } else {
-            eprintln!(
+            log::warn!(
                 "[album-share.link] get-existing filtered-non-success album_id={} status={} body={}",
                 album_id,
                 list_status,
@@ -1272,7 +1272,7 @@ impl ImmichClient {
 
         let existing =
             parse_first_share_url_from_payload(&fallback_body, &session.server_url, album_id)?;
-        eprintln!(
+        log::warn!(
             "[album-share.link] success album_id={} action=get-existing has_link={} via=fallback-unfiltered",
             album_id,
             existing.is_some()
@@ -1295,7 +1295,7 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        eprintln!("[album-share.users] start album_id={} action=list", album_id);
+        log::warn!("[album-share.users] start album_id={} action=list", album_id);
 
         let users_url = format!("{}/api/albums/{}/users", session.server_url, album_id);
         let users_response = self
@@ -1311,7 +1311,7 @@ impl ImmichClient {
 
         if users_status.is_success() {
             let users = parse_album_share_users_payload(&users_body)?;
-            eprintln!(
+            log::warn!(
                 "[album-share.users] success album_id={} count={} via=users-endpoint",
                 album_id,
                 users.len()
@@ -1332,7 +1332,7 @@ impl ImmichClient {
 
         if details_status.is_success() {
             let users = parse_album_share_users_payload(&details_body)?;
-            eprintln!(
+            log::warn!(
                 "[album-share.users] success album_id={} count={} via=album-details",
                 album_id,
                 users.len()
@@ -1364,7 +1364,7 @@ impl ImmichClient {
         );
 
         let url = format!("{}/api/users", session.server_url);
-        eprintln!("[album-share.candidates] start endpoint={}", url);
+        log::warn!("[album-share.candidates] start endpoint={}", url);
 
         let response = self
             .client
@@ -1385,7 +1385,7 @@ impl ImmichClient {
         }
 
         let users = parse_user_candidates_payload(&body)?;
-        eprintln!(
+        log::warn!(
             "[album-share.candidates] success count={} endpoint={}",
             users.len(),
             url
@@ -1419,7 +1419,7 @@ impl ImmichClient {
             serde_json::json!({ "ids": [user_id], "role": role }),
         ];
 
-        eprintln!(
+        log::warn!(
             "[album-share.users] start album_id={} action=add user_id={} role={}",
             album_id, user_id, role
         );
@@ -1439,7 +1439,7 @@ impl ImmichClient {
             let body = response.text().await.map_err(|err| err.to_string())?;
 
             if status.is_success() {
-                eprintln!(
+                log::warn!(
                     "[album-share.users] success album_id={} action=add user_id={} status={}",
                     album_id, user_id, status
                 );
@@ -1471,7 +1471,7 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        eprintln!(
+        log::warn!(
             "[album-share.users] start album_id={} action=remove user_id={}",
             album_id, user_id
         );
@@ -1503,7 +1503,7 @@ impl ImmichClient {
             let body = response.text().await.map_err(|err| err.to_string())?;
 
             if status.is_success() {
-                eprintln!(
+                log::warn!(
                     "[album-share.users] success album_id={} action=remove user_id={} status={}",
                     album_id, user_id, status
                 );
@@ -2195,7 +2195,7 @@ impl ImmichClient {
 
         // First, try to verify the asset exists with a GET request
         let get_url = format!("{}/api/asset/{}", session.server_url, asset_id);
-        eprintln!(
+        log::warn!(
             "[update_asset_inner] Verifying asset exists with GET: {}",
             get_url
         );
@@ -2209,10 +2209,10 @@ impl ImmichClient {
             .map_err(|err| err.to_string())?;
 
         let get_status = get_response.status();
-        eprintln!("[update_asset_inner] GET response status: {}", get_status);
+        log::warn!("[update_asset_inner] GET response status: {}", get_status);
 
         if get_status == 404 {
-            eprintln!(
+            log::warn!(
                 "[update_asset_inner] Asset not found with GET /api/asset/, trying /api/assets/"
             );
             let get_url_plural = format!("{}/api/assets/{}", session.server_url, asset_id);
@@ -2223,14 +2223,14 @@ impl ImmichClient {
                 .send()
                 .await
                 .map_err(|err| err.to_string())?;
-            eprintln!(
+            log::warn!(
                 "[update_asset_inner] GET /api/assets/ response status: {}",
                 get_response_plural.status()
             );
         }
 
         // Try PATCH on singular endpoint
-        eprintln!("[update_asset_inner] Trying PATCH /api/asset/{}", asset_id);
+        log::warn!("[update_asset_inner] Trying PATCH /api/asset/{}", asset_id);
         let url = format!("{}/api/asset/{}", session.server_url, asset_id);
 
         let response = self
@@ -2245,14 +2245,14 @@ impl ImmichClient {
         let status = response.status();
         let body = response.text().await.map_err(|err| err.to_string())?;
 
-        eprintln!("[update_asset_inner] PATCH /api/asset/ status: {}", status);
-        eprintln!(
+        log::warn!("[update_asset_inner] PATCH /api/asset/ status: {}", status);
+        log::warn!(
             "[update_asset_inner] PATCH /api/asset/ body: {}",
             truncate_for_log(&body)
         );
 
         if status == 404 {
-            eprintln!(
+            log::warn!(
                 "[update_asset_inner] PATCH /api/asset/ returned 404, trying PUT /api/asset/"
             );
 
@@ -2268,14 +2268,14 @@ impl ImmichClient {
             let status = response.status();
             let body = response.text().await.map_err(|err| err.to_string())?;
 
-            eprintln!("[update_asset_inner] PUT /api/asset/ status: {}", status);
-            eprintln!(
+            log::warn!("[update_asset_inner] PUT /api/asset/ status: {}", status);
+            log::warn!(
                 "[update_asset_inner] PUT /api/asset/ body: {}",
                 truncate_for_log(&body)
             );
 
             if status == 404 {
-                eprintln!(
+                log::warn!(
                     "[update_asset_inner] PUT /api/asset/ returned 404, trying PATCH /api/assets/"
                 );
 
@@ -2292,14 +2292,14 @@ impl ImmichClient {
                 let status = response.status();
                 let body = response.text().await.map_err(|err| err.to_string())?;
 
-                eprintln!("[update_asset_inner] PATCH /api/assets/ status: {}", status);
-                eprintln!(
+                log::warn!("[update_asset_inner] PATCH /api/assets/ status: {}", status);
+                log::warn!(
                     "[update_asset_inner] PATCH /api/assets/ body: {}",
                     truncate_for_log(&body)
                 );
 
                 if status == 404 {
-                    eprintln!("[update_asset_inner] PATCH /api/assets/ returned 404, trying PUT /api/assets/");
+                    log::warn!("[update_asset_inner] PATCH /api/assets/ returned 404, trying PUT /api/assets/");
 
                     let response = self
                         .client
@@ -2313,8 +2313,8 @@ impl ImmichClient {
                     let status = response.status();
                     let body = response.text().await.map_err(|err| err.to_string())?;
 
-                    eprintln!("[update_asset_inner] PUT /api/assets/ status: {}", status);
-                    eprintln!(
+                    log::warn!("[update_asset_inner] PUT /api/assets/ status: {}", status);
+                    log::warn!(
                         "[update_asset_inner] PUT /api/assets/ body: {}",
                         truncate_for_log(&body)
                     );
@@ -2408,7 +2408,7 @@ impl ImmichClient {
 
         let status = response.status();
         let body = response.text().await.map_err(|err| err.to_string())?;
-        eprintln!(
+        log::warn!(
             "[immich.fetch_assets_inner] source=search_metadata page={} page_size={} status={} body_len={}",
             page,
             page_size,
@@ -2421,7 +2421,7 @@ impl ImmichClient {
                 if !result.has_next_page {
                     result.has_next_page = result.items.len() >= page_size as usize;
                 }
-                eprintln!(
+                log::warn!(
                     "[immich.fetch_assets_inner] source=search_metadata page={} parsed_items={} has_next_page={}",
                     page,
                     result.items.len(),
@@ -2430,7 +2430,7 @@ impl ImmichClient {
                 return Ok(result);
             }
 
-            eprintln!(
+            log::warn!(
                 "[immich.fetch_assets_inner] source=search_metadata page={} parse_failed body_preview={}",
                 page,
                 truncate_for_log(&body)
@@ -2455,7 +2455,7 @@ impl ImmichClient {
             .text()
             .await
             .map_err(|err| err.to_string())?;
-        eprintln!(
+        log::warn!(
             "[immich.fetch_assets_inner] source=assets_fallback page={} page_size={} status={} body_len={}",
             page,
             page_size,
@@ -2468,7 +2468,7 @@ impl ImmichClient {
                 if !result.has_next_page {
                     result.has_next_page = result.items.len() >= page_size as usize;
                 }
-                eprintln!(
+                log::warn!(
                     "[immich.fetch_assets_inner] source=assets_fallback page={} parsed_items={} has_next_page={}",
                     page,
                     result.items.len(),
@@ -2477,7 +2477,7 @@ impl ImmichClient {
                 return Ok(result);
             }
 
-            eprintln!(
+            log::warn!(
                 "[immich.fetch_assets_inner] source=assets_fallback page={} parse_failed body_preview={}",
                 page,
                 truncate_for_log(&assets_body)
