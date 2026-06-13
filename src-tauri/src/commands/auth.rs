@@ -55,7 +55,7 @@ pub async fn authenticate(
 pub async fn restore_session(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<RestoreSessionResponse>, String> {
-    let Some((server_url, api_key)) = state
+    let Some((server_url, token, is_oauth)) = state
         .db
         .get_auth_credentials()
         .map_err(|err| format!("failed to read credentials: {err}"))?
@@ -63,11 +63,26 @@ pub async fn restore_session(
         return Ok(None);
     };
 
-    let session = state
-        .immich
-        .authenticate_with_key(&server_url, &api_key)
-        .await
-        .map_err(|err| format!("session restore failed: {err}"))?;
+    println!(
+        "[auth:restore] restoring session for server_url={} (oauth={})",
+        server_url, is_oauth
+    );
+
+    // OAuth session tokens authenticate via the session cookie, API keys via the
+    // `x-api-key` header — use the mechanism that matches the stored token.
+    let session = if is_oauth {
+        state
+            .immich
+            .restore_oauth_session(&server_url, &token)
+            .await
+            .map_err(|err| format!("session restore failed: {err}"))?
+    } else {
+        state
+            .immich
+            .authenticate_with_key(&server_url, &token)
+            .await
+            .map_err(|err| format!("session restore failed: {err}"))?
+    };
 
     let preview = session.access_token.chars().take(8).collect::<String>();
 

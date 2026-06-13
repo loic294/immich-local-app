@@ -183,6 +183,7 @@ pub struct AuthSession {
 
 pub struct ImmichClient {
     client: reqwest::Client,
+    cookie_jar: Arc<reqwest::cookie::Jar>,
     session: Mutex<Option<AuthSession>>,
     playback_downloads: Arc<Mutex<HashSet<String>>>,
     cached_album: Mutex<Option<(String, Vec<AssetSummary>)>>,
@@ -191,13 +192,18 @@ pub struct ImmichClient {
 
 impl ImmichClient {
     pub fn new() -> Self {
+        // Retain the cookie jar so we can re-inject the Immich session cookie
+        // when restoring a persisted OAuth session (cookies are not persisted
+        // across restarts).
+        let cookie_jar = Arc::new(reqwest::cookie::Jar::default());
         let client = reqwest::Client::builder()
-            .cookie_store(true)
+            .cookie_provider(cookie_jar.clone())
             .build()
             .expect("failed to initialize HTTP client");
 
         Self {
             client,
+            cookie_jar,
             session: Mutex::new(None),
             playback_downloads: Arc::new(Mutex::new(HashSet::new())),
             cached_album: Mutex::new(None),
@@ -256,6 +262,79 @@ impl ImmichClient {
         let mut guard = self.session.lock().await;
         *guard = Some(session.clone());
 
+        Ok(session)
+    }
+
+    /// Inject the Immich session cookie into the shared cookie jar so that
+    /// subsequent requests authenticate as a session (OAuth) user. Immich
+    /// resolves the session token (cookie / bearer) BEFORE the `x-api-key`
+    /// header, so this lets a restored OAuth session authenticate even though
+    /// the per-request `x-api-key` header still carries the same token.
+    fn set_session_cookie(&self, server_url: &str, token: &str) -> Result<(), String> {
+        let url = reqwest::Url::parse(&normalize_base(server_url))
+            .map_err(|err| format!("invalid server url: {err}"))?;
+        let cookie = format!("immich_access_token={token}; Path=/");
+        self.cookie_jar.add_cookie_str(&cookie, &url);
+        Ok(())
+    }
+
+    /// Restore a previously persisted OAuth session. The stored token is an
+    /// Immich session token (not an API key), so it must be presented via the
+    /// session cookie rather than the `x-api-key` header.
+    pub async fn restore_oauth_session(
+        &self,
+        server_url: &str,
+        token: &str,
+    ) -> Result<AuthSession, String> {
+        println!(
+            "[auth:restore] restoring oauth session for server_url={}",
+            server_url
+        );
+        self.set_session_cookie(server_url, token)?;
+
+        let url = format!("{}/api/users/me", normalize_base(server_url));
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "session validation failed with status {}",
+                response.status()
+            ));
+        }
+
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        let value: Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
+        let user_id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "authentication response missing user id".to_string())?
+            .to_string();
+        let user_name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+
+        let session = AuthSession {
+            server_url: normalize_base(server_url),
+            access_token: token.to_string(),
+            refresh_token: None,
+            user_id,
+            user_name,
+        };
+
+        let mut guard = self.session.lock().await;
+        *guard = Some(session.clone());
+
+        println!(
+            "[auth:restore] oauth session restored for user_id={}",
+            session.user_id
+        );
         Ok(session)
     }
 
@@ -367,6 +446,10 @@ impl ImmichClient {
             .map(|name| name.trim().to_string())
             .filter(|name| !name.is_empty());
 
+        // Persist the session cookie in the shared jar so subsequent requests
+        // authenticate consistently (mirrors the server's Set-Cookie response).
+        self.set_session_cookie(&normalized_url, &access_token)?;
+
         let session = AuthSession {
             server_url: normalized_url,
             access_token,
@@ -383,6 +466,16 @@ impl ImmichClient {
 
     pub async fn clear_session(&self) {
         let mut guard = self.session.lock().await;
+        // Expire the session cookie in the shared jar so a logout invalidates
+        // the in-memory OAuth session as well.
+        if let Some(session) = guard.as_ref() {
+            if let Ok(url) = reqwest::Url::parse(&normalize_base(&session.server_url)) {
+                self.cookie_jar.add_cookie_str(
+                    "immich_access_token=; Path=/; Max-Age=0",
+                    &url,
+                );
+            }
+        }
         *guard = None;
 
         let mut album_cache = self.cached_album.lock().await;

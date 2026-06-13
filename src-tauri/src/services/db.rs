@@ -280,7 +280,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_auth_credentials(&self) -> Result<Option<(String, String)>, String> {
+    /// Returns the persisted auth credentials as `(server_url, token, is_oauth)`.
+    /// `is_oauth` is `true` when the stored token is an Immich OAuth session
+    /// token (key `oauth_token`) and `false` when it is an API key (key
+    /// `api_key`). The caller must use this flag to pick the correct
+    /// authentication mechanism: OAuth session tokens authenticate via the
+    /// session cookie, API keys via the `x-api-key` header.
+    pub fn get_auth_credentials(&self) -> Result<Option<(String, String, bool)>, String> {
         let conn = self.open()?;
         let mut stmt = conn
             .prepare("SELECT value FROM settings WHERE key = ?1")
@@ -290,17 +296,26 @@ impl Database {
             .query_row(params!["server_url"], |row| row.get::<_, String>(0))
             .ok();
 
-        // Try OAuth token first, fall back to API key
-        let token = stmt
+        // Prefer an OAuth session token; fall back to an API key.
+        let oauth_token = stmt
             .query_row(params!["oauth_token"], |row| row.get::<_, String>(0))
             .ok()
-            .or_else(|| {
+            .filter(|value| !value.is_empty());
+
+        let (token, is_oauth) = match oauth_token {
+            Some(token) => (Some(token), true),
+            None => (
                 stmt.query_row(params!["api_key"], |row| row.get::<_, String>(0))
                     .ok()
-            });
+                    .filter(|value| !value.is_empty()),
+                false,
+            ),
+        };
 
         match (server_url, token) {
-            (Some(url), Some(key)) if !url.is_empty() && !key.is_empty() => Ok(Some((url, key))),
+            (Some(url), Some(key)) if !url.is_empty() && !key.is_empty() => {
+                Ok(Some((url, key, is_oauth)))
+            }
             _ => Ok(None),
         }
     }
