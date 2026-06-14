@@ -10,6 +10,7 @@ pub struct Settings {
     pub thumbnail_cache_path: String,
     pub video_cache_path: String,
     pub user_local_folder_path: String,
+    pub menu_items: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

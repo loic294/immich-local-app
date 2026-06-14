@@ -137,6 +137,7 @@ export type Settings = {
   thumbnailCachePath: string;
   videoCachePath: string;
   userLocalFolderPath: string;
+  menuItems: string[];
 };
 
 export type LocalCopyResult = {

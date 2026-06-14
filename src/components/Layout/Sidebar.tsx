@@ -6,10 +6,12 @@ import {
   Image,
   Images,
   Settings,
+  type LucideIcon,
 } from "lucide-react";
 import { SyncStatusCard } from "./SyncStatusCard";
 import { OfflineBanner } from "./OfflineBanner";
 import { useConnectionContext } from "../../hooks/connectionContext";
+import { useSettings } from "../../hooks/useSettings";
 import logoUrl from "../../assets/logo_with_title.svg";
 
 interface SidebarProps {
@@ -26,8 +28,52 @@ export type AppPage =
   | "calendar"
   | "settings";
 
+/** Navigation menu item that can be toggled via Settings. */
+export type MenuItemKey =
+  | "photos"
+  | "albums"
+  | "calendar"
+  | "folders"
+  | "favorites"
+  | "deleted";
+
+type MenuItemDef = {
+  key: MenuItemKey;
+  label: string;
+  icon: LucideIcon;
+  /** "main" items sit in the top group; "library" in the second group. */
+  group: "main" | "library";
+};
+
+/**
+ * Ordered, shared definition of the toggleable navigation items. Keep the keys
+ * in sync with the backend `default_menu_items()` list. `settings` is always
+ * shown (it lives in the footer) and is intentionally not part of this list.
+ */
+export const MENU_ITEMS: MenuItemDef[] = [
+  { key: "photos", label: "Photos", icon: Image, group: "main" },
+  { key: "albums", label: "Albums", icon: Images, group: "main" },
+  { key: "calendar", label: "Calendar", icon: CalendarDays, group: "main" },
+  { key: "folders", label: "Folders", icon: FolderTree, group: "main" },
+  { key: "favorites", label: "Favorites", icon: Heart, group: "library" },
+  { key: "deleted", label: "Deleted", icon: Archive, group: "library" },
+];
+
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const { isOnline, pendingCount } = useConnectionContext();
+  const settingsQuery = useSettings();
+  // Until settings load, show every item so navigation is never empty.
+  const visibleKeys = settingsQuery.data?.menuItems;
+  const isVisible = (key: MenuItemKey) =>
+    visibleKeys ? visibleKeys.includes(key) : true;
+
+  const mainItems = MENU_ITEMS.filter(
+    (item) => item.group === "main" && isVisible(item.key),
+  );
+  const libraryItems = MENU_ITEMS.filter(
+    (item) => item.group === "library" && isVisible(item.key),
+  );
+
   const navClass = (page: AppPage) =>
     page === activePage
       ? "btn btn-md btn-block w-full max-w-none btn-soft btn-primary justify-start text-base font-semibold"
@@ -41,62 +87,42 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
         </div>
 
         <div className="min-h-0 flex-1 w-full overflow-y-auto pr-1">
-          <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
-            <button
-              className={navClass("photos")}
-              type="button"
-              onClick={() => onNavigate?.("photos")}
-            >
-              <Image size={16} className="shrink-0" />
-              <span>Photos</span>
-            </button>
-            <button
-              className={navClass("albums")}
-              type="button"
-              onClick={() => onNavigate?.("albums")}
-            >
-              <Images size={16} className="shrink-0" />
-              <span>Albums</span>
-            </button>
-            <button
-              className={navClass("calendar")}
-              type="button"
-              onClick={() => onNavigate?.("calendar")}
-            >
-              <CalendarDays size={16} className="shrink-0" />
-              <span>Calendar</span>
-            </button>
-            <button
-              className={navClass("folders")}
-              type="button"
-              onClick={() => onNavigate?.("folders")}
-            >
-              <FolderTree size={16} className="shrink-0" />
-              <span>Folders</span>
-            </button>
-          </nav>
+          {mainItems.length > 0 ? (
+            <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
+              {mainItems.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  className={navClass(key)}
+                  type="button"
+                  onClick={() => onNavigate?.(key)}
+                >
+                  <Icon size={16} className="shrink-0" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </nav>
+          ) : null}
 
-          <div className="mt-3 w-full px-2 text-sm font-semibold uppercase tracking-wide text-base-content/50">
-            Library
-          </div>
-          <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
-            <button
-              className={navClass("favorites")}
-              type="button"
-              onClick={() => onNavigate?.("favorites")}
-            >
-              <Heart size={16} className="shrink-0" />
-              <span>Favorites</span>
-            </button>
-            <button
-              className={navClass("deleted")}
-              type="button"
-              onClick={() => onNavigate?.("deleted")}
-            >
-              <Archive size={16} className="shrink-0" />
-              <span>Deleted</span>
-            </button>
-          </nav>
+          {libraryItems.length > 0 ? (
+            <>
+              <div className="mt-3 w-full px-2 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+                Library
+              </div>
+              <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
+                {libraryItems.map(({ key, label, icon: Icon }) => (
+                  <button
+                    key={key}
+                    className={navClass(key)}
+                    type="button"
+                    onClick={() => onNavigate?.(key)}
+                  >
+                    <Icon size={16} className="shrink-0" />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </nav>
+            </>
+          ) : null}
         </div>
 
         <div className="shrink-0 w-full space-y-3 px-2 pb-2">

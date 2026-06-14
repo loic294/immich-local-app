@@ -7,6 +7,22 @@ use serde::{Deserialize, Serialize};
 use crate::commands::settings::Settings;
 use crate::services::immich_client::AssetSummary;
 
+/// Default ordered list of navigation menu items that can be toggled in the
+/// sidebar. `settings` is intentionally excluded because it must always remain
+/// reachable. Keep these keys in sync with the frontend `AppPage` values.
+pub fn default_menu_items() -> Vec<String> {
+    [
+        "photos", "albums", "calendar", "folders", "favorites", "deleted",
+    ]
+    .iter()
+    .map(|item| item.to_string())
+    .collect()
+}
+
+fn default_menu_items_json() -> String {
+    serde_json::to_string(&default_menu_items()).unwrap_or_else(|_| "[]".to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
     pub id: String,
@@ -272,6 +288,11 @@ impl Database {
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('user_local_folder_path', '')",
             [],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('menu_items', ?1)",
+            params![default_menu_items_json()],
         )
         .map_err(|err| err.to_string())?;
 
@@ -1742,11 +1763,18 @@ impl Database {
             })
             .unwrap_or_default();
 
+        let menu_items = stmt
+            .query_row(params!["menu_items"], |row| row.get::<_, String>(0))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_else(default_menu_items);
+
         Ok(Settings {
             live_photo_autoplay,
             thumbnail_cache_path: thumbnail_cache_path.to_string_lossy().to_string(),
             video_cache_path: video_cache_path.to_string_lossy().to_string(),
             user_local_folder_path,
+            menu_items,
         })
     }
 
@@ -1761,6 +1789,13 @@ impl Database {
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('user_local_folder_path', ?1)",
             params![settings.user_local_folder_path],
+        )
+        .map_err(|err| err.to_string())?;
+        let menu_items_json =
+            serde_json::to_string(&settings.menu_items).map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('menu_items', ?1)",
+            params![menu_items_json],
         )
         .map_err(|err| err.to_string())?;
 

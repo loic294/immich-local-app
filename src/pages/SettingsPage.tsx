@@ -19,8 +19,10 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import type { CacheStats, Settings } from "../types";
 import type { AppPage } from "../components/Layout/Sidebar";
+import { MENU_ITEMS, type MenuItemKey } from "../components/Layout/Sidebar";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { useAppUpdate } from "../hooks/useAppUpdate";
+import { useInvalidateSettings } from "../hooks/useSettings";
 
 interface SettingsPageProps {
   onNavigate?: (page: AppPage) => void;
@@ -40,6 +42,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const { forceFullSync, syncStatus, isSyncing, isChecking, progress, error } =
     useSyncStatus({ enableAutoCheck: false });
   const appUpdate = useAppUpdate();
+  const invalidateSettings = useInvalidateSettings();
 
   useEffect(() => {
     const loadData = async () => {
@@ -84,6 +87,38 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
       setSettings(updated);
     } catch (error) {
       console.error("Failed to update settings:", error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleToggleMenuItem = async (key: MenuItemKey) => {
+    if (!settings) return;
+
+    const current = settings.menuItems ?? [];
+    const isCurrentlyVisible = current.includes(key);
+    // Preserve the canonical order from MENU_ITEMS so the sidebar stays stable.
+    const nextMenuItems = isCurrentlyVisible
+      ? current.filter((item) => item !== key)
+      : MENU_ITEMS.filter(
+          (item) => item.key === key || current.includes(item.key),
+        ).map((item) => item.key);
+
+    const previous = settings;
+    // Optimistic update so the toggle feels instant.
+    setSettings({ ...settings, menuItems: nextMenuItems });
+
+    try {
+      setIsSaving(true);
+      const updated = await updateSettings({
+        ...previous,
+        menuItems: nextMenuItems,
+      });
+      setSettings(updated);
+      await invalidateSettings();
+    } catch (error) {
+      console.error("Failed to update menu items:", error);
+      setSettings(previous);
     } finally {
       setIsSaving(false);
     }
@@ -281,10 +316,44 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
           </div>
         </div>
 
+        {/* Navigation Menu Settings */}
+        <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
+          <div className="card-body">
+            <h2 className="card-title">Navigation Menu</h2>
+            <p className="text-sm text-base-content/70 mb-2">
+              Choose which items appear in the sidebar. Settings is always
+              shown.
+            </p>
+            <div className="flex flex-col">
+              {MENU_ITEMS.map(({ key, label, icon: Icon }) => {
+                const checked = settings?.menuItems?.includes(key) ?? false;
+                return (
+                  <label
+                    key={key}
+                    className="label cursor-pointer justify-start gap-3"
+                  >
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-primary"
+                      checked={checked}
+                      onChange={() => {
+                        void handleToggleMenuItem(key);
+                      }}
+                      disabled={isSaving || !settings}
+                    />
+                    <Icon size={16} className="shrink-0 text-base-content/70" />
+                    <span className="label-text">{label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
         {/* Live Photo Settings */}
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">Live Photos</h2>
+            <h2 className="card-title">Live Photos</h2>{" "}
             <div className="form-control">
               <label className="label cursor-pointer">
                 <span className="label-text">
