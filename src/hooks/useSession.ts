@@ -21,6 +21,9 @@ export type UseSessionReturn = {
   error: string | null;
   isAuthenticating: boolean;
   isRestoringSession: boolean;
+  /** True when the session was restored from cache while the server was
+   *  unreachable (the app started offline). */
+  restoredOffline: boolean;
   serverUrl: string | null;
   setServerUrl: (url: string) => Promise<void>;
   initiateOAuth: () => Promise<void>;
@@ -35,6 +38,7 @@ export function useSession(): UseSessionReturn {
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isRestoringSession, setIsRestoringSession] = useState(true);
+  const [restoredOffline, setRestoredOffline] = useState(false);
   const isDev = import.meta.env.DEV;
   const processedCallbackUrlsRef = useRef<Set<string>>(new Set());
   const callbackInFlightRef = useRef<Set<string>>(new Set());
@@ -89,12 +93,18 @@ export function useSession(): UseSessionReturn {
     }
 
     if (processedCallbackUrlsRef.current.has(callbackUrl)) {
-      console.log("[oauth:ui:callback] callback already processed, skipping", callbackUrl);
+      console.log(
+        "[oauth:ui:callback] callback already processed, skipping",
+        callbackUrl,
+      );
       return;
     }
 
     if (callbackInFlightRef.current.has(callbackUrl)) {
-      console.log("[oauth:ui:callback] callback already in-flight, skipping", callbackUrl);
+      console.log(
+        "[oauth:ui:callback] callback already in-flight, skipping",
+        callbackUrl,
+      );
       return;
     }
 
@@ -209,6 +219,12 @@ export function useSession(): UseSessionReturn {
             userName: response.userName ?? response.userId,
           });
           setServerUrlState(response.serverUrl);
+          setRestoredOffline(response.offline);
+          if (response.offline) {
+            console.warn(
+              "[session] restored from cache while offline — entering offline mode",
+            );
+          }
         }
       } catch {
         // No stored session or restore failed — stay on login screen
@@ -360,7 +376,10 @@ export function useSession(): UseSessionReturn {
         await clearWebviewBrowsingData();
         console.log("[oauth:ui:logout] cleared webview browsing data");
       } catch (err) {
-        console.error("[oauth:ui:logout] failed to clear webview browsing data", err);
+        console.error(
+          "[oauth:ui:logout] failed to clear webview browsing data",
+          err,
+        );
       }
 
       try {
@@ -376,6 +395,7 @@ export function useSession(): UseSessionReturn {
     error,
     isAuthenticating,
     isRestoringSession,
+    restoredOffline,
     serverUrl,
     setServerUrl,
     initiateOAuth,

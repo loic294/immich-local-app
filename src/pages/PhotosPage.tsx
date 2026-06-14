@@ -163,6 +163,24 @@ export function PhotosPage({
     };
   }, [memoryItems.length]);
 
+  // Hoisted out of JSX so the hook order stays stable even when the grid is
+  // replaced by the error/offline branch (otherwise React throws
+  // "Rendered fewer hooks than expected").
+  const loadFullLayout = useCallback(
+    (containerWidth: number) =>
+      getFullGridLayout(searchTerm.trim() || null, containerWidth, assetFilter),
+    [assetFilter, searchTerm],
+  );
+  const loadTimelineLayout = useCallback(
+    (containerWidth: number) =>
+      getCachedTimelineLayout(
+        searchTerm.trim() || null,
+        containerWidth,
+        assetFilter,
+      ),
+    [assetFilter, searchTerm],
+  );
+
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage={activePage} onNavigate={onNavigate} />
@@ -251,7 +269,8 @@ export function PhotosPage({
             </div>
           ) : null}
 
-          {assetsWindow.error || memoriesQuery.isError ? (
+          {(assetsWindow.error || memoriesQuery.isError) &&
+          assets.length === 0 ? (
             <div
               role="alert"
               data-test="error-alert"
@@ -332,24 +351,8 @@ export function PhotosPage({
                   ),
                 });
               }}
-              loadFullLayout={useCallback(
-                (containerWidth: number) =>
-                  getFullGridLayout(
-                    searchTerm.trim() || null,
-                    containerWidth,
-                    assetFilter,
-                  ),
-                [assetFilter, searchTerm],
-              )}
-              loadTimelineLayout={useCallback(
-                (containerWidth: number) =>
-                  getCachedTimelineLayout(
-                    searchTerm.trim() || null,
-                    containerWidth,
-                    assetFilter,
-                  ),
-                [assetFilter, searchTerm],
-              )}
+              loadFullLayout={loadFullLayout}
+              loadTimelineLayout={loadTimelineLayout}
             />
           )}
         </section>

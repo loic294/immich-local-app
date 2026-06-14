@@ -31,6 +31,9 @@ export type RestoreSessionResponse = {
   userId: string;
   userName: string | null;
   serverUrl: string;
+  /** True when the session was restored from cache because the server was
+   *  unreachable. The app should enter offline mode. */
+  offline: boolean;
 };
 
 export type OAuthUrlResponse = {
@@ -84,6 +87,21 @@ export async function authenticate(
 
 export async function restoreSession(): Promise<RestoreSessionResponse | null> {
   return invoke<RestoreSessionResponse | null>("restore_session");
+}
+
+/** Probe whether the configured Immich server is currently reachable. */
+export async function checkServerConnection(): Promise<boolean> {
+  return invoke<boolean>("check_server_connection");
+}
+
+/** Replay queued offline mutations; resolves with the number still pending. */
+export async function flushPendingMutations(): Promise<number> {
+  return invoke<number>("flush_pending_mutations");
+}
+
+/** Number of asset mutations queued locally while offline. */
+export async function getPendingMutationCount(): Promise<number> {
+  return invoke<number>("get_pending_mutation_count");
 }
 
 export async function logoutFromServer(): Promise<void> {

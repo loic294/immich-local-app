@@ -13,16 +13,16 @@ use commands::albums::{
     save_album_locally,
 };
 use commands::assets::{
-    calculate_grid_layout, fetch_assets, fetch_assets_by_month, get_all_cached_assets,
-    get_asset_playback, get_asset_thumbnail, get_cached_asset_days, get_cached_asset_details,
-    get_cached_asset_jump_target, get_cached_assets, get_cached_calendar_full_grid_layout,
-    get_cached_full_grid_layout, get_cached_timeline_layout, get_calendar_assets_paged,
-    get_timeline_months, refresh_asset, update_asset_description, update_asset_favorite,
-    update_asset_rating, update_asset_visibility,
+    calculate_grid_layout, fetch_assets, fetch_assets_by_month, flush_pending_mutations,
+    get_all_cached_assets, get_asset_playback, get_asset_thumbnail, get_cached_asset_days,
+    get_cached_asset_details, get_cached_asset_jump_target, get_cached_assets,
+    get_cached_calendar_full_grid_layout, get_cached_full_grid_layout, get_cached_timeline_layout,
+    get_calendar_assets_paged, get_pending_mutation_count, get_timeline_months, refresh_asset,
+    update_asset_description, update_asset_favorite, update_asset_rating, update_asset_visibility,
 };
 use commands::auth::{
-    authenticate, complete_oauth_flow, get_oauth_authorization_url, get_profile_image, logout,
-    restore_session,
+    authenticate, check_server_connection, complete_oauth_flow, get_oauth_authorization_url,
+    get_profile_image, logout, restore_session,
 };
 use commands::folders::get_cached_folder_full_grid_layout;
 use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
@@ -94,6 +94,7 @@ pub fn main() {
         .invoke_handler(tauri::generate_handler![
             authenticate,
             restore_session,
+            check_server_connection,
             logout,
             get_profile_image,
             get_oauth_authorization_url,
@@ -113,6 +114,8 @@ pub fn main() {
             update_asset_visibility,
             update_asset_rating,
             update_asset_description,
+            flush_pending_mutations,
+            get_pending_mutation_count,
             fetch_memories,
             fetch_albums,
             get_album_assets_paged,

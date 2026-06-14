@@ -266,7 +266,7 @@ export function FoldersPage({
             </section>
           ) : null}
 
-          {assetsQuery.isError ? (
+          {assetsQuery.isError && allAssets.length === 0 ? (
             <div
               role="alert"
               data-test="error-alert"

@@ -19,8 +19,14 @@ pub struct SyncState {
     pub created_at: String,
     pub updated_at: String,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingMutation {
+    pub id: i64,
+    pub asset_id: String,
+    pub kind: String,
+    pub payload_json: String,
+    pub created_at: String,
+}#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetSummaryExtended {
     pub id: String,
     pub original_file_name: String,
@@ -155,6 +161,13 @@ impl Database {
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS pending_mutations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
             );
             ",
         )
@@ -350,6 +363,103 @@ impl Database {
         Ok(())
     }
 
+    /// Persist the authenticated user's identity so the app can restore a
+    /// session and render the UI while offline (without contacting the server).
+    pub fn save_user_info(&self, user_id: &str, user_name: Option<&str>) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('user_id', ?1)",
+            params![user_id],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('user_name', ?1)",
+            params![user_name.unwrap_or("")],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    /// Returns the cached `(user_id, user_name)` for offline session restore, or
+    /// `None` when no user identity has been persisted yet.
+    pub fn get_user_info(&self) -> Result<Option<(String, Option<String>)>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")
+            .map_err(|err| err.to_string())?;
+
+        let user_id = stmt
+            .query_row(params!["user_id"], |row| row.get::<_, String>(0))
+            .ok()
+            .filter(|value| !value.is_empty());
+
+        let user_name = stmt
+            .query_row(params!["user_name"], |row| row.get::<_, String>(0))
+            .ok()
+            .filter(|value| !value.is_empty());
+
+        Ok(user_id.map(|id| (id, user_name)))
+    }
+
+    /// Enqueue an asset mutation that could not be sent to the server (because
+    /// it was offline) so it can be replayed once connectivity is restored.
+    pub fn enqueue_mutation(
+        &self,
+        asset_id: &str,
+        kind: &str,
+        payload_json: &str,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO pending_mutations (asset_id, kind, payload_json, created_at)
+             VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+            params![asset_id, kind, payload_json],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    /// List queued mutations in the order they were created (oldest first).
+    pub fn list_pending_mutations(&self) -> Result<Vec<PendingMutation>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, asset_id, kind, payload_json, created_at
+                 FROM pending_mutations ORDER BY id ASC",
+            )
+            .map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PendingMutation {
+                    id: row.get(0)?,
+                    asset_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    payload_json: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(|err| err.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())
+    }
+
+    /// Remove a queued mutation after it has been successfully replayed.
+    pub fn delete_pending_mutation(&self, id: i64) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute("DELETE FROM pending_mutations WHERE id = ?1", params![id])
+            .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    /// Count of queued mutations awaiting replay.
+    pub fn count_pending_mutations(&self) -> Result<i64, String> {
+        let conn = self.open()?;
+        conn.query_row("SELECT COUNT(*) FROM pending_mutations", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|err| err.to_string())
+    }
+
     fn open(&self) -> Result<Connection, String> {
         Connection::open(&self.db_path).map_err(|err| err.to_string())
     }
@@ -485,6 +595,48 @@ impl Database {
         conn.execute(
             "UPDATE assets SET description = ?2, updated_at = strftime('%s', 'now') WHERE id = ?1",
             params![asset_id, description],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn update_asset_favorite(
+        &self,
+        asset_id: &str,
+        is_favorite: bool,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE assets SET is_favorite = ?2, updated_at = strftime('%s', 'now') WHERE id = ?1",
+            params![asset_id, is_favorite],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn update_asset_visibility(
+        &self,
+        asset_id: &str,
+        visibility: &str,
+    ) -> Result<(), String> {
+        let is_archived = visibility.eq_ignore_ascii_case("archive");
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE assets SET visibility = ?2, is_archived = ?3, updated_at = strftime('%s', 'now') WHERE id = ?1",
+            params![asset_id, visibility, is_archived],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn update_asset_rating(&self, asset_id: &str, rating: Option<i32>) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE assets SET rating = ?2, updated_at = strftime('%s', 'now') WHERE id = ?1",
+            params![asset_id, rating],
         )
         .map_err(|err| err.to_string())?;
 
@@ -821,6 +973,29 @@ impl Database {
             Some(result) => result.map(Some).map_err(|err| err.to_string()),
             None => Ok(None),
         }
+    }
+
+    /// Read a single cached asset as an [`AssetSummary`], used to build optimistic
+    /// responses for mutations applied locally while offline.
+    pub fn get_asset_summary(&self, asset_id: &str) -> Result<Option<AssetSummary>, String> {
+        let details = self.get_asset_details(asset_id)?;
+        Ok(details.map(|asset| AssetSummary {
+            id: asset.id,
+            original_file_name: asset.original_file_name,
+            original_path: asset.original_path,
+            file_created_at: asset.file_created_at,
+            checksum: asset.checksum,
+            r#type: asset.r#type,
+            duration: asset.duration,
+            live_photo_video_id: None,
+            is_favorite: asset.is_favorite,
+            is_archived: asset.is_archived,
+            visibility: asset.visibility,
+            rating: asset.rating,
+            width: asset.width,
+            height: asset.height,
+            thumbhash: asset.thumbhash,
+        }))
     }
 
     pub fn get_asset_jump_target_page(

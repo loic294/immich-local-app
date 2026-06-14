@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { useSession } from "./hooks/useSession";
 import { useSyncStatus } from "./hooks/useSyncStatus";
 import { useAppUpdate } from "./hooks/useAppUpdate";
+import { useConnection } from "./hooks/useConnection";
+import { ConnectionProvider } from "./hooks/connectionContext";
 import { ServerUrlScreen } from "./components/Auth/ServerUrlScreen";
 import { LoginScreen } from "./components/Auth/LoginScreen";
 import { LoadingScreen } from "./components/Layout/LoadingScreen";
@@ -24,6 +26,7 @@ export function App() {
     error,
     isAuthenticating,
     isRestoringSession,
+    restoredOffline,
     serverUrl,
     setServerUrl,
     initiateOAuth,
@@ -33,6 +36,16 @@ export function App() {
   } = useSession();
 
   const { syncStatus, startSync, checkForNewAssets } = useSyncStatus();
+
+  // Local-first connection monitor: probe the server, drive offline UI, and
+  // replay queued mutations + re-check for new assets when connectivity returns.
+  const { isOnline, pendingCount } = useConnection({
+    enabled: !!session && !isRestoringSession,
+    initialOnline: !restoredOffline,
+    onReconnect: () => {
+      void checkForNewAssets();
+    },
+  });
 
   const appUpdate = useAppUpdate();
   const hasCheckedForUpdate = useRef(false);
@@ -60,6 +73,7 @@ export function App() {
     if (
       session &&
       !isRestoringSession &&
+      isOnline === true &&
       syncStatus?.isSyncing &&
       !hasTriggeredResume.current
     ) {
@@ -70,13 +84,14 @@ export function App() {
     if (!syncStatus?.isSyncing) {
       hasTriggeredResume.current = false;
     }
-  }, [session, isRestoringSession, syncStatus?.isSyncing, startSync]);
+  }, [session, isRestoringSession, isOnline, syncStatus?.isSyncing, startSync]);
 
   // Auto-start sync if never done before and user is authenticated
   useEffect(() => {
     if (
       session &&
       !isRestoringSession &&
+      isOnline === true &&
       syncStatus &&
       !syncStatus.lastSyncCompletedAt &&
       !syncStatus.isSyncing
@@ -87,6 +102,7 @@ export function App() {
   }, [
     session,
     isRestoringSession,
+    isOnline,
     syncStatus?.lastSyncCompletedAt,
     syncStatus?.isSyncing,
     startSync,
@@ -97,6 +113,7 @@ export function App() {
     if (
       session &&
       !isRestoringSession &&
+      isOnline === true &&
       syncStatus &&
       syncStatus.lastSyncCompletedAt &&
       !syncStatus.isSyncing &&
@@ -108,6 +125,7 @@ export function App() {
   }, [
     session,
     isRestoringSession,
+    isOnline,
     syncStatus?.lastSyncCompletedAt,
     syncStatus?.isSyncing,
     syncStatus?.lastCheckedAt,
@@ -156,88 +174,65 @@ export function App() {
     );
   }
 
-  if (activePage === "albums") {
-    return (
-      <>
-        <AlbumsPage
-          session={session}
-          onNavigate={setActivePage}
-          onLogout={logout}
-        />
-        <UpdateNotifier update={appUpdate} />
-      </>
-    );
-  }
-
-  if (activePage === "folders") {
-    return (
-      <>
-        <FoldersPage
-          session={session}
-          onNavigate={setActivePage}
-          onLogout={logout}
-        />
-        <UpdateNotifier update={appUpdate} />
-      </>
-    );
-  }
-
-  if (activePage === "calendar") {
-    return (
-      <>
-        <CalendarPage
-          session={session}
-          onNavigate={setActivePage}
-          onLogout={logout}
-        />
-        <UpdateNotifier update={appUpdate} />
-      </>
-    );
-  }
-
-  if (activePage === "settings") {
-    return (
-      <>
-        <SettingsPage onNavigate={setActivePage} onLogout={logout} />
-        <UpdateNotifier update={appUpdate} />
-      </>
-    );
-  }
-
-  if (activePage === "favorites") {
-    return (
-      <>
-        <FavoritesPage
-          session={session}
-          onNavigate={setActivePage}
-          onLogout={logout}
-        />
-        <UpdateNotifier update={appUpdate} />
-      </>
-    );
-  }
-
-  if (activePage === "deleted") {
-    return (
-      <>
-        <DeletedPage
-          session={session}
-          onNavigate={setActivePage}
-          onLogout={logout}
-        />
-        <UpdateNotifier update={appUpdate} />
-      </>
-    );
-  }
+  const pageContent = (() => {
+    switch (activePage) {
+      case "albums":
+        return (
+          <AlbumsPage
+            session={session}
+            onNavigate={setActivePage}
+            onLogout={logout}
+          />
+        );
+      case "folders":
+        return (
+          <FoldersPage
+            session={session}
+            onNavigate={setActivePage}
+            onLogout={logout}
+          />
+        );
+      case "calendar":
+        return (
+          <CalendarPage
+            session={session}
+            onNavigate={setActivePage}
+            onLogout={logout}
+          />
+        );
+      case "settings":
+        return <SettingsPage onNavigate={setActivePage} onLogout={logout} />;
+      case "favorites":
+        return (
+          <FavoritesPage
+            session={session}
+            onNavigate={setActivePage}
+            onLogout={logout}
+          />
+        );
+      case "deleted":
+        return (
+          <DeletedPage
+            session={session}
+            onNavigate={setActivePage}
+            onLogout={logout}
+          />
+        );
+      default:
+        return (
+          <PhotosPage
+            session={session}
+            onNavigate={setActivePage}
+            onLogout={logout}
+          />
+        );
+    }
+  })();
 
   return (
-    <>
-      <PhotosPage
-        session={session}
-        onNavigate={setActivePage}
-        onLogout={logout}
-      />
+    <ConnectionProvider value={{ isOnline, pendingCount }}>
+      {pageContent}
       <UpdateNotifier update={appUpdate} />
-    </>
+    </ConnectionProvider>
   );
 }

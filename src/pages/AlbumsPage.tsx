@@ -579,7 +579,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 </div>
               ) : null}
 
-              {albumAssetsQuery.isError ? (
+              {albumAssetsQuery.isError && filteredAlbumAssets.length === 0 ? (
                 <div
                   role="alert"
                   data-test="error-alert"

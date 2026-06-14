@@ -5,6 +5,16 @@ use std::time::Instant;
 use crate::services::immich_client::AssetSummary;
 use crate::AppState;
 
+/// Probe whether the configured Immich server is currently reachable. Used by
+/// the mutation commands to decide between surfacing a server error (online) and
+/// queuing the change for later replay (offline).
+async fn server_reachable(state: &tauri::State<'_, AppState>) -> bool {
+    match state.db.get_auth_credentials() {
+        Ok(Some((server_url, _token, _is_oauth))) => state.immich.ping(&server_url).await,
+        _ => false,
+    }
+}
+
 fn is_visible_in_grid(asset: &AssetSummary) -> bool {
     if asset.is_archived {
         return false;
@@ -615,18 +625,40 @@ pub async fn update_asset_description(
     payload: UpdateAssetDescriptionPayload,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    state
+    match state
         .immich
         .update_asset_description(&payload.asset_id, payload.description.as_deref())
         .await
-        .map_err(|err| format!("description update failed: {err}"))?;
-
-    state
-        .db
-        .update_asset_description(&payload.asset_id, payload.description.as_deref())
-        .map_err(|err| format!("failed to cache updated description: {err}"))?;
-
-    Ok(())
+    {
+        Ok(_) => {
+            state
+                .db
+                .update_asset_description(&payload.asset_id, payload.description.as_deref())
+                .map_err(|err| format!("failed to cache updated description: {err}"))?;
+            Ok(())
+        }
+        Err(err) => {
+            // Distinguish an unreachable server (queue + apply locally) from a
+            // genuine server-side rejection (surface the error).
+            if server_reachable(&state).await {
+                return Err(format!("description update failed: {err}"));
+            }
+            log::warn!(
+                "[assets.update_asset_description] offline — queuing mutation asset_id={} err={}",
+                payload.asset_id, err
+            );
+            state
+                .db
+                .update_asset_description(&payload.asset_id, payload.description.as_deref())
+                .map_err(|e| format!("failed to cache updated description: {e}"))?;
+            let body = serde_json::json!({ "description": payload.description });
+            state
+                .db
+                .enqueue_mutation(&payload.asset_id, "description", &body.to_string())
+                .map_err(|e| format!("failed to queue description update: {e}"))?;
+            Ok(())
+        }
+    }
 }
 
 #[tauri::command]
@@ -651,19 +683,38 @@ pub async fn update_asset_favorite(
     is_favorite: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    let updated_asset = state
-        .immich
-        .update_asset_favorite(&asset_id, is_favorite)
-        .await
-        .map_err(|err| format!("favorite update failed: {err}"))?;
-
-    // Cache the updated asset
-    state
-        .db
-        .upsert_assets(&[updated_asset.clone()])
-        .map_err(|err| format!("failed to cache updated asset: {err}"))?;
-
-    Ok(updated_asset)
+    match state.immich.update_asset_favorite(&asset_id, is_favorite).await {
+        Ok(updated_asset) => {
+            state
+                .db
+                .upsert_assets(&[updated_asset.clone()])
+                .map_err(|err| format!("failed to cache updated asset: {err}"))?;
+            Ok(updated_asset)
+        }
+        Err(err) => {
+            if server_reachable(&state).await {
+                return Err(format!("favorite update failed: {err}"));
+            }
+            log::warn!(
+                "[assets.update_asset_favorite] offline — queuing mutation asset_id={} err={}",
+                asset_id, err
+            );
+            state
+                .db
+                .update_asset_favorite(&asset_id, is_favorite)
+                .map_err(|e| format!("failed to cache updated asset: {e}"))?;
+            let body = serde_json::json!({ "isFavorite": is_favorite });
+            state
+                .db
+                .enqueue_mutation(&asset_id, "favorite", &body.to_string())
+                .map_err(|e| format!("failed to queue favorite update: {e}"))?;
+            state
+                .db
+                .get_asset_summary(&asset_id)
+                .map_err(|e| format!("failed to read cached asset: {e}"))?
+                .ok_or_else(|| "asset not found in cache".to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -671,19 +722,42 @@ pub async fn update_asset_visibility(
     payload: UpdateAssetVisibilityPayload,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    let updated_asset = state
+    match state
         .immich
         .update_asset_visibility(&payload.asset_id, &payload.visibility)
         .await
-        .map_err(|err| format!("visibility update failed: {err}"))?;
-
-    // Cache the updated asset
-    state
-        .db
-        .upsert_assets(&[updated_asset.clone()])
-        .map_err(|err| format!("failed to cache updated asset: {err}"))?;
-
-    Ok(updated_asset)
+    {
+        Ok(updated_asset) => {
+            state
+                .db
+                .upsert_assets(&[updated_asset.clone()])
+                .map_err(|err| format!("failed to cache updated asset: {err}"))?;
+            Ok(updated_asset)
+        }
+        Err(err) => {
+            if server_reachable(&state).await {
+                return Err(format!("visibility update failed: {err}"));
+            }
+            log::warn!(
+                "[assets.update_asset_visibility] offline — queuing mutation asset_id={} err={}",
+                payload.asset_id, err
+            );
+            state
+                .db
+                .update_asset_visibility(&payload.asset_id, &payload.visibility)
+                .map_err(|e| format!("failed to cache updated asset: {e}"))?;
+            let body = serde_json::json!({ "visibility": payload.visibility });
+            state
+                .db
+                .enqueue_mutation(&payload.asset_id, "visibility", &body.to_string())
+                .map_err(|e| format!("failed to queue visibility update: {e}"))?;
+            state
+                .db
+                .get_asset_summary(&payload.asset_id)
+                .map_err(|e| format!("failed to read cached asset: {e}"))?
+                .ok_or_else(|| "asset not found in cache".to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -692,19 +766,178 @@ pub async fn update_asset_rating(
     rating: Option<i32>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    let updated_asset = state
-        .immich
-        .update_asset_rating(&asset_id, rating)
-        .await
-        .map_err(|err| format!("rating update failed: {err}"))?;
+    match state.immich.update_asset_rating(&asset_id, rating).await {
+        Ok(updated_asset) => {
+            state
+                .db
+                .upsert_assets(&[updated_asset.clone()])
+                .map_err(|err| format!("failed to cache updated asset: {err}"))?;
+            Ok(updated_asset)
+        }
+        Err(err) => {
+            if server_reachable(&state).await {
+                return Err(format!("rating update failed: {err}"));
+            }
+            log::warn!(
+                "[assets.update_asset_rating] offline — queuing mutation asset_id={} err={}",
+                asset_id, err
+            );
+            state
+                .db
+                .update_asset_rating(&asset_id, rating)
+                .map_err(|e| format!("failed to cache updated asset: {e}"))?;
+            let body = serde_json::json!({ "rating": rating });
+            state
+                .db
+                .enqueue_mutation(&asset_id, "rating", &body.to_string())
+                .map_err(|e| format!("failed to queue rating update: {e}"))?;
+            state
+                .db
+                .get_asset_summary(&asset_id)
+                .map_err(|e| format!("failed to read cached asset: {e}"))?
+                .ok_or_else(|| "asset not found in cache".to_string())
+        }
+    }
+}
 
-    // Cache the updated asset
+/// Number of asset mutations queued locally while offline, awaiting replay.
+#[tauri::command]
+pub async fn get_pending_mutation_count(
+    state: tauri::State<'_, AppState>,
+) -> Result<i64, String> {
     state
         .db
-        .upsert_assets(&[updated_asset.clone()])
-        .map_err(|err| format!("failed to cache updated asset: {err}"))?;
+        .count_pending_mutations()
+        .map_err(|err| format!("failed to count pending mutations: {err}"))
+}
 
-    Ok(updated_asset)
+/// Replay every queued offline mutation against the server in creation order.
+/// Stops early and returns the remaining count if the server becomes
+/// unreachable again. Returns the number of mutations still pending afterwards.
+#[tauri::command]
+pub async fn flush_pending_mutations(
+    state: tauri::State<'_, AppState>,
+) -> Result<i64, String> {
+    let pending = state
+        .db
+        .list_pending_mutations()
+        .map_err(|err| format!("failed to list pending mutations: {err}"))?;
+
+    if pending.is_empty() {
+        return Ok(0);
+    }
+
+    log::info!(
+        "[assets.flush_pending_mutations] replaying {} queued mutation(s)",
+        pending.len()
+    );
+
+    for mutation in pending {
+        let payload: serde_json::Value = serde_json::from_str(&mutation.payload_json)
+            .map_err(|err| format!("invalid queued payload: {err}"))?;
+
+        let result = match mutation.kind.as_str() {
+            "favorite" => {
+                let is_favorite = payload
+                    .get("isFavorite")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                state
+                    .immich
+                    .update_asset_favorite(&mutation.asset_id, is_favorite)
+                    .await
+                    .map(Some)
+            }
+            "visibility" => {
+                let visibility = payload
+                    .get("visibility")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("timeline")
+                    .to_string();
+                state
+                    .immich
+                    .update_asset_visibility(&mutation.asset_id, &visibility)
+                    .await
+                    .map(Some)
+            }
+            "rating" => {
+                let rating = payload
+                    .get("rating")
+                    .and_then(|v| v.as_i64().map(|n| n as i32));
+                state
+                    .immich
+                    .update_asset_rating(&mutation.asset_id, rating)
+                    .await
+                    .map(Some)
+            }
+            "description" => {
+                let description = payload.get("description").and_then(serde_json::Value::as_str);
+                state
+                    .immich
+                    .update_asset_description(&mutation.asset_id, description)
+                    .await
+                    .map(Some)
+            }
+            other => {
+                log::warn!(
+                    "[assets.flush_pending_mutations] dropping unknown mutation kind={}",
+                    other
+                );
+                // Drop unrecognized entries so the queue cannot get stuck.
+                let _ = state.db.delete_pending_mutation(mutation.id);
+                continue;
+            }
+        };
+
+        match result {
+            Ok(updated) => {
+                if let Some(asset) = updated {
+                    if let Err(err) = state.db.upsert_assets(&[asset]) {
+                        log::warn!(
+                            "[assets.flush_pending_mutations] cache write failed asset_id={} err={}",
+                            mutation.asset_id, err
+                        );
+                    }
+                }
+                state
+                    .db
+                    .delete_pending_mutation(mutation.id)
+                    .map_err(|err| format!("failed to dequeue mutation: {err}"))?;
+            }
+            Err(err) => {
+                // If the server is unreachable again, stop and keep the queue.
+                if !server_reachable(&state).await {
+                    log::warn!(
+                        "[assets.flush_pending_mutations] server unreachable — pausing replay: {}",
+                        err
+                    );
+                    break;
+                }
+                // Server is reachable but rejected this mutation; drop it so the
+                // queue cannot get permanently stuck on a bad entry.
+                log::warn!(
+                    "[assets.flush_pending_mutations] server rejected mutation id={} asset_id={} kind={} — dropping: {}",
+                    mutation.id, mutation.asset_id, mutation.kind, err
+                );
+                state
+                    .db
+                    .delete_pending_mutation(mutation.id)
+                    .map_err(|e| format!("failed to dequeue rejected mutation: {e}"))?;
+            }
+        }
+    }
+
+    let remaining = state
+        .db
+        .count_pending_mutations()
+        .map_err(|err| format!("failed to count pending mutations: {err}"))?;
+
+    log::info!(
+        "[assets.flush_pending_mutations] replay complete — {} mutation(s) remaining",
+        remaining
+    );
+
+    Ok(remaining)
 }
 
 #[tauri::command]

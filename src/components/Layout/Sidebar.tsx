@@ -8,6 +8,8 @@ import {
   Settings,
 } from "lucide-react";
 import { SyncStatusCard } from "./SyncStatusCard";
+import { OfflineBanner } from "./OfflineBanner";
+import { useConnectionContext } from "../../hooks/connectionContext";
 import logoUrl from "../../assets/logo_with_title.svg";
 
 interface SidebarProps {
@@ -25,6 +27,7 @@ export type AppPage =
   | "settings";
 
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
+  const { isOnline, pendingCount } = useConnectionContext();
   const navClass = (page: AppPage) =>
     page === activePage
       ? "btn btn-md btn-block w-full max-w-none btn-soft btn-primary justify-start text-base font-semibold"
@@ -107,7 +110,11 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
               <span>Settings</span>
             </button>
           </nav>
-          <SyncStatusCard />
+          {isOnline === false ? (
+            <OfflineBanner pendingCount={pendingCount} />
+          ) : (
+            <SyncStatusCard />
+          )}
         </div>
       </div>
     </aside>

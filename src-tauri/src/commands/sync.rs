@@ -65,6 +65,17 @@ async fn start_asset_sync_internal(
         "start_asset_sync_internal(force_full_sync={})",
         force_full_sync
     );
+
+    // Local-first: never hard-fail a sync attempt when the server is simply
+    // unreachable. Surface a recognizable offline marker so the UI can show an
+    // offline state instead of a scary error, and leave the cache untouched.
+    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
+        if !state.immich.ping(&server_url).await {
+            log::warn!("[sync] server unreachable — skipping sync (offline)");
+            return Err("offline: server unreachable".to_string());
+        }
+    }
+
     // Get total asset count from Immich
     let statistics = state.immich.get_asset_statistics().await.map_err(|err| {
         log::warn!("Failed to get asset statistics: {}", err);

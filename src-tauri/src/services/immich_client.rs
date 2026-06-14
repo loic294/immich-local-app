@@ -198,6 +198,10 @@ impl ImmichClient {
         let cookie_jar = Arc::new(reqwest::cookie::Jar::default());
         let client = reqwest::Client::builder()
             .cookie_provider(cookie_jar.clone())
+            // Fail fast when the server is unreachable so the app can fall back
+            // to its local cache and surface an offline state instead of hanging.
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("failed to initialize HTTP client");
 
@@ -208,6 +212,26 @@ impl ImmichClient {
             playback_downloads: Arc::new(Mutex::new(HashSet::new())),
             cached_album: Mutex::new(None),
             cached_folder: Mutex::new(None),
+        }
+    }
+
+    /// Lightweight connectivity probe against the unauthenticated Immich ping
+    /// endpoint. Returns `true` when the server answers (even with an HTTP error
+    /// status) and `false` only when the server is unreachable (DNS failure,
+    /// connection refused, timeout). Used to decide whether to enter offline
+    /// mode and to detect when the backend becomes reachable again.
+    pub async fn ping(&self, server_url: &str) -> bool {
+        let url = format!("{}/api/server/ping", normalize_base(server_url));
+        match self.client.get(&url).send().await {
+            Ok(_) => true,
+            Err(err) => {
+                log::warn!(
+                    "[connection:ping] server unreachable url={} err={}",
+                    url,
+                    err
+                );
+                false
+            }
         }
     }
 
@@ -336,6 +360,41 @@ impl ImmichClient {
             session.user_id
         );
         Ok(session)
+    }
+
+    /// Populate the in-memory session from locally cached credentials WITHOUT
+    /// contacting the server. Used for offline session restore so that
+    /// authenticated, cache-backed commands (e.g. thumbnails) work while the
+    /// backend is unreachable, and so requests are ready to succeed the moment
+    /// connectivity returns. For OAuth the session cookie is also re-injected.
+    pub async fn hydrate_offline_session(
+        &self,
+        server_url: &str,
+        token: &str,
+        is_oauth: bool,
+        user_id: &str,
+        user_name: Option<String>,
+    ) -> Result<(), String> {
+        if is_oauth {
+            self.set_session_cookie(server_url, token)?;
+        }
+
+        let session = AuthSession {
+            server_url: normalize_base(server_url),
+            access_token: token.to_string(),
+            refresh_token: None,
+            user_id: user_id.to_string(),
+            user_name,
+        };
+
+        let mut guard = self.session.lock().await;
+        *guard = Some(session);
+
+        log::info!(
+            "[auth:restore] offline session hydrated from cache for user_id={}",
+            user_id
+        );
+        Ok(())
     }
 
     pub async fn start_oauth(
@@ -1733,12 +1792,22 @@ impl ImmichClient {
         &self,
         user_id: &str,
     ) -> Result<Option<String>, String> {
-        let session = self
-            .session
-            .lock()
-            .await
-            .clone()
-            .ok_or_else(|| "not authenticated".to_string())?;
+        let cache_dir = profile_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+        let cache_key = sanitize_cache_file_name(user_id);
+
+        let session = match self.session.lock().await.clone() {
+            Some(session) => session,
+            None => {
+                // Offline / not authenticated: fall back to the cached profile
+                // image so the avatar still renders.
+                if let Some(cached) = read_cached_thumbnail(&cache_dir, &cache_key)? {
+                    log::info!("[profile-image] served cached image (no session) user={}", user_id);
+                    return Ok(Some(cached));
+                }
+                return Err("not authenticated".to_string());
+            }
+        };
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1747,13 +1816,22 @@ impl ImmichClient {
         );
 
         let url = format!("{}/api/users/{}/profile-image", session.server_url, user_id);
-        let response = self
-            .client
-            .get(url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
+        let response = match self.client.get(url).headers(headers).send().await {
+            Ok(response) => response,
+            Err(err) => {
+                // Network error (likely offline): serve the cached image if we
+                // have one rather than failing.
+                if let Some(cached) = read_cached_thumbnail(&cache_dir, &cache_key)? {
+                    log::warn!(
+                        "[profile-image] network failed, served cached image user={} err={}",
+                        user_id,
+                        err
+                    );
+                    return Ok(Some(cached));
+                }
+                return Err(err.to_string());
+            }
+        };
 
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -1778,23 +1856,36 @@ impl ImmichClient {
             return Ok(None);
         }
 
+        // Persist to disk so the avatar is available offline next time.
+        let ext = extension_from_mime(&content_type);
+        let output = cache_dir.join(format!("{}.{}", cache_key, ext));
+        if let Err(err) = fs::write(&output, bytes.as_ref()) {
+            log::warn!(
+                "[profile-image] failed to cache image user={} err={}",
+                user_id,
+                err
+            );
+        }
+
         Ok(Some(to_data_url(&content_type, bytes.as_ref())))
     }
 
     pub async fn get_asset_thumbnail_data_url(&self, asset_id: &str) -> Result<String, String> {
+        let cache_dir = thumbnail_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+
+        // Local-first: serve the cached thumbnail without requiring a live
+        // session so images still render while offline.
+        if let Some(cached) = read_cached_thumbnail(&cache_dir, asset_id)? {
+            return Ok(cached);
+        }
+
         let session = self
             .session
             .lock()
             .await
             .clone()
             .ok_or_else(|| "not authenticated".to_string())?;
-
-        let cache_dir = thumbnail_cache_dir()?;
-        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
-
-        if let Some(cached) = read_cached_thumbnail(&cache_dir, asset_id)? {
-            return Ok(cached);
-        }
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1839,19 +1930,21 @@ impl ImmichClient {
     }
 
     pub async fn get_asset_thumbnail_file_path(&self, asset_id: &str) -> Result<String, String> {
+        let cache_dir = thumbnail_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+
+        // Local-first: serve the cached thumbnail without requiring a live
+        // session so images still render while offline.
+        if let Some(cached_path) = read_cached_thumbnail_path(&cache_dir, asset_id) {
+            return Ok(cached_path.to_string_lossy().to_string());
+        }
+
         let session = self
             .session
             .lock()
             .await
             .clone()
             .ok_or_else(|| "not authenticated".to_string())?;
-
-        let cache_dir = thumbnail_cache_dir()?;
-        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
-
-        if let Some(cached_path) = read_cached_thumbnail_path(&cache_dir, asset_id) {
-            return Ok(cached_path.to_string_lossy().to_string());
-        }
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -3372,6 +3465,13 @@ fn original_cache_dir() -> Result<PathBuf, String> {
         .join(".config")
         .join("immich-local-app")
         .join("originals"))
+}
+
+fn profile_cache_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?
+        .join(".config")
+        .join("immich-local-app")
+        .join("profiles"))
 }
 
 fn sanitize_cache_file_name(input: &str) -> String {

@@ -252,6 +252,15 @@ function MonthView({
     };
   }, []);
 
+  // Hoisted out of JSX so the hook order stays stable even when the grid is
+  // replaced by the error branch (otherwise React throws
+  // "Rendered fewer hooks than expected").
+  const loadFullLayout = useCallback(
+    (containerWidth: number) =>
+      getCachedCalendarFullGridLayout(year, month, containerWidth),
+    [year, month],
+  );
+
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage="calendar" onNavigate={onNavigate} />
@@ -318,7 +327,7 @@ function MonthView({
             ) : null}
           </div>
 
-          {assetsQuery.isError ? (
+          {assetsQuery.isError && assets.length === 0 ? (
             <div
               role="alert"
               data-test="error-alert"
@@ -341,11 +350,7 @@ function MonthView({
               onLoadMore={() =>
                 assetsQuery.fetchNextPage().then(() => undefined)
               }
-              loadFullLayout={useCallback(
-                (containerWidth: number) =>
-                  getCachedCalendarFullGridLayout(year, month, containerWidth),
-                [year, month],
-              )}
+              loadFullLayout={loadFullLayout}
             />
           )}
         </section>
