@@ -328,7 +328,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 className="btn btn-outline btn-primary gap-2"
               >
                 <RefreshCcw size={16} />
-                {isQuickSyncing || isChecking ? "Quick Syncing..." : "Quick Sync"}
+                {isQuickSyncing || isChecking
+                  ? "Quick Syncing..."
+                  : "Quick Sync"}
               </button>
 
               <button
