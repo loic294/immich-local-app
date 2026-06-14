@@ -20,20 +20,22 @@ export type UseSyncStatusReturn = {
   error: string | null;
   startSync: () => Promise<void>;
   forceFullSync: () => Promise<void>;
-  checkForNewAssets: () => Promise<boolean>; // Returns true if new assets found
+  checkForNewAssets: () => Promise<boolean>; // Quick sync. Returns true if new assets found
 };
 
-type UseSyncStatusOptions = {
-  enableAutoCheck?: boolean;
-};
-
-const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes in milliseconds
 const CHECK_STALE_TIMEOUT = 2 * 60 * 1000; // 2 minutes
 
-export function useSyncStatus(
-  options: UseSyncStatusOptions = {},
-): UseSyncStatusReturn {
-  const { enableAutoCheck = true } = options;
+/**
+ * Sync status + actions.
+ *
+ * `checkForNewAssets` runs a cheap "quick sync" (recent assets only, stops as
+ * soon as it reaches already-cached assets). `startSync` / `forceFullSync` run
+ * the full library scan. This hook intentionally does NOT run any periodic
+ * background re-sync — re-syncing is driven on demand: a quick check on boot of
+ * the All Photos page, the sidebar Sync button, and lazy per-view refreshes
+ * when the user opens an album or calendar month. See sync.instructions.md.
+ */
+export function useSyncStatus(): UseSyncStatusReturn {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const lastStatusLogKeyRef = useRef<string>("");
@@ -181,19 +183,6 @@ export function useSyncStatus(
 
     return () => clearInterval(interval);
   }, [syncStatus?.isSyncing, syncStatus?.checkStatus, fetchSyncStatus]);
-
-  // Set up periodic checks every 15 minutes
-  useEffect(() => {
-    if (!syncStatus || !enableAutoCheck) {
-      return;
-    }
-
-    const checkTimer = setTimeout(() => {
-      void checkForNewAssets();
-    }, CHECK_INTERVAL);
-
-    return () => clearTimeout(checkTimer);
-  }, [enableAutoCheck, syncStatus?.lastCheckedAt, checkForNewAssets]);
 
   const progress =
     syncStatus && syncStatus.totalAssets > 0

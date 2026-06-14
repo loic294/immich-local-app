@@ -21,6 +21,7 @@ export function App() {
   const [activePage, setActivePage] = useState<AppPage>("photos");
   const [showServerUrlScreen, setShowServerUrlScreen] = useState(false);
   const hasTriggeredResume = useRef(false);
+  const hasQuickCheckedOnBoot = useRef(false);
   const {
     session,
     error,
@@ -108,7 +109,10 @@ export function App() {
     startSync,
   ]);
 
-  // Auto-check for new assets on app launch if sync was already done
+  // Quick sync on boot once per app launch: the All Photos timeline always
+  // checks for recent new content when the app starts (after the initial full
+  // sync has completed). This is a cheap "recent only" check, not a full
+  // re-scan. See sync.instructions.md.
   useEffect(() => {
     if (
       session &&
@@ -117,9 +121,9 @@ export function App() {
       syncStatus &&
       syncStatus.lastSyncCompletedAt &&
       !syncStatus.isSyncing &&
-      !syncStatus.lastCheckedAt
+      !hasQuickCheckedOnBoot.current
     ) {
-      // First app launch after sync completed - check for new assets
+      hasQuickCheckedOnBoot.current = true;
       void checkForNewAssets();
     }
   }, [
@@ -128,7 +132,7 @@ export function App() {
     isOnline,
     syncStatus?.lastSyncCompletedAt,
     syncStatus?.isSyncing,
-    syncStatus?.lastCheckedAt,
+    syncStatus,
     checkForNewAssets,
   ]);
 

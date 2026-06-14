@@ -1,15 +1,17 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { useCalendarAssets } from "../hooks/useCalendarAssets";
+import { useConnectionContext } from "../hooks/connectionContext";
 import {
   addAssetsToAlbum,
   createAlbumWithAssets,
   createShareLinkForAssets,
   fetchAlbums,
+  fetchAssetsByMonth,
   getCachedCalendarFullGridLayout,
   getCachedTimelineMonths,
   updateAssetVisibility,
@@ -187,12 +189,48 @@ function MonthView({
     type: "clear" | "select-all";
     nonce: number;
   } | null>(null);
+  // Bumped after the lazy on-open month refresh updates the local cache so the
+  // canvas grid reloads its layout.
+  const [monthRefreshNonce, setMonthRefreshNonce] = useState(0);
+  const queryClient = useQueryClient();
+  const { isOnline } = useConnectionContext();
 
   const assetsQuery = useCalendarAssets(true, year, month);
   const assets = useMemo(
     () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [assetsQuery.data?.pages],
   );
+
+  // Local-first lazy sync: when a calendar month is opened, render from the
+  // local cache immediately and refresh just that month from the server in the
+  // background. Other months are not touched (no full library re-sync). See
+  // sync.instructions.md.
+  useEffect(() => {
+    if (isOnline !== true) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        await fetchAssetsByMonth(year, month);
+        if (cancelled) {
+          return;
+        }
+        await queryClient.invalidateQueries({
+          queryKey: ["calendar-assets-paged", year, month],
+        });
+        setMonthRefreshNonce((nonce) => nonce + 1);
+      } catch (err) {
+        console.warn("[calendar] lazy month refresh failed", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [year, month, isOnline, queryClient]);
 
   // Calculate PhotoGrid height dynamically
   useEffect(() => {
@@ -258,7 +296,10 @@ function MonthView({
   const loadFullLayout = useCallback(
     (containerWidth: number) =>
       getCachedCalendarFullGridLayout(year, month, containerWidth),
-    [year, month],
+    // monthRefreshNonce is intentionally part of the deps so the grid reloads
+    // its layout once the lazy on-open refresh has updated the local cache.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [year, month, monthRefreshNonce],
   );
 
   return (

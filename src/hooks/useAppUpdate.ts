@@ -108,6 +108,11 @@ export function useAppUpdate(): UseAppUpdateResult {
 
   const checkForUpdate = useCallback(
     async (autoDownload = true) => {
+      if (import.meta.env.DEV) {
+        console.log(`${LOG_PREFIX} check skipped in dev mode`);
+        setState({ ...INITIAL_STATE, status: "uptodate" });
+        return;
+      }
       if (inFlightRef.current) {
         return;
       }

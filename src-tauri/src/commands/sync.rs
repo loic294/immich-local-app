@@ -93,6 +93,14 @@ async fn start_asset_sync_internal(
         && current_state.processed_assets > 0
         && current_state.processed_assets < statistics.total;
 
+    log::warn!(
+        "[sync] start_asset_sync_internal: force_full_sync={} resuming_partial={} (cached processed={} server_total={})",
+        force_full_sync,
+        is_partial_sync,
+        current_state.processed_assets,
+        statistics.total
+    );
+
     // Initialize or resume sync state in database
     let sync_state = if is_partial_sync {
         state
@@ -143,17 +151,33 @@ async fn sync_all_assets_background(
     start_page: u32,
     initial_processed_count: i32,
 ) -> Result<(), String> {
-    match immich.get_all_people().await {
-        Ok(people) => {
-            if let Err(err) = db.upsert_people(&people) {
-                log::warn!("Failed to cache people list: {}", err);
+    // On a fresh full sync (start_page == 0) we refresh the people list and the
+    // album caches up front. On a RESUMED sync (start_page > 0) those already
+    // completed during the original run — they run before any asset page is
+    // processed, so a non-zero start_page proves they finished — and only the
+    // asset page loop was interrupted. Skipping them lets a resumed sync jump
+    // straight back to the page where it stopped instead of redoing all that
+    // work (which would otherwise look like a full restart).
+    let is_resume = start_page > 0;
+    if is_resume {
+        log::warn!(
+            "[sync] resuming interrupted full sync at page {} ({} assets already processed) — skipping people/album refresh",
+            start_page,
+            initial_processed_count
+        );
+    } else {
+        match immich.get_all_people().await {
+            Ok(people) => {
+                if let Err(err) = db.upsert_people(&people) {
+                    log::warn!("Failed to cache people list: {}", err);
+                }
             }
+            Err(err) => log::warn!("Failed to fetch people list: {}", err),
         }
-        Err(err) => log::warn!("Failed to fetch people list: {}", err),
-    }
 
-    if let Err(err) = refresh_album_cache(immich.clone(), db.clone()).await {
-        log::warn!("Failed to refresh album cache: {}", err);
+        if let Err(err) = refresh_album_cache(immich.clone(), db.clone()).await {
+            log::warn!("Failed to refresh album cache: {}", err);
+        }
     }
 
     let mut page = start_page;
@@ -244,76 +268,111 @@ async fn refresh_album_cache(
         .map_err(|err| format!("cache album list failed: {}", err))?;
 
     for album in &albums {
-        match immich.get_album_assets(&album.id).await {
-            Ok(assets) => {
-                log::warn!(
-                    "[refresh_album_cache] album_id={} fetched {} assets",
-                    album.id,
-                    assets.len()
-                );
-
-                // Enrich assets with full metadata (exif, people, tags, etc.)
-                let enrich_started_at = Instant::now();
-                let enriched_assets =
-                    enrich_assets_with_full_metadata(immich.clone(), assets.clone()).await;
-                log::warn!(
-                    "[refresh_album_cache] album_id={} enriched_count={} duration_ms={}",
-                    album.id,
-                    enriched_assets.len(),
-                    enrich_started_at.elapsed().as_millis()
-                );
-
-                // Extract extended assets and people links
-                let extended_assets: Vec<crate::services::db::AssetSummaryExtended> =
-                    enriched_assets
-                        .iter()
-                        .map(|value| value.asset.clone())
-                        .collect();
-                let asset_people_links: Vec<(String, Vec<String>)> = enriched_assets
-                    .iter()
-                    .map(|value| (value.asset.id.clone(), value.person_ids.clone()))
-                    .collect();
-
-                // Store enriched assets in database
-                if let Err(err) = db.upsert_assets_with_metadata(&extended_assets) {
-                    log::warn!(
-                        "Failed to cache album assets for album {}: {}",
-                        album.id, err
-                    );
-                    continue;
-                }
-
-                // Store people-asset links
-                if let Err(err) = db.replace_asset_people(&asset_people_links) {
-                    log::warn!(
-                        "Failed to cache asset-people links for album {}: {}",
-                        album.id, err
-                    );
-                }
-
-                // Store album-asset relationships
-                let asset_ids = extended_assets
-                    .iter()
-                    .map(|asset| asset.id.clone())
-                    .collect::<Vec<_>>();
-                if let Err(err) = db.replace_album_assets(&album.id, &asset_ids) {
-                    log::warn!(
-                        "Failed to cache album asset links for album {}: {}",
-                        album.id, err
-                    );
-                }
-
-                log::warn!(
-                    "[refresh_album_cache] album_id={} completed successfully",
-                    album.id
-                );
-            }
-            Err(err) => {
-                log::warn!("Failed to fetch assets for album {}: {}", album.id, err);
-            }
+        if let Err(err) = refresh_single_album(immich.clone(), db.clone(), &album.id).await {
+            log::warn!("Failed to refresh album {}: {}", album.id, err);
         }
     }
 
+    Ok(())
+}
+
+/// Refresh the cached assets (and people/album links) for a single album from
+/// the server. Used both by the full album-cache refresh and by the on-demand
+/// lazy refresh triggered when the user opens an album.
+async fn refresh_single_album(
+    immich: std::sync::Arc<crate::services::immich_client::ImmichClient>,
+    db: std::sync::Arc<crate::services::db::Database>,
+    album_id: &str,
+) -> Result<(), String> {
+    let assets = immich
+        .get_album_assets(album_id)
+        .await
+        .map_err(|err| format!("fetch album assets failed: {}", err))?;
+
+    log::warn!(
+        "[refresh_single_album] album_id={} fetched {} assets",
+        album_id,
+        assets.len()
+    );
+
+    // Enrich assets with full metadata (exif, people, tags, etc.)
+    let enrich_started_at = Instant::now();
+    let enriched_assets = enrich_assets_with_full_metadata(immich.clone(), assets.clone()).await;
+    log::warn!(
+        "[refresh_single_album] album_id={} enriched_count={} duration_ms={}",
+        album_id,
+        enriched_assets.len(),
+        enrich_started_at.elapsed().as_millis()
+    );
+
+    // Extract extended assets and people links
+    let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = enriched_assets
+        .iter()
+        .map(|value| value.asset.clone())
+        .collect();
+    let asset_people_links: Vec<(String, Vec<String>)> = enriched_assets
+        .iter()
+        .map(|value| (value.asset.id.clone(), value.person_ids.clone()))
+        .collect();
+
+    // Store enriched assets in database
+    db.upsert_assets_with_metadata(&extended_assets)
+        .map_err(|err| format!("cache album assets failed: {}", err))?;
+
+    // Store people-asset links
+    if let Err(err) = db.replace_asset_people(&asset_people_links) {
+        log::warn!(
+            "Failed to cache asset-people links for album {}: {}",
+            album_id, err
+        );
+    }
+
+    // Store album-asset relationships
+    let asset_ids = extended_assets
+        .iter()
+        .map(|asset| asset.id.clone())
+        .collect::<Vec<_>>();
+    if let Err(err) = db.replace_album_assets(album_id, &asset_ids) {
+        log::warn!(
+            "Failed to cache album asset links for album {}: {}",
+            album_id, err
+        );
+    }
+
+    log::warn!(
+        "[refresh_single_album] album_id={} completed successfully",
+        album_id
+    );
+
+    Ok(())
+}
+
+/// Lazily refresh a single album's assets from the server (local-first).
+///
+/// Called when the user opens an album. The UI renders from the local cache
+/// first; this command updates that cache in the background. When the server is
+/// unreachable it returns an `offline:`-prefixed marker so the caller can keep
+/// showing cached content instead of surfacing an error.
+#[tauri::command]
+pub async fn refresh_album_assets(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    log::warn!("[sync.refresh_album_assets] album_id={} start", album_id);
+
+    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
+        if !state.immich.ping(&server_url).await {
+            log::warn!(
+                "[sync.refresh_album_assets] server unreachable — skipping (offline) album_id={}",
+                album_id
+            );
+            return Err("offline: server unreachable".to_string());
+        }
+    }
+
+    refresh_single_album(state.immich.clone(), state.db.clone(), &album_id).await?;
+
+    log::warn!("[sync.refresh_album_assets] album_id={} done", album_id);
     Ok(())
 }
 
@@ -322,7 +381,16 @@ pub async fn check_for_new_assets(
     state: tauri::State<'_, AppState>,
 ) -> Result<SyncStatusResponse, String> {
     let check_started_at = Instant::now();
-    log::warn!("[sync.check_for_new_assets] start");
+    log::warn!("[sync.check_for_new_assets] start (quick sync)");
+
+    // Local-first: never hard-fail when the server is simply unreachable. Surface
+    // a recognizable offline marker so the UI keeps showing cached content.
+    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
+        if !state.immich.ping(&server_url).await {
+            log::warn!("[sync.check_for_new_assets] server unreachable — skipping (offline)");
+            return Err("offline: server unreachable".to_string());
+        }
+    }
 
     // Mark check as in progress
     state.db.start_check()?;
@@ -354,26 +422,17 @@ pub async fn check_for_new_assets(
         current_state.check_status
     );
 
-    // Check if there are new assets
-    if statistics.total <= current_state.total_assets {
-        // No new assets, just update checked timestamp
-        let updated_state = state.db.complete_check(statistics.total)?;
-        log::warn!(
-            "[sync.check_for_new_assets] no new assets detected (server_total={} local_total={}) duration_ms={}",
-            statistics.total,
-            current_state.total_assets,
-            check_started_at.elapsed().as_millis()
-        );
-        return Ok(SyncStatusResponse::from(updated_state));
-    }
+    // Quick sync is intentionally cheap: it only scans the newest assets (which
+    // the metadata search returns first) and stops as soon as it reaches a page
+    // made entirely of assets we already cache. It does NOT re-enrich the whole
+    // library and does NOT refresh every album — albums/calendar months are
+    // refreshed lazily when the user opens them, and a full re-scan is only done
+    // via "Force Full Sync". This is what keeps the app from continuously
+    // re-syncing all files.
+    const QUICK_SYNC_MAX_PAGES: u32 = 10;
 
-    log::warn!(
-        "[sync.check_for_new_assets] new assets detected delta={}",
-        statistics.total - current_state.total_assets
-    );
-
-    // New assets detected - fetch them in the background
-    // Sync new assets in the foreground for now to keep it simple
+    // Refresh the people list once (single cheap request) so faces on any newly
+    // discovered assets resolve correctly.
     let people_started_at = Instant::now();
     if let Ok(people) = state.immich.get_all_people().await {
         let people_count = people.len();
@@ -390,23 +449,11 @@ pub async fn check_for_new_assets(
         );
     }
 
-    let album_refresh_started_at = Instant::now();
-    if let Err(err) = refresh_album_cache(state.immich.clone(), state.db.clone()).await {
-        log::warn!(
-            "Failed to refresh album cache during new asset check: {}",
-            err
-        );
-    } else {
-        log::warn!(
-            "[sync.check_for_new_assets] album cache refresh done duration_ms={}",
-            album_refresh_started_at.elapsed().as_millis()
-        );
-    }
-
     let mut page = 0u32;
     let page_size = 100u32;
     let mut total_fetched_items: usize = 0;
     let mut total_written_items: usize = 0;
+    let mut total_new_items: usize = 0;
 
     loop {
         let page_started_at = Instant::now();
@@ -425,25 +472,13 @@ pub async fn check_for_new_assets(
             })?;
 
         let item_count = result.items.len();
-        let first_id = result
-            .items
-            .first()
-            .map(|asset| asset.id.as_str())
-            .unwrap_or("<none>");
-        let last_id = result
-            .items
-            .last()
-            .map(|asset| asset.id.as_str())
-            .unwrap_or("<none>");
         total_fetched_items += item_count;
 
         log::warn!(
-            "[sync.check_for_new_assets] fetched page={} item_count={} has_next_page={} first_id={} last_id={} fetch_duration_ms={}",
+            "[sync.check_for_new_assets] fetched page={} item_count={} has_next_page={} fetch_duration_ms={}",
             page,
             item_count,
             result.has_next_page,
-            first_id,
-            last_id,
             page_started_at.elapsed().as_millis()
         );
 
@@ -455,14 +490,26 @@ pub async fn check_for_new_assets(
             break;
         }
 
-        // Hydrate each asset with full metadata from asset detail endpoint.
+        // Determine how many assets on this page are not yet cached. Because the
+        // newest assets come first, a page with zero new ids means we have
+        // reached already-known territory and can stop early.
+        let page_ids: Vec<String> = result.items.iter().map(|asset| asset.id.clone()).collect();
+        let new_on_page = state
+            .db
+            .count_new_asset_ids(&page_ids)
+            .unwrap_or(page_ids.len());
+        total_new_items += new_on_page;
+
+        // Hydrate each asset with full metadata and upsert (also refreshes recent
+        // edits to already-cached assets on the first page).
         let enrich_started_at = Instant::now();
         let enriched_assets =
             enrich_assets_with_full_metadata(state.immich.clone(), result.items).await;
         log::warn!(
-            "[sync.check_for_new_assets] enriched page={} enriched_count={} duration_ms={}",
+            "[sync.check_for_new_assets] enriched page={} enriched_count={} new_on_page={} duration_ms={}",
             page,
             enriched_assets.len(),
+            new_on_page,
             enrich_started_at.elapsed().as_millis()
         );
 
@@ -502,6 +549,15 @@ pub async fn check_for_new_assets(
             write_started_at.elapsed().as_millis()
         );
 
+        // Stop once we reach a page that contains nothing new (we've caught up).
+        if new_on_page == 0 {
+            log::warn!(
+                "[sync.check_for_new_assets] stopping early: page {} had no new assets (caught up)",
+                page
+            );
+            break;
+        }
+
         if !result.has_next_page {
             log::warn!(
                 "[sync.check_for_new_assets] stopping because has_next_page=false on page={}",
@@ -511,14 +567,22 @@ pub async fn check_for_new_assets(
         }
 
         page += 1;
+        if page >= QUICK_SYNC_MAX_PAGES {
+            log::warn!(
+                "[sync.check_for_new_assets] stopping at quick-sync page cap ({} pages). Run a full sync to scan everything.",
+                QUICK_SYNC_MAX_PAGES
+            );
+            break;
+        }
     }
 
     // Complete the check
     let updated_state = state.db.complete_check(statistics.total)?;
     log::warn!(
-        "[sync.check_for_new_assets] complete fetched_items={} written_items={} duration_ms={}",
+        "[sync.check_for_new_assets] complete fetched_items={} written_items={} new_items={} duration_ms={}",
         total_fetched_items,
         total_written_items,
+        total_new_items,
         check_started_at.elapsed().as_millis()
     );
     Ok(SyncStatusResponse::from(updated_state))

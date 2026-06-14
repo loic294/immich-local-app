@@ -536,6 +536,35 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
+    /// Count how many of the given asset ids are NOT yet present in the local
+    /// cache. Used by quick sync to detect when a newest-first page has reached
+    /// already-known assets so it can stop paging early instead of re-scanning
+    /// the entire library.
+    pub fn count_new_asset_ids(&self, ids: &[String]) -> Result<usize, String> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let conn = self.open()?;
+        let mut existing = 0usize;
+
+        for id in ids {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(1) FROM assets WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|err| err.to_string())?;
+
+            if count > 0 {
+                existing += 1;
+            }
+        }
+
+        Ok(ids.len() - existing)
+    }
+
     pub fn upsert_assets_with_metadata(
         &self,
         assets: &[AssetSummaryExtended],

@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   Share2,
@@ -17,6 +18,7 @@ import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
+import { useConnectionContext } from "../hooks/connectionContext";
 import type { Session } from "../hooks/useSession";
 import type { AlbumSummary } from "../types";
 import {
@@ -28,6 +30,7 @@ import {
   getCachedAlbumFullGridLayout,
   openFolderInFileExplorer,
   openUrl,
+  refreshAlbumAssets,
   saveAlbumLocally,
   updateAssetVisibility,
 } from "../api/tauri";
@@ -60,6 +63,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const [isSavingAlbum, setIsSavingAlbum] = useState(false);
   const [saveAlbumError, setSaveAlbumError] = useState<string | null>(null);
   const [showSaveProgressModal, setShowSaveProgressModal] = useState(false);
+  // Bumped after a lazy on-open album refresh completes so the canvas grid
+  // reloads its layout from the freshly-updated local cache.
+  const [albumRefreshNonce, setAlbumRefreshNonce] = useState(0);
+  const queryClient = useQueryClient();
+  const { isOnline } = useConnectionContext();
 
   const getValidSavedFolderPath = useCallback(
     (albumId: string): string | null => {
@@ -113,7 +121,10 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   >(
     (containerWidth) =>
       getCachedAlbumFullGridLayout(selectedAlbumId ?? "", containerWidth),
-    [selectedAlbumId],
+    // albumRefreshNonce is intentionally part of the deps so the grid reloads
+    // its layout once the lazy on-open refresh has updated the local cache.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedAlbumId, albumRefreshNonce],
   );
   const albumLoadFullLayout =
     selectedAlbumId && searchInput.trim().length === 0
@@ -132,6 +143,40 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     selectedAlbumId !== null,
     selectedAlbumId ?? "",
   );
+
+  // Local-first lazy sync: when an album is opened, render from the local cache
+  // immediately and refresh that single album from the server in the background.
+  // Other albums are not touched (no full library re-sync). See
+  // sync.instructions.md.
+  useEffect(() => {
+    if (!selectedAlbumId || isOnline !== true) {
+      return;
+    }
+
+    let cancelled = false;
+    const albumId = selectedAlbumId;
+
+    void (async () => {
+      try {
+        await refreshAlbumAssets(albumId);
+        if (cancelled) {
+          return;
+        }
+        await queryClient.invalidateQueries({
+          queryKey: ["album-assets-paged", albumId],
+        });
+        // Trigger a canvas layout reload from the updated cache.
+        setAlbumRefreshNonce((nonce) => nonce + 1);
+      } catch (err) {
+        // Offline / transient failures keep the cached view; just log.
+        console.warn("[albums] lazy album refresh failed", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAlbumId, isOnline, queryClient]);
 
   // Calculate PhotoGrid height dynamically
   useEffect(() => {

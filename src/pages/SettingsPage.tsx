@@ -38,9 +38,17 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [isSavingLocalFolder, setIsSavingLocalFolder] = useState(false);
   const [localFolderDraft, setLocalFolderDraft] = useState("");
   const [isForcingFullSync, setIsForcingFullSync] = useState(false);
+  const [isQuickSyncing, setIsQuickSyncing] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const { forceFullSync, syncStatus, isSyncing, isChecking, progress, error } =
-    useSyncStatus({ enableAutoCheck: false });
+  const {
+    forceFullSync,
+    checkForNewAssets,
+    syncStatus,
+    isSyncing,
+    isChecking,
+    progress,
+    error,
+  } = useSyncStatus();
   const appUpdate = useAppUpdate();
   const invalidateSettings = useInvalidateSettings();
 
@@ -189,6 +197,17 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     }
   };
 
+  const handleQuickSync = async () => {
+    try {
+      setIsQuickSyncing(true);
+      await checkForNewAssets();
+    } catch (error) {
+      console.error("Failed to run quick sync:", error);
+    } finally {
+      setIsQuickSyncing(false);
+    }
+  };
+
   const formatBytes = (bytes: number): string => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -247,11 +266,20 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
           <div className="card-body">
             <h2 className="card-title">Sync</h2>
             <p className="text-sm text-base-content/70 mb-4">
-              Restart synchronization from the beginning and refresh all local
-              metadata.
+              <span className="font-medium text-base-content">Quick sync</span>{" "}
+              only checks for recent new photos and is fast.{" "}
+              <span className="font-medium text-base-content">Full sync</span>{" "}
+              re-scans your entire library and refreshes all local metadata.
             </p>
 
-            {isForcingFullSync && !isSyncing ? (
+            {isQuickSyncing && !isSyncing ? (
+              <div className="flex items-center gap-2 mb-3">
+                <span className="loading loading-spinner loading-xs"></span>
+                <span className="text-xs text-base-content/70">
+                  Quick sync running...
+                </span>
+              </div>
+            ) : isForcingFullSync && !isSyncing ? (
               <>
                 <progress className="progress progress-primary progress-sm mb-2"></progress>
                 <div className="text-xs text-base-content/70 mb-3">
@@ -286,27 +314,37 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               </div>
             ) : (
               <div className="text-xs text-base-content/70 mb-3">
-                Ready to start full sync
+                Ready to sync
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={() => {
-                void handleForceFullSync();
-              }}
-              disabled={isForcingFullSync || isSyncing}
-              className="btn btn-outline btn-warning gap-2"
-            >
-              <RefreshCcw size={16} />
-              {isForcingFullSync && "Starting Full Sync..."}
-              {isSyncing && !isForcingFullSync && "Syncing..."}
-              {isChecking && !isForcingFullSync && !isSyncing && "Checking..."}
-              {!isForcingFullSync &&
-                !isSyncing &&
-                !isChecking &&
-                "Force Full Sync"}
-            </button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleQuickSync();
+                }}
+                disabled={isQuickSyncing || isChecking || isSyncing}
+                className="btn btn-outline btn-primary gap-2"
+              >
+                <RefreshCcw size={16} />
+                {isQuickSyncing || isChecking ? "Quick Syncing..." : "Quick Sync"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void handleForceFullSync();
+                }}
+                disabled={isForcingFullSync || isSyncing}
+                className="btn btn-outline btn-warning gap-2"
+              >
+                <RefreshCcw size={16} />
+                {isForcingFullSync && "Starting Full Sync..."}
+                {isSyncing && !isForcingFullSync && "Syncing..."}
+                {!isForcingFullSync && !isSyncing && "Force Full Sync"}
+              </button>
+            </div>
 
             {error && (
               <div className="alert alert-error alert-sm mt-3">

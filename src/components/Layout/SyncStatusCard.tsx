@@ -8,7 +8,6 @@ export function SyncStatusCard() {
     isChecking,
     progress,
     error,
-    startSync,
     checkForNewAssets,
   } = useSyncStatus();
 
@@ -34,12 +33,9 @@ export function SyncStatusCard() {
   };
 
   const handleAction = async () => {
-    // First check for new assets
-    const hasNewAssets = await checkForNewAssets();
-    // If new assets found, run the full sync
-    if (hasNewAssets) {
-      await startSync();
-    }
+    // Quick sync only: check for and pull in recent new assets. A full library
+    // re-scan is available from Settings ("Force Full Sync").
+    await checkForNewAssets();
   };
 
   return (
@@ -95,7 +91,7 @@ export function SyncStatusCard() {
         >
           {isSyncing && "Syncing..."}
           {isChecking && "Checking..."}
-          {!isSyncing && !isChecking && "Sync Changes"}
+          {!isSyncing && !isChecking && "Check for New Photos"}
         </button>
 
         {error && (

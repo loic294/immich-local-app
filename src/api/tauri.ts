@@ -605,6 +605,16 @@ export async function fetchAssetsByMonth(
   return invoke<AssetPage>("fetch_assets_by_month", { year, month });
 }
 
+/**
+ * Lazily refresh a single album's assets from the server (local-first). The UI
+ * renders from the local cache first; this updates that cache in the background
+ * when the user opens an album. Rejects with an `offline:`-prefixed marker when
+ * the server is unreachable.
+ */
+export async function refreshAlbumAssets(albumId: string): Promise<void> {
+  return invoke<void>("refresh_album_assets", { albumId });
+}
+
 export async function calculateGridLayout(
   assets: GridLayoutAssetInput[],
   containerWidth: number,
