@@ -1929,6 +1929,63 @@ impl ImmichClient {
         Ok(to_data_url(&content_type, bytes.as_ref()))
     }
 
+    /// Return a cached or freshly-fetched data URL for a person's face
+    /// thumbnail. Local-first: a cached file is served without a live session so
+    /// faces still render in the People filter while offline.
+    pub async fn get_person_thumbnail_data_url(&self, person_id: &str) -> Result<String, String> {
+        let cache_dir = people_thumbnail_cache_dir()?;
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+
+        if let Some(cached) = read_cached_thumbnail(&cache_dir, person_id)? {
+            return Ok(cached);
+        }
+
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
+        );
+
+        let url = format!("{}/api/people/{}/thumbnail", session.server_url, person_id);
+
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "person thumbnail request failed for {} with status {}",
+                person_id, status
+            ));
+        }
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("image/jpeg")
+            .to_string();
+
+        let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+        let ext = extension_from_mime(&content_type);
+        let output = cache_dir.join(format!("{}.{}", person_id, ext));
+        fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
+
+        Ok(to_data_url(&content_type, bytes.as_ref()))
+    }
+
     pub async fn get_asset_thumbnail_file_path(&self, asset_id: &str) -> Result<String, String> {
         let cache_dir = thumbnail_cache_dir()?;
         fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
@@ -3451,6 +3508,13 @@ fn thumbnail_cache_dir() -> Result<PathBuf, String> {
         .join(".config")
         .join("immich-local-app")
         .join("thumbnails"))
+}
+
+fn people_thumbnail_cache_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?
+        .join(".config")
+        .join("immich-local-app")
+        .join("people"))
 }
 
 fn video_cache_dir() -> Result<PathBuf, String> {

@@ -4,8 +4,10 @@ import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
+import { FilterBar } from "../components/Filters/FilterBar";
 import { useFolderAssets } from "../hooks/useFolderAssets";
 import { useFolderPaths } from "../hooks/useFolderPaths";
+import { useAssetFilters } from "../hooks/useAssetFilters";
 import {
   addAssetsToAlbum,
   createAlbumWithAssets,
@@ -15,6 +17,7 @@ import {
   updateAssetVisibility,
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
+import type { ViewScope } from "../types";
 
 interface FoldersPageProps {
   session: Session;
@@ -39,6 +42,13 @@ export function FoldersPage({
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const folderPathsQuery = useFolderPaths(true);
 
+  const filters = useAssetFilters(`folder:${currentPath}`);
+  const filterPayload = filters.payload;
+  const filterScope = useMemo<ViewScope>(
+    () => ({ kind: "folder", path: currentPath }),
+    [currentPath],
+  );
+
   const paths = useMemo(
     () => (folderPathsQuery.data ?? []).map((path) => normalizePath(path)),
     [folderPathsQuery.data],
@@ -57,7 +67,11 @@ export function FoldersPage({
     }
   }, [currentPath, paths]);
 
-  const assetsQuery = useFolderAssets(!folderPathsQuery.isLoading, currentPath);
+  const assetsQuery = useFolderAssets(
+    !folderPathsQuery.isLoading,
+    currentPath,
+    filterPayload,
+  );
 
   const allAssets = useMemo(
     () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -77,8 +91,8 @@ export function FoldersPage({
 
   const loadFolderFullLayout = useCallback(
     (containerWidth: number) =>
-      getCachedFolderFullGridLayout(currentPath, containerWidth),
-    [currentPath],
+      getCachedFolderFullGridLayout(currentPath, containerWidth, filterPayload),
+    [currentPath, filterPayload],
   );
 
   useEffect(() => {
@@ -195,7 +209,22 @@ export function FoldersPage({
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
           searchPlaceholder="Search folder photos"
+          showFilterButton={shouldShowPhotoGrid}
+          filterActive={filters.isActive}
+          filterOpen={filters.isOpen}
+          onToggleFilter={filters.toggleOpen}
         />
+
+        {shouldShowPhotoGrid && (
+          <FilterBar
+            open={filters.isOpen}
+            scope={filterScope}
+            criteria={filters.criteria}
+            isActive={filters.isActive}
+            onChange={filters.update}
+            onReset={filters.reset}
+          />
+        )}
 
         <section
           ref={contentRef}

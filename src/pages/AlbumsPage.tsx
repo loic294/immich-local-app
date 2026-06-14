@@ -16,11 +16,13 @@ import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
+import { FilterBar } from "../components/Filters/FilterBar";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
+import { useAssetFilters } from "../hooks/useAssetFilters";
 import { useConnectionContext } from "../hooks/connectionContext";
 import type { Session } from "../hooks/useSession";
-import type { AlbumSummary } from "../types";
+import type { AlbumSummary, ViewScope } from "../types";
 import {
   addAssetsToAlbum,
   canManageAlbumSharing,
@@ -68,6 +70,13 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const [albumRefreshNonce, setAlbumRefreshNonce] = useState(0);
   const queryClient = useQueryClient();
   const { isOnline } = useConnectionContext();
+
+  const filters = useAssetFilters(`album:${selectedAlbumId ?? ""}`);
+  const filterPayload = filters.payload;
+  const filterScope = useMemo<ViewScope>(
+    () => ({ kind: "album", albumId: selectedAlbumId }),
+    [selectedAlbumId],
+  );
 
   const getValidSavedFolderPath = useCallback(
     (albumId: string): string | null => {
@@ -120,11 +129,15 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     (containerWidth: number) => Promise<GridLayoutResponse>
   >(
     (containerWidth) =>
-      getCachedAlbumFullGridLayout(selectedAlbumId ?? "", containerWidth),
+      getCachedAlbumFullGridLayout(
+        selectedAlbumId ?? "",
+        containerWidth,
+        filterPayload,
+      ),
     // albumRefreshNonce is intentionally part of the deps so the grid reloads
     // its layout once the lazy on-open refresh has updated the local cache.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedAlbumId, albumRefreshNonce],
+    [selectedAlbumId, albumRefreshNonce, filterPayload],
   );
   const albumLoadFullLayout =
     selectedAlbumId && searchInput.trim().length === 0
@@ -142,6 +155,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const albumAssetsQuery = useAlbumAssets(
     selectedAlbumId !== null,
     selectedAlbumId ?? "",
+    filterPayload,
   );
 
   // Local-first lazy sync: when an album is opened, render from the local cache
@@ -527,7 +541,22 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           searchPlaceholder={
             selectedAlbumId ? "Search photos in this album" : "Search albums"
           }
+          showFilterButton={selectedAlbumId !== null}
+          filterActive={filters.isActive}
+          filterOpen={filters.isOpen}
+          onToggleFilter={filters.toggleOpen}
         />
+
+        {selectedAlbumId !== null && (
+          <FilterBar
+            open={filters.isOpen}
+            scope={filterScope}
+            criteria={filters.criteria}
+            isActive={filters.isActive}
+            onChange={filters.update}
+            onReset={filters.reset}
+          />
+        )}
 
         <section
           ref={contentRef}

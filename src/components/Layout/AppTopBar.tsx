@@ -22,6 +22,13 @@ interface AppTopBarProps {
   }) => Promise<void>;
   onCreateShareLinkForSelected?: () => Promise<string>;
   onArchiveSelected?: () => Promise<void>;
+  /** Whether to show the Filter button (only on photo grid views). */
+  showFilterButton?: boolean;
+  /** Whether any filter is currently active. */
+  filterActive?: boolean;
+  /** Whether the filter bar is currently open. */
+  filterOpen?: boolean;
+  onToggleFilter?: () => void;
 }
 
 export function AppTopBar({
@@ -38,6 +45,10 @@ export function AppTopBar({
   onAddSelectedToAlbum,
   onCreateShareLinkForSelected,
   onArchiveSelected,
+  showFilterButton = false,
+  filterActive = false,
+  filterOpen = false,
+  onToggleFilter,
 }: AppTopBarProps) {
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
@@ -172,6 +183,10 @@ export function AppTopBar({
       userName={session.userName}
       onLogout={onLogout}
       searchPlaceholder={searchPlaceholder}
+      showFilterButton={showFilterButton}
+      filterActive={filterActive}
+      filterOpen={filterOpen}
+      onToggleFilter={onToggleFilter}
     />
   );
 }

@@ -4,7 +4,9 @@ import { AppTopBar } from "../components/Layout/AppTopBar";
 import { PageBackButton } from "../components/Layout/PageBackButton";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
+import { FilterBar } from "../components/Filters/FilterBar";
 import { useCalendarAssets } from "../hooks/useCalendarAssets";
+import { useAssetFilters } from "../hooks/useAssetFilters";
 import { useConnectionContext } from "../hooks/connectionContext";
 import {
   addAssetsToAlbum,
@@ -17,6 +19,7 @@ import {
   updateAssetVisibility,
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
+import type { ViewScope } from "../types";
 
 interface CalendarPageProps {
   session: Session;
@@ -195,7 +198,14 @@ function MonthView({
   const queryClient = useQueryClient();
   const { isOnline } = useConnectionContext();
 
-  const assetsQuery = useCalendarAssets(true, year, month);
+  const filters = useAssetFilters(`month:${year}-${month}`);
+  const filterPayload = filters.payload;
+  const filterScope = useMemo<ViewScope>(
+    () => ({ kind: "month", year, month }),
+    [year, month],
+  );
+
+  const assetsQuery = useCalendarAssets(true, year, month, filterPayload);
   const assets = useMemo(
     () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [assetsQuery.data?.pages],
@@ -295,11 +305,16 @@ function MonthView({
   // "Rendered fewer hooks than expected").
   const loadFullLayout = useCallback(
     (containerWidth: number) =>
-      getCachedCalendarFullGridLayout(year, month, containerWidth),
+      getCachedCalendarFullGridLayout(
+        year,
+        month,
+        containerWidth,
+        filterPayload,
+      ),
     // monthRefreshNonce is intentionally part of the deps so the grid reloads
     // its layout once the lazy on-open refresh has updated the local cache.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [year, month, monthRefreshNonce],
+    [year, month, monthRefreshNonce, filterPayload],
   );
 
   return (
@@ -347,6 +362,19 @@ function MonthView({
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
           searchPlaceholder="Calendar"
+          showFilterButton
+          filterActive={filters.isActive}
+          filterOpen={filters.isOpen}
+          onToggleFilter={filters.toggleOpen}
+        />
+
+        <FilterBar
+          open={filters.isOpen}
+          scope={filterScope}
+          criteria={filters.criteria}
+          isActive={filters.isActive}
+          onChange={filters.update}
+          onReset={filters.reset}
         />
 
         <section

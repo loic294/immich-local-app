@@ -1,4 +1,4 @@
-import { LogOut, Search, Upload } from "lucide-react";
+import { Funnel, LogOut, Search, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getProfileImage } from "../../api/tauri";
 
@@ -10,6 +10,13 @@ interface HeaderProps {
   userName: string;
   onLogout: () => void;
   searchPlaceholder?: string;
+  /** Whether to show the Filter button (only on photo grid views). */
+  showFilterButton?: boolean;
+  /** Whether any filter is currently active (highlights the button). */
+  filterActive?: boolean;
+  /** Whether the filter bar is currently open. */
+  filterOpen?: boolean;
+  onToggleFilter?: () => void;
 }
 
 export function Header({
@@ -20,6 +27,10 @@ export function Header({
   userName,
   onLogout,
   searchPlaceholder = "Search your photos",
+  showFilterButton = false,
+  filterActive = false,
+  filterOpen = false,
+  onToggleFilter,
 }: HeaderProps) {
   const [profileImage, setProfileImage] = useState<string | null>(null);
 
@@ -81,10 +92,20 @@ export function Header({
       </div>
 
       <div className="navbar-end gap-2">
-        <button className="btn btn-sm btn-ghost" type="button">
-          <Upload size={14} className="shrink-0" />
-          <span>Upload</span>
-        </button>
+        {showFilterButton && (
+          <button
+            className={`btn btn-sm ${
+              filterActive || filterOpen ? "btn-primary" : "btn-ghost"
+            }`}
+            type="button"
+            onClick={onToggleFilter}
+            aria-pressed={filterOpen}
+            aria-label="Filter photos"
+          >
+            <Funnel size={14} className="shrink-0" />
+            <span>Filter</span>
+          </button>
+        )}
         <details className="dropdown dropdown-end">
           <summary
             className="btn btn-ghost btn-circle list-none"

@@ -2,7 +2,8 @@ use chrono::{DateTime, Datelike, Local, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-use crate::services::immich_client::AssetSummary;
+use crate::services::db::{AssetFilterCriteria, ViewScope};
+use crate::services::immich_client::{AssetSummary, PersonSummary};
 use crate::AppState;
 
 /// Probe whether the configured Immich server is currently reachable. Used by
@@ -233,11 +234,12 @@ pub async fn get_calendar_assets_paged(
     month: u32,
     page: u32,
     page_size: u32,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
     let (cached_items, cached_has_next_page) = state
         .db
-        .get_calendar_assets(year, month, page, page_size)
+        .get_calendar_assets(year, month, page, page_size, criteria.as_ref())
         .map_err(|err| format!("calendar cache read failed: {err}"))?;
 
     Ok(AssetPage {
@@ -254,12 +256,13 @@ pub async fn get_cached_assets(
     page_size: u32,
     search: Option<String>,
     filter: Option<String>,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
     let started_at = Instant::now();
     let (items, has_next_page) = state
         .db
-        .get_assets(page, page_size, search.as_deref(), filter.as_deref())
+        .get_assets(page, page_size, search.as_deref(), filter.as_deref(), criteria.as_ref())
         .map_err(|err| format!("cache read failed: {err}"))?;
 
     log::warn!(
@@ -285,11 +288,12 @@ pub async fn get_cached_assets(
 pub async fn get_all_cached_assets(
     search: Option<String>,
     filter: Option<String>,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<AssetSummary>, String> {
     state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref())
+        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref())
         .map_err(|err| format!("cache read failed: {err}"))
 }
 
@@ -297,12 +301,13 @@ pub async fn get_all_cached_assets(
 pub async fn get_cached_asset_days(
     search: Option<String>,
     filter: Option<String>,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
     let started_at = Instant::now();
     let result = state
         .db
-        .get_asset_days(search.as_deref(), filter.as_deref())
+        .get_asset_days(search.as_deref(), filter.as_deref(), criteria.as_ref())
         .map_err(|err| format!("asset day query failed: {err}"))?;
 
     log::warn!(
@@ -322,12 +327,19 @@ pub async fn get_cached_asset_jump_target(
     page_size: u32,
     search: Option<String>,
     filter: Option<String>,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<AssetDateJumpTarget>, String> {
     let started_at = Instant::now();
     let page = state
         .db
-        .get_asset_jump_target_page(&date_key, page_size, search.as_deref(), filter.as_deref())
+        .get_asset_jump_target_page(
+            &date_key,
+            page_size,
+            search.as_deref(),
+            filter.as_deref(),
+            criteria.as_ref(),
+        )
         .map_err(|err| format!("asset jump target query failed: {err}"))?;
 
     log::warn!(
@@ -348,6 +360,7 @@ pub async fn get_cached_timeline_layout(
     search: Option<String>,
     container_width: f64,
     filter: Option<String>,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<TimelineLayoutResponse, String> {
     let started_at = Instant::now();
@@ -362,7 +375,7 @@ pub async fn get_cached_timeline_layout(
 
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref())
+        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref())
         .map_err(|err| format!("timeline layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
@@ -445,6 +458,7 @@ pub async fn get_cached_full_grid_layout(
     search: Option<String>,
     container_width: f64,
     filter: Option<String>,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
@@ -457,7 +471,7 @@ pub async fn get_cached_full_grid_layout(
 
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref())
+        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref())
         .map_err(|err| format!("full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
@@ -492,6 +506,7 @@ pub async fn get_cached_calendar_full_grid_layout(
     year: i32,
     month: u32,
     container_width: f64,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
@@ -503,7 +518,7 @@ pub async fn get_cached_calendar_full_grid_layout(
 
     let all_assets = state
         .db
-        .get_all_calendar_assets(year, month)
+        .get_all_calendar_assets(year, month, criteria.as_ref())
         .map_err(|err| format!("calendar full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
@@ -550,6 +565,77 @@ pub async fn get_asset_thumbnail(
         log::warn!(
             "[assets.get_asset_thumbnail] asset_id={} duration_ms={}",
             asset_id, elapsed_ms
+        );
+    }
+
+    Ok(result)
+}
+
+/// List the distinct camera names present in the assets of a given view scope
+/// (all / album / folder / month). Powers the Camera filter dropdown. Reads only
+/// from the local cache so it works offline.
+#[tauri::command]
+pub async fn get_cameras_in_scope(
+    scope: ViewScope,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let started_at = Instant::now();
+    let result = state
+        .db
+        .get_cameras_in_scope(&scope)
+        .map_err(|err| format!("camera list query failed: {err}"))?;
+
+    log::warn!(
+        "[assets.get_cameras_in_scope] kind={} camera_count={} duration_ms={}",
+        scope.kind,
+        result.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(result)
+}
+
+/// List the people that appear in the assets of a given view scope. Powers the
+/// People filter dropdown. Reads only from the local cache so it works offline.
+#[tauri::command]
+pub async fn get_people_in_scope(
+    scope: ViewScope,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<PersonSummary>, String> {
+    let started_at = Instant::now();
+    let result = state
+        .db
+        .get_people_in_scope(&scope)
+        .map_err(|err| format!("people list query failed: {err}"))?;
+
+    log::warn!(
+        "[assets.get_people_in_scope] kind={} people_count={} duration_ms={}",
+        scope.kind,
+        result.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(result)
+}
+
+/// Return a data URL for a person's face thumbnail (local-first cached).
+#[tauri::command]
+pub async fn get_person_thumbnail(
+    person_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let started_at = Instant::now();
+    let result = state
+        .immich
+        .get_person_thumbnail_data_url(&person_id)
+        .await
+        .map_err(|err| format!("person thumbnail load failed: {err}"))?;
+
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if elapsed_ms >= 150 {
+        log::warn!(
+            "[assets.get_person_thumbnail] person_id={} duration_ms={}",
+            person_id, elapsed_ms
         );
     }
 

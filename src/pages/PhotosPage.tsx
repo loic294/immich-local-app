@@ -20,8 +20,10 @@ import { useSyncStatus } from "../hooks/useSyncStatus";
 import { toMemoryItem, type MemoryItem } from "../utils/memory";
 import type { Session } from "../hooks/useSession";
 import { ASSET_PAGE_SIZE, useAssetWindow } from "../hooks/useAssetWindow";
+import { useAssetFilters } from "../hooks/useAssetFilters";
+import { FilterBar } from "../components/Filters/FilterBar";
 import { useRef } from "react";
-import type { AssetFilter } from "../types";
+import type { AssetFilter, ViewScope } from "../types";
 
 interface PhotosPageProps {
   session: Session;
@@ -56,6 +58,13 @@ export function PhotosPage({
   const { syncStatus } = useSyncStatus();
   const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}:${archiveRefreshNonce}`;
 
+  const filters = useAssetFilters(`photos:${assetFilter}`);
+  const filterPayload = filters.payload;
+  const filterScope = useMemo<ViewScope>(
+    () => ({ kind: "all", filter: assetFilter }),
+    [assetFilter],
+  );
+
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
 
@@ -64,12 +73,14 @@ export function PhotosPage({
     searchTerm,
     refreshToken,
     assetFilter,
+    filterPayload,
   );
   const assetDaysQuery = useAssetDays(
     true,
     searchTerm,
     refreshToken,
     assetFilter,
+    filterPayload,
   );
   const memoriesQuery = useMemories(true);
 
@@ -168,8 +179,13 @@ export function PhotosPage({
   // "Rendered fewer hooks than expected").
   const loadFullLayout = useCallback(
     (containerWidth: number) =>
-      getFullGridLayout(searchTerm.trim() || null, containerWidth, assetFilter),
-    [assetFilter, searchTerm],
+      getFullGridLayout(
+        searchTerm.trim() || null,
+        containerWidth,
+        assetFilter,
+        filterPayload,
+      ),
+    [assetFilter, searchTerm, filterPayload],
   );
   const loadTimelineLayout = useCallback(
     (containerWidth: number) =>
@@ -177,8 +193,9 @@ export function PhotosPage({
         searchTerm.trim() || null,
         containerWidth,
         assetFilter,
+        filterPayload,
       ),
-    [assetFilter, searchTerm],
+    [assetFilter, searchTerm, filterPayload],
   );
 
   return (
@@ -225,6 +242,19 @@ export function PhotosPage({
           onSelectAll={() => {
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
+          showFilterButton
+          filterActive={filters.isActive}
+          filterOpen={filters.isOpen}
+          onToggleFilter={filters.toggleOpen}
+        />
+
+        <FilterBar
+          open={filters.isOpen}
+          scope={filterScope}
+          criteria={filters.criteria}
+          isActive={filters.isActive}
+          onChange={filters.update}
+          onReset={filters.reset}
         />
 
         <section
@@ -314,6 +344,7 @@ export function PhotosPage({
                   ASSET_PAGE_SIZE,
                   trimmedSearch,
                   assetFilter,
+                  filterPayload,
                 );
 
                 console.log("[PhotosPage] jump target resolved", {

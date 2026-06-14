@@ -1,5 +1,6 @@
 use crate::commands::assets::AssetPage;
 use crate::commands::assets::{calculate_grid_layout, GridLayoutAssetInput, GridLayoutResponse};
+use crate::services::db::AssetFilterCriteria;
 use crate::AppState;
 use std::time::Instant;
 
@@ -31,12 +32,13 @@ pub async fn get_folder_assets_paged(
     path: String,
     page: u32,
     page_size: u32,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
     let (cached_items, cached_has_next_page) =
         state
             .db
-            .get_folder_assets(&path, page, page_size)
+            .get_folder_assets(&path, page, page_size, criteria.as_ref())
             .map_err(|err| format!("folder asset cache read failed: {err}"))?;
 
     Ok(AssetPage {
@@ -51,6 +53,7 @@ pub async fn get_folder_assets_paged(
 pub async fn get_cached_folder_full_grid_layout(
     path: String,
     container_width: f64,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
@@ -62,7 +65,7 @@ pub async fn get_cached_folder_full_grid_layout(
 
     let all_assets = state
         .db
-        .get_all_folder_assets(&path)
+        .get_all_folder_assets(&path, criteria.as_ref())
         .map_err(|err| format!("folder full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets

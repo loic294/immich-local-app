@@ -1,11 +1,225 @@
 use std::fs;
 use std::path::PathBuf;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::settings::Settings;
 use crate::services::immich_client::AssetSummary;
+
+/// Boxed SQL parameters used when a query is assembled dynamically (e.g. the
+/// optional [`AssetFilterCriteria`] fragment). Binding order matches the
+/// positional `?N` placeholders in the assembled SQL.
+type DynParams = Vec<Box<dyn rusqlite::ToSql>>;
+
+/// Structured, combinable filter criteria applied on top of the base
+/// search/filter for every photo-grid view (All Photos, albums, folders,
+/// calendar months). All fields are optional and combine with AND. Filtering is
+/// performed in SQL so the server-computed canvas layout stays consistent with
+/// the windowed/paged results.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetFilterCriteria {
+    /// Star rating 1-5 to compare against, combined with [`Self::rating_mode`].
+    pub rating: Option<i64>,
+    /// Comparison mode for [`Self::rating`]: "eq" (default), "gte" or "lte".
+    pub rating_mode: Option<String>,
+    /// When true, only favorite assets are included.
+    pub favorite_only: Option<bool>,
+    /// Media type: "photo" (non-RAW images), "raw", "photo_raw" (all images) or
+    /// "video".
+    pub media_type: Option<String>,
+    /// Exact camera (EXIF model) to match.
+    pub camera: Option<String>,
+    /// Person id to match via the `asset_people` junction table.
+    pub person_id: Option<String>,
+}
+
+impl AssetFilterCriteria {
+    /// True when no field would constrain the result set, allowing callers to
+    /// skip assembling the extra SQL fragment entirely.
+    fn is_empty(&self) -> bool {
+        self.rating.is_none()
+            && self.favorite_only != Some(true)
+            && self.media_type.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && self.camera.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && self.person_id.as_deref().map(str::trim).unwrap_or("").is_empty()
+    }
+}
+
+/// Identifies the browsable view a filter dropdown should be scoped to, so the
+/// Camera and People option lists only show values present in the assets the
+/// user is currently looking at (All Photos, a single album, a folder or a
+/// calendar month).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewScope {
+    /// One of: "all", "album", "folder", "month".
+    pub kind: String,
+    /// Base filter ("all" | "favorites" | "archived"), used when `kind` == "all".
+    pub filter: Option<String>,
+    /// Album id, used when `kind` == "album".
+    pub album_id: Option<String>,
+    /// Folder path, used when `kind` == "folder".
+    pub path: Option<String>,
+    /// Year, used when `kind` == "month".
+    pub year: Option<i32>,
+    /// Month (1-12), used when `kind` == "month".
+    pub month: Option<u32>,
+}
+
+/// Build a subquery selecting `asset_id` for every asset in the given view
+/// scope, plus its bind params. Used to scope the Camera/People dropdown options
+/// to the assets currently on screen.
+fn scope_asset_ids_query(scope: &ViewScope) -> (String, DynParams) {
+    let mut params: DynParams = Vec::new();
+    let sql = match scope.kind.as_str() {
+        "album" => {
+            params.push(Box::new(scope.album_id.clone().unwrap_or_default()));
+            "SELECT aa.asset_id AS asset_id FROM album_assets aa WHERE aa.album_id = ?".to_string()
+        }
+        "folder" => {
+            let path = scope.path.clone().unwrap_or_else(|| "/".to_string());
+            if path == "/" {
+                "SELECT id AS asset_id FROM assets WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'".to_string()
+            } else {
+                let path_prefix = format!("{}/", path);
+                let like_pattern = format!("{}%", path_prefix);
+                let remaining_start = (path_prefix.len() + 1) as i64;
+                params.push(Box::new(like_pattern));
+                params.push(Box::new(remaining_start));
+                "SELECT id AS asset_id FROM assets WHERE original_path LIKE ? AND instr(substr(original_path, ?), '/') = 0".to_string()
+            }
+        }
+        "month" => {
+            let month_key = format!(
+                "{:04}-{:02}",
+                scope.year.unwrap_or(0),
+                scope.month.unwrap_or(0)
+            );
+            params.push(Box::new(month_key));
+            "SELECT id AS asset_id FROM assets WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?".to_string()
+        }
+        _ => {
+            let filter_clause = asset_filter_where_clause(scope.filter.as_deref());
+            format!("SELECT id AS asset_id FROM assets WHERE ({})", filter_clause)
+        }
+    };
+    (sql, params)
+}
+
+/// Lowercased RAW file extensions used to distinguish RAW photos from regular
+/// images. Hardcoded constants (no user input) so they are safe to inline.
+const RAW_EXTENSIONS_SQL: &str = "'cr2','cr3','nef','nrw','arw','sr2','srf','raf','orf','rw2','raw','dng','pef','rwl','iiq','3fr','fff','dcr','kdc','mrw','mef','mos','x3f','erf','gpr','braw'";
+
+/// Lowercased video file extensions, used together with `asset_type = 'VIDEO'`
+/// to detect videos. Hardcoded constants (no user input).
+const VIDEO_EXTENSIONS_SQL: &str = "'mp4','mov','webm','mkv','avi','m4v','3gp','3g2','mts','m2ts','ts','wmv','flv','mpg','mpeg','ogv'";
+
+fn raw_predicate() -> String {
+    format!(
+        "LOWER(COALESCE(file_extension, '')) IN ({})",
+        RAW_EXTENSIONS_SQL
+    )
+}
+
+fn video_predicate() -> String {
+    format!(
+        "(UPPER(COALESCE(asset_type, '')) = 'VIDEO' OR LOWER(COALESCE(file_extension, '')) IN ({}))",
+        VIDEO_EXTENSIONS_SQL
+    )
+}
+
+/// Build the optional `AND <id_column> IN (SELECT id FROM assets WHERE ...)`
+/// fragment plus its bind parameters for the given criteria. The fragment is
+/// self-contained (always selects from the `assets` table) so it can be appended
+/// to any query regardless of its FROM/JOIN structure. `id_column` is the asset
+/// id column reference in the outer query (e.g. "id" or "a.id").
+///
+/// `start_index` is the number of the first `?N` placeholder this fragment may
+/// use; it MUST equal one past the highest positional placeholder already in the
+/// outer query (e.g. a query ending in `LIMIT ?2 OFFSET ?3` passes
+/// `start_index = 4`). Explicit numbering is required because the fragment is
+/// spliced into the middle of the query (before any trailing `LIMIT`/`OFFSET`):
+/// bare `?` placeholders would be numbered by text position and collide with the
+/// trailing `?N`. The returned params MUST be bound after the outer query's
+/// positional params so binding order matches the assigned numbers.
+fn criteria_filter(
+    criteria: Option<&AssetFilterCriteria>,
+    id_column: &str,
+    start_index: usize,
+) -> (String, DynParams) {
+    let mut params: DynParams = Vec::new();
+    let Some(criteria) = criteria.filter(|c| !c.is_empty()) else {
+        return (String::new(), params);
+    };
+
+    let mut conditions: Vec<String> = Vec::new();
+    let mut next_index = start_index;
+
+    if let Some(rating) = criteria.rating {
+        if (1..=5).contains(&rating) {
+            let op = match criteria.rating_mode.as_deref() {
+                Some("gte") => ">=",
+                Some("lte") => "<=",
+                _ => "=",
+            };
+            conditions.push(format!("COALESCE(rating, 0) {} ?{}", op, next_index));
+            params.push(Box::new(rating));
+            next_index += 1;
+        }
+    }
+
+    if criteria.favorite_only == Some(true) {
+        conditions.push("is_favorite = 1".to_string());
+    }
+
+    match criteria.media_type.as_deref().map(str::trim) {
+        Some("video") => conditions.push(video_predicate()),
+        Some("raw") => {
+            conditions.push(format!("(NOT {} AND {})", video_predicate(), raw_predicate()))
+        }
+        Some("photo") => conditions.push(format!(
+            "(NOT {} AND NOT {})",
+            video_predicate(),
+            raw_predicate()
+        )),
+        Some("photo_raw") => conditions.push(format!("NOT {}", video_predicate())),
+        _ => {}
+    }
+
+    if let Some(camera) = criteria.camera.as_deref().map(str::trim) {
+        if !camera.is_empty() {
+            conditions.push(format!("camera = ?{}", next_index));
+            params.push(Box::new(camera.to_string()));
+            next_index += 1;
+        }
+    }
+
+    if let Some(person_id) = criteria.person_id.as_deref().map(str::trim) {
+        if !person_id.is_empty() {
+            conditions.push(format!(
+                "id IN (SELECT asset_id FROM asset_people WHERE person_id = ?{})",
+                next_index
+            ));
+            params.push(Box::new(person_id.to_string()));
+            next_index += 1;
+        }
+    }
+
+    let _ = next_index;
+
+    if conditions.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let fragment = format!(
+        " AND {} IN (SELECT id FROM assets WHERE {})",
+        id_column,
+        conditions.join(" AND ")
+    );
+    (fragment, params)
+}
 
 /// Default ordered list of navigation menu items that can be toggled in the
 /// sidebar. `settings` is intentionally excluded because it must always remain
@@ -699,6 +913,7 @@ impl Database {
         page_size: u32,
         search: Option<&str>,
         filter: Option<&str>,
+        criteria: Option<&AssetFilterCriteria>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
@@ -708,6 +923,8 @@ impl Database {
         let filter_clause = asset_filter_where_clause(filter);
 
         let mut items = if let Some(pattern) = search_pattern.as_deref() {
+            // Criteria placeholders start after ?1=limit, ?2=offset, ?3=pattern.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 4);
             let query = format!(
                 "
                     SELECT
@@ -735,18 +952,20 @@ impl Database {
                             OR COALESCE(people, '') LIKE ?3 COLLATE NOCASE
                             OR COALESCE(tags, '') LIKE ?3 COLLATE NOCASE
                         )
-                        AND ({})
+                        AND ({}){}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     LIMIT ?1 OFFSET ?2
                     ",
-                filter_clause
+                filter_clause, criteria_sql
             );
-            let mut stmt = conn
-                .prepare(&query)
-                .map_err(|err| err.to_string())?;
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+            let mut bind: DynParams =
+                vec![Box::new(limit), Box::new(offset), Box::new(pattern.to_string())];
+            bind.extend(criteria_params);
 
             let rows = stmt
-                .query_map(params![limit, offset, pattern], map_asset_summary)
+                .query_map(params_from_iter(bind.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
 
             let mut branch_items = Vec::new();
@@ -756,6 +975,8 @@ impl Database {
 
             branch_items
         } else {
+            // Criteria placeholders start after ?1=limit, ?2=offset.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
             let query = format!(
                 "
                     SELECT
@@ -774,18 +995,19 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE ({})
+                    WHERE ({}){}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     LIMIT ?1 OFFSET ?2
                     ",
-                filter_clause
+                filter_clause, criteria_sql
             );
-            let mut stmt = conn
-                .prepare(&query)
-                .map_err(|err| err.to_string())?;
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+            let mut bind: DynParams = vec![Box::new(limit), Box::new(offset)];
+            bind.extend(criteria_params);
 
             let rows = stmt
-                .query_map(params![limit, offset], map_asset_summary)
+                .query_map(params_from_iter(bind.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
 
             let mut branch_items = Vec::new();
@@ -808,12 +1030,15 @@ impl Database {
         &self,
         search: Option<&str>,
         filter: Option<&str>,
+        criteria: Option<&AssetFilterCriteria>,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
         let filter_clause = asset_filter_where_clause(filter);
 
         let items = if let Some(pattern) = search_pattern.as_deref() {
+            // Criteria placeholders start after ?1=pattern.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
             let query = format!(
                 "
                     SELECT
@@ -841,17 +1066,18 @@ impl Database {
                             OR COALESCE(people, '') LIKE ?1 COLLATE NOCASE
                             OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
                         )
-                        AND ({})
+                        AND ({}){}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     ",
-                filter_clause
+                filter_clause, criteria_sql
             );
-            let mut stmt = conn
-                .prepare(&query)
-                .map_err(|err| err.to_string())?;
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+            let mut bind: DynParams = vec![Box::new(pattern.to_string())];
+            bind.extend(criteria_params);
 
             let rows = stmt
-                .query_map(params![pattern], map_asset_summary)
+                .query_map(params_from_iter(bind.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
 
             let mut branch_items = Vec::new();
@@ -861,6 +1087,8 @@ impl Database {
 
             branch_items
         } else {
+            // No positional params; criteria placeholders start at ?1.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 1);
             let query = format!(
                 "
                     SELECT
@@ -879,17 +1107,15 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE ({})
+                    WHERE ({}){}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     ",
-                filter_clause
+                filter_clause, criteria_sql
             );
-            let mut stmt = conn
-                .prepare(&query)
-                .map_err(|err| err.to_string())?;
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
             let rows = stmt
-                .query_map([], map_asset_summary)
+                .query_map(params_from_iter(criteria_params.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
 
             let mut branch_items = Vec::new();
@@ -907,12 +1133,15 @@ impl Database {
                 &self,
                 search: Option<&str>,
                 filter: Option<&str>,
+                criteria: Option<&AssetFilterCriteria>,
         ) -> Result<Vec<String>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
                 let filter_clause = asset_filter_where_clause(filter);
 
         let days = if let Some(pattern) = search_pattern.as_deref() {
+                        // Criteria placeholders start after ?1=pattern.
+                        let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
                         let query = format!(
                                 "
                                         SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
@@ -927,17 +1156,20 @@ impl Database {
                                                 OR COALESCE(people, '') LIKE ?1 COLLATE NOCASE
                                                 OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
                                             )
-                                            AND ({})
+                                            AND ({}){}
                                         ORDER BY day_key DESC
                                         ",
-                                filter_clause
+                                filter_clause, criteria_sql
                         );
             let mut stmt = conn
                                 .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
+            let mut bind: DynParams = vec![Box::new(pattern.to_string())];
+            bind.extend(criteria_params);
+
             let rows = stmt
-                .query_map(params![pattern], |row| row.get::<_, String>(0))
+                .query_map(params_from_iter(bind.iter()), |row| row.get::<_, String>(0))
                 .map_err(|err| err.to_string())?;
 
             let mut branch_days = Vec::new();
@@ -947,23 +1179,27 @@ impl Database {
 
             branch_days
         } else {
+            // No positional params; criteria placeholders start at ?1.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 1);
             let query = format!(
                 "
                     SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
                     FROM assets
                     WHERE file_created_at IS NOT NULL
                       AND length(file_created_at) >= 10
-                      AND ({})
+                      AND ({}){}
                     ORDER BY day_key DESC
                     ",
-                filter_clause
+                filter_clause, criteria_sql
             );
             let mut stmt = conn
                 .prepare(&query)
                 .map_err(|err| err.to_string())?;
 
             let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
+                .query_map(params_from_iter(criteria_params.iter()), |row| {
+                    row.get::<_, String>(0)
+                })
                 .map_err(|err| err.to_string())?;
 
             let mut branch_days = Vec::new();
@@ -1054,12 +1290,15 @@ impl Database {
         page_size: u32,
         search: Option<&str>,
         filter: Option<&str>,
+        criteria: Option<&AssetFilterCriteria>,
     ) -> Result<Option<u32>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
         let filter_clause = asset_filter_where_clause(filter);
 
         let exists = if let Some(pattern) = search_pattern.as_deref() {
+            // Criteria placeholders start after ?1=date_key, ?2=pattern.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
             let query = format!(
                 "
                 SELECT EXISTS(
@@ -1075,13 +1314,20 @@ impl Database {
                         OR COALESCE(people, '') LIKE ?2 COLLATE NOCASE
                         OR COALESCE(tags, '') LIKE ?2 COLLATE NOCASE
                       )
-                      AND ({})
+                      AND ({}){}
                 )
                 ",
-                filter_clause
+                filter_clause, criteria_sql
             );
-            conn.query_row(&query, params![date_key, pattern], |row| row.get::<_, i32>(0))
+            let mut bind: DynParams =
+                vec![Box::new(date_key.to_string()), Box::new(pattern.to_string())];
+            bind.extend(criteria_params);
+            conn.query_row(&query, params_from_iter(bind.iter()), |row| {
+                row.get::<_, i32>(0)
+            })
         } else {
+            // Criteria placeholders start after ?1=date_key.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
             let query = format!(
                 "
                 SELECT EXISTS(
@@ -1089,12 +1335,16 @@ impl Database {
                     FROM assets
                     WHERE file_created_at IS NOT NULL
                       AND substr(file_created_at, 1, 10) = ?1
-                      AND ({})
+                      AND ({}){}
                 )
                 ",
-                filter_clause
+                filter_clause, criteria_sql
             );
-            conn.query_row(&query, params![date_key], |row| row.get::<_, i32>(0))
+            let mut bind: DynParams = vec![Box::new(date_key.to_string())];
+            bind.extend(criteria_params);
+            conn.query_row(&query, params_from_iter(bind.iter()), |row| {
+                row.get::<_, i32>(0)
+            })
         }
         .map_err(|err| err.to_string())?;
 
@@ -1103,8 +1353,10 @@ impl Database {
         }
 
         let newer_count = if let Some(pattern) = search_pattern.as_deref() {
-                        let query = format!(
-                                "
+            // Criteria placeholders start after ?1=date_key, ?2=pattern.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
+            let query = format!(
+                "
                                 SELECT COUNT(*)
                                 FROM assets
                                 WHERE file_created_at IS NOT NULL
@@ -1117,23 +1369,34 @@ impl Database {
                                         OR COALESCE(people, '') LIKE ?2 COLLATE NOCASE
                                         OR COALESCE(tags, '') LIKE ?2 COLLATE NOCASE
                                     )
-                                    AND ({})
+                                    AND ({}){}
                                 ",
-                                filter_clause
-                        );
-                        conn.query_row(&query, params![date_key, pattern], |row| row.get::<_, i64>(0))
+                filter_clause, criteria_sql
+            );
+            let mut bind: DynParams =
+                vec![Box::new(date_key.to_string()), Box::new(pattern.to_string())];
+            bind.extend(criteria_params);
+            conn.query_row(&query, params_from_iter(bind.iter()), |row| {
+                row.get::<_, i64>(0)
+            })
         } else {
-                        let query = format!(
-                                "
+            // Criteria placeholders start after ?1=date_key.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
+            let query = format!(
+                "
                                 SELECT COUNT(*)
                                 FROM assets
                                 WHERE file_created_at IS NOT NULL
                                     AND substr(file_created_at, 1, 10) > ?1
-                                    AND ({})
+                                    AND ({}){}
                                 ",
-                                filter_clause
-                        );
-                        conn.query_row(&query, params![date_key], |row| row.get::<_, i64>(0))
+                filter_clause, criteria_sql
+            );
+            let mut bind: DynParams = vec![Box::new(date_key.to_string())];
+            bind.extend(criteria_params);
+            conn.query_row(&query, params_from_iter(bind.iter()), |row| {
+                row.get::<_, i64>(0)
+            })
         }
         .map_err(|err| err.to_string())?;
 
@@ -1332,13 +1595,15 @@ impl Database {
         album_id: &str,
         page: u32,
         page_size: u32,
+        criteria: Option<&AssetFilterCriteria>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
         let limit = i64::from(page_size) + 1;
-        let mut stmt = conn
-            .prepare(
-                "
+        // Criteria placeholders start after ?1=album_id, ?2=limit, ?3=offset.
+        let (criteria_sql, criteria_params) = criteria_filter(criteria, "a.id", 4);
+        let query = format!(
+            "
                 SELECT
                     a.id,
                     a.original_file_name,
@@ -1356,15 +1621,23 @@ impl Database {
                     a.thumbhash
                 FROM album_assets aa
                 JOIN assets a ON a.id = aa.asset_id
-                WHERE aa.album_id = ?1
+                WHERE aa.album_id = ?1{}
                 ORDER BY a.file_created_at DESC NULLS LAST, a.updated_at DESC
                 LIMIT ?2 OFFSET ?3
                 ",
-            )
-            .map_err(|err| err.to_string())?;
+            criteria_sql
+        );
+        let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+        let mut bind: DynParams = vec![
+            Box::new(album_id.to_string()),
+            Box::new(limit),
+            Box::new(offset),
+        ];
+        bind.extend(criteria_params);
 
         let rows = stmt
-            .query_map(params![album_id, limit, offset], map_asset_summary)
+            .query_map(params_from_iter(bind.iter()), map_asset_summary)
             .map_err(|err| err.to_string())?;
 
         let mut items = Vec::new();
@@ -1380,11 +1653,16 @@ impl Database {
         Ok((items, has_next_page))
     }
 
-    pub fn get_all_album_assets(&self, album_id: &str) -> Result<Vec<AssetSummary>, String> {
+    pub fn get_all_album_assets(
+        &self,
+        album_id: &str,
+        criteria: Option<&AssetFilterCriteria>,
+    ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
-        let mut stmt = conn
-            .prepare(
-                "
+        // Criteria placeholders start after ?1=album_id.
+        let (criteria_sql, criteria_params) = criteria_filter(criteria, "a.id", 2);
+        let query = format!(
+            "
                 SELECT
                     a.id,
                     a.original_file_name,
@@ -1402,14 +1680,18 @@ impl Database {
                     a.thumbhash
                 FROM album_assets aa
                 JOIN assets a ON a.id = aa.asset_id
-                WHERE aa.album_id = ?1
+                WHERE aa.album_id = ?1{}
                 ORDER BY a.file_created_at DESC NULLS LAST, a.updated_at DESC
                 ",
-            )
-            .map_err(|err| err.to_string())?;
+            criteria_sql
+        );
+        let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+        let mut bind: DynParams = vec![Box::new(album_id.to_string())];
+        bind.extend(criteria_params);
 
         let rows = stmt
-            .query_map(params![album_id], map_asset_summary)
+            .query_map(params_from_iter(bind.iter()), map_asset_summary)
             .map_err(|err| err.to_string())?;
 
         let mut items = Vec::new();
@@ -1458,6 +1740,7 @@ impl Database {
         path: &str,
         page: u32,
         page_size: u32,
+        criteria: Option<&AssetFilterCriteria>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
@@ -1471,9 +1754,10 @@ impl Database {
 
         if path == "/" {
             // Root: match paths with exactly one segment, e.g. /file.jpg
-            let mut stmt = conn
-                .prepare(
-                    "
+            // Criteria placeholders start after ?1=limit, ?2=offset.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -1490,15 +1774,19 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'
+                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'{}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     LIMIT ?1 OFFSET ?2
                     ",
-                )
-                .map_err(|err| err.to_string())?;
+                criteria_sql
+            );
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+            let mut bind: DynParams = vec![Box::new(limit), Box::new(offset)];
+            bind.extend(criteria_params);
 
             let rows = stmt
-                .query_map(params![limit, offset], map_asset_summary)
+                .query_map(params_from_iter(bind.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
             for row in rows {
                 items.push(row.map_err(|err| err.to_string())?);
@@ -1509,10 +1797,11 @@ impl Database {
             let like_pattern = format!("{}%", path_prefix);
             // 1-based position of the first character after the prefix (for substr)
             let remaining_start = (path_prefix.len() + 1) as i64;
+            // Criteria placeholders start after ?1=like, ?2=remaining, ?3=limit, ?4=offset.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 5);
 
-            let mut stmt = conn
-                .prepare(
-                    "
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -1530,18 +1819,24 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE original_path LIKE ?1
-                      AND instr(substr(original_path, ?2), '/') = 0
+                      AND instr(substr(original_path, ?2), '/') = 0{}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     LIMIT ?3 OFFSET ?4
                     ",
-                )
-                .map_err(|err| err.to_string())?;
+                criteria_sql
+            );
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+            let mut bind: DynParams = vec![
+                Box::new(like_pattern),
+                Box::new(remaining_start),
+                Box::new(limit),
+                Box::new(offset),
+            ];
+            bind.extend(criteria_params);
 
             let rows = stmt
-                .query_map(
-                    params![like_pattern, remaining_start, limit, offset],
-                    map_asset_summary,
-                )
+                .query_map(params_from_iter(bind.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
             for row in rows {
                 items.push(row.map_err(|err| err.to_string())?);
@@ -1556,15 +1851,20 @@ impl Database {
         Ok((items, has_next_page))
     }
 
-    pub fn get_all_folder_assets(&self, path: &str) -> Result<Vec<AssetSummary>, String> {
+    pub fn get_all_folder_assets(
+        &self,
+        path: &str,
+        criteria: Option<&AssetFilterCriteria>,
+    ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
 
         let mut items = Vec::new();
 
         if path == "/" {
-            let mut stmt = conn
-                .prepare(
-                    "
+            // No positional params; criteria placeholders start at ?1.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 1);
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -1581,14 +1881,15 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'
+                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'{}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     ",
-                )
-                .map_err(|err| err.to_string())?;
+                criteria_sql
+            );
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
             let rows = stmt
-                .query_map([], map_asset_summary)
+                .query_map(params_from_iter(criteria_params.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
             for row in rows {
                 items.push(row.map_err(|err| err.to_string())?);
@@ -1597,10 +1898,11 @@ impl Database {
             let path_prefix = format!("{}/", path);
             let like_pattern = format!("{}%", path_prefix);
             let remaining_start = (path_prefix.len() + 1) as i64;
+            // Criteria placeholders start after ?1=like, ?2=remaining.
+            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
 
-            let mut stmt = conn
-                .prepare(
-                    "
+            let query = format!(
+                "
                     SELECT
                         id,
                         original_file_name,
@@ -1618,14 +1920,19 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE original_path LIKE ?1
-                      AND instr(substr(original_path, ?2), '/') = 0
+                      AND instr(substr(original_path, ?2), '/') = 0{}
                     ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                     ",
-                )
-                .map_err(|err| err.to_string())?;
+                criteria_sql
+            );
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+            let mut bind: DynParams =
+                vec![Box::new(like_pattern), Box::new(remaining_start)];
+            bind.extend(criteria_params);
 
             let rows = stmt
-                .query_map(params![like_pattern, remaining_start], map_asset_summary)
+                .query_map(params_from_iter(bind.iter()), map_asset_summary)
                 .map_err(|err| err.to_string())?;
             for row in rows {
                 items.push(row.map_err(|err| err.to_string())?);
@@ -1641,14 +1948,16 @@ impl Database {
         month: u32,
         page: u32,
         page_size: u32,
+        criteria: Option<&AssetFilterCriteria>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
         let limit = i64::from(page_size) + 1;
         let month_key = format!("{:04}-{:02}", year, month);
-        let mut stmt = conn
-            .prepare(
-                "
+        // Criteria placeholders start after ?1=month_key, ?2=limit, ?3=offset.
+        let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 4);
+        let query = format!(
+            "
                 SELECT
                     id,
                     original_file_name,
@@ -1665,15 +1974,20 @@ impl Database {
                     height,
                     thumbhash
                 FROM assets
-                WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1
+                WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1{}
                 ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                 LIMIT ?2 OFFSET ?3
                 ",
-            )
-            .map_err(|err| err.to_string())?;
+            criteria_sql
+        );
+        let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+        let mut bind: DynParams =
+            vec![Box::new(month_key), Box::new(limit), Box::new(offset)];
+        bind.extend(criteria_params);
 
         let rows = stmt
-            .query_map(params![month_key, limit, offset], map_asset_summary)
+            .query_map(params_from_iter(bind.iter()), map_asset_summary)
             .map_err(|err| err.to_string())?;
 
         let mut items = Vec::new();
@@ -1693,12 +2007,14 @@ impl Database {
         &self,
         year: i32,
         month: u32,
+        criteria: Option<&AssetFilterCriteria>,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         let month_key = format!("{:04}-{:02}", year, month);
-        let mut stmt = conn
-            .prepare(
-                "
+        // Criteria placeholders start after ?1=month_key.
+        let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
+        let query = format!(
+            "
                 SELECT
                     id,
                     original_file_name,
@@ -1715,14 +2031,18 @@ impl Database {
                     height,
                     thumbhash
                 FROM assets
-                WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1
+                WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1{}
                 ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
                 ",
-            )
-            .map_err(|err| err.to_string())?;
+            criteria_sql
+        );
+        let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+
+        let mut bind: DynParams = vec![Box::new(month_key)];
+        bind.extend(criteria_params);
 
         let rows = stmt
-            .query_map(params![month_key], map_asset_summary)
+            .query_map(params_from_iter(bind.iter()), map_asset_summary)
             .map_err(|err| err.to_string())?;
 
         let mut items = Vec::new();
@@ -1731,6 +2051,83 @@ impl Database {
         }
 
         Ok(items)
+    }
+
+    /// Distinct, non-empty camera (EXIF model) names among the assets in the
+    /// given view scope, sorted case-insensitively. Powers the Camera filter
+    /// dropdown.
+    pub fn get_cameras_in_scope(&self, scope: &ViewScope) -> Result<Vec<String>, String> {
+        let conn = self.open()?;
+        let (scope_sql, scope_params) = scope_asset_ids_query(scope);
+        let query = format!(
+            "
+                SELECT DISTINCT a.camera
+                FROM assets a
+                WHERE a.id IN ({})
+                  AND a.camera IS NOT NULL
+                  AND TRIM(a.camera) != ''
+                ORDER BY a.camera COLLATE NOCASE ASC
+                ",
+            scope_sql
+        );
+        let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map(params_from_iter(scope_params.iter()), |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|err| err.to_string())?;
+
+        let mut cameras = Vec::new();
+        for row in rows {
+            cameras.push(row.map_err(|err| err.to_string())?);
+        }
+
+        Ok(cameras)
+    }
+
+    /// Named, visible people that appear in at least one asset within the given
+    /// view scope, sorted case-insensitively by name. Powers the People filter
+    /// dropdown.
+    pub fn get_people_in_scope(
+        &self,
+        scope: &ViewScope,
+    ) -> Result<Vec<crate::services::immich_client::PersonSummary>, String> {
+        let conn = self.open()?;
+        let (scope_sql, scope_params) = scope_asset_ids_query(scope);
+        let query = format!(
+            "
+                SELECT p.id, p.name, p.is_hidden, p.thumbnail_path
+                FROM people p
+                WHERE COALESCE(p.is_hidden, 0) = 0
+                  AND p.name IS NOT NULL
+                  AND TRIM(p.name) != ''
+                  AND p.id IN (
+                    SELECT ap.person_id
+                    FROM asset_people ap
+                    WHERE ap.asset_id IN ({})
+                  )
+                ORDER BY p.name COLLATE NOCASE ASC
+                ",
+            scope_sql
+        );
+        let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map(params_from_iter(scope_params.iter()), |row| {
+                Ok(crate::services::immich_client::PersonSummary {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    is_hidden: row.get::<_, Option<i32>>(2)?.unwrap_or(0) != 0,
+                    thumbnail_path: row.get(3)?,
+                })
+            })
+            .map_err(|err| err.to_string())?;
+
+        let mut people = Vec::new();
+        for row in rows {
+            people.push(row.map_err(|err| err.to_string())?);
+        }
+
+        Ok(people)
     }
 
     pub fn get_timeline_months(

@@ -2,6 +2,7 @@ use crate::commands::assets::{
     calculate_grid_layout, AssetPage, GridLayoutAssetInput, GridLayoutResponse,
 };
 use crate::commands::shell::copy_assets_to_local_folder_internal;
+use crate::services::db::AssetFilterCriteria;
 use crate::services::immich_client::{
     AlbumOwnerSummary, AlbumShareUser, AlbumSummary, AlbumUserCandidate,
 };
@@ -76,11 +77,12 @@ pub async fn get_album_assets_paged(
     album_id: String,
     page: u32,
     page_size: u32,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
     let (cached_items, cached_has_next_page) = state
         .db
-        .get_album_assets(&album_id, page, page_size)
+        .get_album_assets(&album_id, page, page_size, criteria.as_ref())
         .map_err(|err| format!("album asset cache read failed: {err}"))?;
 
     Ok(AssetPage {
@@ -95,6 +97,7 @@ pub async fn get_album_assets_paged(
 pub async fn get_cached_album_full_grid_layout(
     album_id: String,
     container_width: f64,
+    criteria: Option<AssetFilterCriteria>,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
@@ -106,7 +109,7 @@ pub async fn get_cached_album_full_grid_layout(
 
     let all_assets = state
         .db
-        .get_all_album_assets(&album_id)
+        .get_all_album_assets(&album_id, criteria.as_ref())
         .map_err(|err| format!("album full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
