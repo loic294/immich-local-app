@@ -21,6 +21,7 @@ import type {
   AssetFilterCriteria,
   ViewScope,
   PersonSummary,
+  SortPreference,
 } from "../types";
 
 export type AuthResponse = {
@@ -139,6 +140,7 @@ export async function getCachedAssets(
   search: string | null,
   filter?: AssetFilter | null,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("get_cached_assets", {
     page,
@@ -146,6 +148,8 @@ export async function getCachedAssets(
     search,
     filter,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -153,11 +157,14 @@ export async function getAllCachedAssets(
   search: string | null,
   filter?: AssetFilter | null,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<AssetSummary[]> {
   return invoke<AssetSummary[]>("get_all_cached_assets", {
     search,
     filter,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -165,11 +172,14 @@ export async function getCachedAssetDays(
   search: string | null,
   filter?: AssetFilter | null,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<string[]> {
   return invoke<string[]>("get_cached_asset_days", {
     search,
     filter,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -194,12 +204,15 @@ export async function getCachedTimelineLayout(
   containerWidth: number,
   filter?: AssetFilter | null,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<TimelineLayoutResponse> {
   return invoke<TimelineLayoutResponse>("get_cached_timeline_layout", {
     search,
     containerWidth,
     filter,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -208,12 +221,15 @@ export async function getFullGridLayout(
   containerWidth: number,
   filter?: AssetFilter | null,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<GridLayoutResponse> {
   return invoke<GridLayoutResponse>("get_cached_full_grid_layout", {
     search,
     containerWidth,
     filter,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -221,11 +237,14 @@ export async function getCachedAlbumFullGridLayout(
   albumId: string,
   containerWidth: number,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<GridLayoutResponse> {
   return invoke<GridLayoutResponse>("get_cached_album_full_grid_layout", {
     albumId,
     containerWidth,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -234,12 +253,15 @@ export async function getCachedCalendarFullGridLayout(
   month: number,
   containerWidth: number,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<GridLayoutResponse> {
   return invoke<GridLayoutResponse>("get_cached_calendar_full_grid_layout", {
     year,
     month,
     containerWidth,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -247,11 +269,14 @@ export async function getCachedFolderFullGridLayout(
   path: string,
   containerWidth: number,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<GridLayoutResponse> {
   return invoke<GridLayoutResponse>("get_cached_folder_full_grid_layout", {
     path,
     containerWidth,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -368,12 +393,15 @@ export async function getCachedAlbumAssetsPaged(
   page: number,
   pageSize: number,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("get_album_assets_paged", {
     albumId,
     page,
     pageSize,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -382,12 +410,15 @@ export async function getCachedFolderAssetsPaged(
   page: number,
   pageSize: number,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("get_folder_assets_paged", {
     path,
     page,
     pageSize,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 
@@ -397,6 +428,7 @@ export async function getCachedCalendarAssetsPaged(
   page: number,
   pageSize: number,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("get_calendar_assets_paged", {
     year,
@@ -404,6 +436,8 @@ export async function getCachedCalendarAssetsPaged(
     page,
     pageSize,
     criteria: criteria ?? null,
+    sortField: sort?.field ?? null,
+    sortDirection: sort?.direction ?? null,
   });
 }
 

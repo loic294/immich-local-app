@@ -50,6 +50,64 @@ impl AssetFilterCriteria {
     }
 }
 
+/// Sort parameters controlling the order in which assets are returned.
+/// The default (date_captured + desc) matches the pre-existing behaviour.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SortParams {
+    /// "date_captured" (default) or "filename".
+    pub field: Option<String>,
+    /// "asc" or "desc" (default).
+    pub direction: Option<String>,
+}
+
+impl SortParams {
+    /// Returns the SQL ORDER BY clause (without the `ORDER BY` keyword) for
+    /// asset queries based on this sort configuration.
+    pub fn order_by_clause(&self) -> String {
+        let dir = self.sql_direction();
+        match self.field.as_deref().unwrap_or("date_captured") {
+            "filename" => format!("original_file_name COLLATE NOCASE {}", dir),
+            _ => format!("file_created_at {} NULLS LAST, updated_at {}", dir, dir),
+        }
+    }
+
+    /// Returns the SQL ORDER BY clause for a prefixed table alias (e.g. `a.`).
+    pub fn order_by_clause_prefixed(&self, alias: &str) -> String {
+        let dir = self.sql_direction();
+        match self.field.as_deref().unwrap_or("date_captured") {
+            "filename" => {
+                format!("{alias}original_file_name COLLATE NOCASE {}", dir)
+            }
+            _ => format!(
+                "{alias}file_created_at {} NULLS LAST, {alias}updated_at {}",
+                dir, dir
+            ),
+        }
+    }
+
+    /// "ASC" or "DESC"
+    pub fn sql_direction(&self) -> &str {
+        match self.direction.as_deref().unwrap_or("desc") {
+            "asc" => "ASC",
+            _ => "DESC",
+        }
+    }
+
+    /// For `get_asset_days` the day-key ordering follows the sort direction.
+    pub fn day_key_order(&self) -> &str {
+        match self.direction.as_deref().unwrap_or("desc") {
+            "asc" => "ASC",
+            _ => "DESC",
+        }
+    }
+
+    /// True when the sort field is "filename" (vs date-based).
+    pub fn is_filename_sort(&self) -> bool {
+        self.field.as_deref() == Some("filename")
+    }
+}
+
 /// Identifies the browsable view a filter dropdown should be scoped to, so the
 /// Camera and People option lists only show values present in the assets the
 /// user is currently looking at (All Photos, a single album, a folder or a
@@ -1067,6 +1125,7 @@ impl Database {
         search: Option<&str>,
         filter: Option<&str>,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
@@ -1074,6 +1133,9 @@ impl Database {
         let limit = i64::from(page_size) + 1;
         let search_pattern = search_pattern(search);
         let filter_clause = asset_filter_where_clause(filter);
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause();
 
         let mut items = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=limit, ?2=offset, ?3=pattern.
@@ -1106,10 +1168,10 @@ impl Database {
                             OR COALESCE(tags, '') LIKE ?3 COLLATE NOCASE
                         )
                         AND ({}){}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     LIMIT ?1 OFFSET ?2
                     ",
-                filter_clause, criteria_sql
+                filter_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -1149,10 +1211,10 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE ({}){}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     LIMIT ?1 OFFSET ?2
                     ",
-                filter_clause, criteria_sql
+                filter_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -1184,10 +1246,14 @@ impl Database {
         search: Option<&str>,
         filter: Option<&str>,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
         let filter_clause = asset_filter_where_clause(filter);
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause();
 
         let items = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=pattern.
@@ -1220,9 +1286,9 @@ impl Database {
                             OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
                         )
                         AND ({}){}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     ",
-                filter_clause, criteria_sql
+                filter_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -1261,9 +1327,9 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE ({}){}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     ",
-                filter_clause, criteria_sql
+                filter_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -1287,10 +1353,14 @@ impl Database {
                 search: Option<&str>,
                 filter: Option<&str>,
                 criteria: Option<&AssetFilterCriteria>,
+                sort: Option<&SortParams>,
         ) -> Result<Vec<String>, String> {
         let conn = self.open()?;
         let search_pattern = search_pattern(search);
                 let filter_clause = asset_filter_where_clause(filter);
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let day_order = sort.day_key_order();
 
         let days = if let Some(pattern) = search_pattern.as_deref() {
                         // Criteria placeholders start after ?1=pattern.
@@ -1310,9 +1380,9 @@ impl Database {
                                                 OR COALESCE(tags, '') LIKE ?1 COLLATE NOCASE
                                             )
                                             AND ({}){}
-                                        ORDER BY day_key DESC
+                                        ORDER BY day_key {}
                                         ",
-                                filter_clause, criteria_sql
+                                filter_clause, criteria_sql, day_order
                         );
             let mut stmt = conn
                                 .prepare(&query)
@@ -1341,9 +1411,9 @@ impl Database {
                     WHERE file_created_at IS NOT NULL
                       AND length(file_created_at) >= 10
                       AND ({}){}
-                    ORDER BY day_key DESC
+                    ORDER BY day_key {}
                     ",
-                filter_clause, criteria_sql
+                filter_clause, criteria_sql, day_order
             );
             let mut stmt = conn
                 .prepare(&query)
@@ -1762,12 +1832,16 @@ impl Database {
         page: u32,
         page_size: u32,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
         let limit = i64::from(page_size) + 1;
         // Criteria placeholders start after ?1=album_id, ?2=limit, ?3=offset.
         let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 4);
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause_prefixed("a.");
         let query = format!(
             "
                 SELECT
@@ -1788,10 +1862,10 @@ impl Database {
                 FROM album_assets aa
                 JOIN assets a ON a.id = aa.asset_id
                 WHERE aa.album_id = ?1{}
-                ORDER BY a.file_created_at DESC NULLS LAST, a.updated_at DESC
+                ORDER BY {}
                 LIMIT ?2 OFFSET ?3
                 ",
-            criteria_sql
+            criteria_sql, order_by
         );
         let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -1823,10 +1897,14 @@ impl Database {
         &self,
         album_id: &str,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         // Criteria placeholders start after ?1=album_id.
         let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 2);
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause_prefixed("a.");
         let query = format!(
             "
                 SELECT
@@ -1847,9 +1925,9 @@ impl Database {
                 FROM album_assets aa
                 JOIN assets a ON a.id = aa.asset_id
                 WHERE aa.album_id = ?1{}
-                ORDER BY a.file_created_at DESC NULLS LAST, a.updated_at DESC
+                ORDER BY {}
                 ",
-            criteria_sql
+            criteria_sql, order_by
         );
         let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -1907,10 +1985,14 @@ impl Database {
         page: u32,
         page_size: u32,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
         let limit = i64::from(page_size) + 1;
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause();
 
         // original_path stores the full file path (e.g. /dir/file.jpg).
         // Match assets whose parent directory equals `path` by checking:
@@ -1941,10 +2023,10 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'{}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     LIMIT ?1 OFFSET ?2
                     ",
-                criteria_sql
+                criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -1986,10 +2068,10 @@ impl Database {
                     FROM assets
                     WHERE original_path LIKE ?1
                       AND instr(substr(original_path, ?2), '/') = 0{}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     LIMIT ?3 OFFSET ?4
                     ",
-                criteria_sql
+                criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -2021,8 +2103,12 @@ impl Database {
         &self,
         path: &str,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause();
 
         let mut items = Vec::new();
 
@@ -2048,9 +2134,9 @@ impl Database {
                         thumbhash
                     FROM assets
                     WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'{}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     ",
-                criteria_sql
+                criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -2087,9 +2173,9 @@ impl Database {
                     FROM assets
                     WHERE original_path LIKE ?1
                       AND instr(substr(original_path, ?2), '/') = 0{}
-                    ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                    ORDER BY {}
                     ",
-                criteria_sql
+                criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -2115,6 +2201,7 @@ impl Database {
         page: u32,
         page_size: u32,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
@@ -2122,6 +2209,9 @@ impl Database {
         let month_key = format!("{:04}-{:02}", year, month);
         // Criteria placeholders start after ?1=month_key, ?2=limit, ?3=offset.
         let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 4);
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause();
         let query = format!(
             "
                 SELECT
@@ -2141,10 +2231,10 @@ impl Database {
                     thumbhash
                 FROM assets
                 WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1{}
-                ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                ORDER BY {}
                 LIMIT ?2 OFFSET ?3
                 ",
-            criteria_sql
+            criteria_sql, order_by
         );
         let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -2174,18 +2264,21 @@ impl Database {
         year: i32,
         month: u32,
         criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         let month_key = format!("{:04}-{:02}", year, month);
         // Criteria placeholders start after ?1=month_key.
         let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
+        let default_sort = SortParams::default();
+        let sort = sort.unwrap_or(&default_sort);
+        let order_by = sort.order_by_clause();
         let query = format!(
             "
                 SELECT
                     id,
                     original_file_name,
-                    original_path,
-                    file_created_at,
+                    original_path,\n                    file_created_at,
                     checksum,
                     asset_type,
                     duration,
@@ -2198,9 +2291,9 @@ impl Database {
                     thumbhash
                 FROM assets
                 WHERE file_created_at IS NOT NULL AND substr(file_created_at, 1, 7) = ?1{}
-                ORDER BY file_created_at DESC NULLS LAST, updated_at DESC
+                ORDER BY {}
                 ",
-            criteria_sql
+            criteria_sql, order_by
         );
         let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 

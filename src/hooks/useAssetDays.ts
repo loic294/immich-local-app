@@ -4,6 +4,7 @@ import {
   criteriaPayload,
   type AssetFilter,
   type AssetFilterCriteria,
+  type SortPreference,
 } from "../types";
 
 export function useAssetDays(
@@ -12,10 +13,19 @@ export function useAssetDays(
   refreshToken?: string,
   filter?: AssetFilter | null,
   criteria?: AssetFilterCriteria | null,
+  sort?: SortPreference | null,
 ) {
   const payload = criteria ? criteriaPayload(criteria) : null;
   return useQuery({
-    queryKey: ["asset-days", searchTerm, refreshToken, filter ?? null, payload],
+    queryKey: [
+      "asset-days",
+      searchTerm,
+      refreshToken,
+      filter ?? null,
+      payload,
+      sort?.field ?? null,
+      sort?.direction ?? null,
+    ],
     enabled,
     queryFn: async () => {
       const trimmedSearch = searchTerm.trim() || null;
@@ -23,12 +33,14 @@ export function useAssetDays(
       console.log("[useAssetDays] query start", {
         search: trimmedSearch,
         filter: filter ?? null,
+        sort,
       });
 
       const result = await getCachedAssetDays(
         trimmedSearch,
         filter ?? null,
         payload,
+        sort,
       );
       const durationMs = Math.round(performance.now() - startedAt);
 

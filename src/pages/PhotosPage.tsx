@@ -21,6 +21,7 @@ import { toMemoryItem, type MemoryItem } from "../utils/memory";
 import type { Session } from "../hooks/useSession";
 import { ASSET_PAGE_SIZE, useAssetWindow } from "../hooks/useAssetWindow";
 import { useAssetFilters } from "../hooks/useAssetFilters";
+import { useSortPreference } from "../hooks/useSortPreference";
 import { FilterBar } from "../components/Filters/FilterBar";
 import { useRef } from "react";
 import type { AssetFilter, ViewScope } from "../types";
@@ -64,6 +65,11 @@ export function PhotosPage({
     () => ({ kind: "all", filter: assetFilter }),
     [assetFilter],
   );
+  const {
+    preference: sortPreference,
+    setField: setSortField,
+    setDirection: setSortDirection,
+  } = useSortPreference();
 
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
@@ -74,6 +80,7 @@ export function PhotosPage({
     refreshToken,
     assetFilter,
     filterPayload,
+    sortPreference,
   );
   const assetDaysQuery = useAssetDays(
     true,
@@ -81,6 +88,7 @@ export function PhotosPage({
     refreshToken,
     assetFilter,
     filterPayload,
+    sortPreference,
   );
   const memoriesQuery = useMemories(true);
 
@@ -184,8 +192,9 @@ export function PhotosPage({
         containerWidth,
         assetFilter,
         filterPayload,
+        sortPreference,
       ),
-    [assetFilter, searchTerm, filterPayload],
+    [assetFilter, searchTerm, filterPayload, sortPreference],
   );
   const loadTimelineLayout = useCallback(
     (containerWidth: number) =>
@@ -194,8 +203,9 @@ export function PhotosPage({
         containerWidth,
         assetFilter,
         filterPayload,
+        sortPreference,
       ),
-    [assetFilter, searchTerm, filterPayload],
+    [assetFilter, searchTerm, filterPayload, sortPreference],
   );
 
   return (
@@ -246,6 +256,13 @@ export function PhotosPage({
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
           onToggleFilter={filters.toggleOpen}
+          showSortButton
+          sortPreference={sortPreference}
+          onSortChange={(patch) => {
+            if (patch.field !== undefined) setSortField(patch.field);
+            if (patch.direction !== undefined)
+              setSortDirection(patch.direction);
+          }}
         />
 
         <FilterBar
@@ -322,68 +339,80 @@ export function PhotosPage({
               isFetching={assetsWindow.isFetchingNextPage}
               isFetchingPrevious={assetsWindow.isFetchingPreviousPage}
               hasPreviousPage={assetsWindow.hasPreviousPage}
-              availableDates={assetDaysQuery.data ?? []}
+              availableDates={
+                sortPreference.field === "filename"
+                  ? undefined
+                  : (assetDaysQuery.data ?? [])
+              }
               hasNextPage={assetsWindow.hasNextPage}
               maxHeight={photoGridHeight}
               onLoadMore={() => assetsWindow.loadNextPage()}
               onLoadPrevious={() => assetsWindow.loadPreviousPage()}
-              onJumpToDate={async (dateKey) => {
-                const trimmedSearch = searchTerm.trim() || null;
-                const jumpId = `jump-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                const jumpStartedAt = performance.now();
-                console.log("[PhotosPage] jump start", {
-                  jumpId,
-                  dateKey,
-                  pageSize: ASSET_PAGE_SIZE,
-                  search: trimmedSearch,
-                });
+              onJumpToDate={
+                sortPreference.field === "filename"
+                  ? undefined
+                  : async (dateKey) => {
+                      const trimmedSearch = searchTerm.trim() || null;
+                      const jumpId = `jump-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                      const jumpStartedAt = performance.now();
+                      console.log("[PhotosPage] jump start", {
+                        jumpId,
+                        dateKey,
+                        pageSize: ASSET_PAGE_SIZE,
+                        search: trimmedSearch,
+                      });
 
-                const jumpTargetStartedAt = performance.now();
-                const jumpTarget = await getCachedAssetJumpTarget(
-                  dateKey,
-                  ASSET_PAGE_SIZE,
-                  trimmedSearch,
-                  assetFilter,
-                  filterPayload,
-                );
+                      const jumpTargetStartedAt = performance.now();
+                      const jumpTarget = await getCachedAssetJumpTarget(
+                        dateKey,
+                        ASSET_PAGE_SIZE,
+                        trimmedSearch,
+                        assetFilter,
+                        filterPayload,
+                      );
 
-                console.log("[PhotosPage] jump target resolved", {
-                  jumpId,
-                  dateKey,
-                  found: Boolean(jumpTarget),
-                  page: jumpTarget?.page ?? null,
-                  durationMs: Math.round(
-                    performance.now() - jumpTargetStartedAt,
-                  ),
-                });
+                      console.log("[PhotosPage] jump target resolved", {
+                        jumpId,
+                        dateKey,
+                        found: Boolean(jumpTarget),
+                        page: jumpTarget?.page ?? null,
+                        durationMs: Math.round(
+                          performance.now() - jumpTargetStartedAt,
+                        ),
+                      });
 
-                if (!jumpTarget) {
-                  console.log("[PhotosPage] jump aborted (no target)", {
-                    jumpId,
-                    dateKey,
-                    totalDurationMs: Math.round(
-                      performance.now() - jumpStartedAt,
-                    ),
-                  });
-                  return;
-                }
+                      if (!jumpTarget) {
+                        console.log("[PhotosPage] jump aborted (no target)", {
+                          jumpId,
+                          dateKey,
+                          totalDurationMs: Math.round(
+                            performance.now() - jumpStartedAt,
+                          ),
+                        });
+                        return;
+                      }
 
-                const replaceStartedAt = performance.now();
-                await assetsWindow.jumpToPage(jumpTarget.page);
-                console.log("[PhotosPage] jump page loaded", {
-                  jumpId,
-                  dateKey,
-                  page: jumpTarget.page,
-                  replaceDurationMs: Math.round(
-                    performance.now() - replaceStartedAt,
-                  ),
-                  totalDurationMs: Math.round(
-                    performance.now() - jumpStartedAt,
-                  ),
-                });
-              }}
+                      const replaceStartedAt = performance.now();
+                      await assetsWindow.jumpToPage(jumpTarget.page);
+                      console.log("[PhotosPage] jump page loaded", {
+                        jumpId,
+                        dateKey,
+                        page: jumpTarget.page,
+                        replaceDurationMs: Math.round(
+                          performance.now() - replaceStartedAt,
+                        ),
+                        totalDurationMs: Math.round(
+                          performance.now() - jumpStartedAt,
+                        ),
+                      });
+                    }
+              }
               loadFullLayout={loadFullLayout}
-              loadTimelineLayout={loadTimelineLayout}
+              loadTimelineLayout={
+                sortPreference.field === "filename"
+                  ? undefined
+                  : loadTimelineLayout
+              }
             />
           )}
         </section>

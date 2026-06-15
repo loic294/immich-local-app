@@ -1,6 +1,8 @@
 import { Funnel, LogOut, Search, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getProfileImage } from "../../api/tauri";
+import { SortButton } from "../Filters/SortButton";
+import type { SortPreference } from "../../types";
 
 interface HeaderProps {
   searchInput: string;
@@ -17,6 +19,10 @@ interface HeaderProps {
   /** Whether the filter bar is currently open. */
   filterOpen?: boolean;
   onToggleFilter?: () => void;
+  /** Whether to show the Sort button (only on photo grid views). */
+  showSortButton?: boolean;
+  sortPreference?: SortPreference;
+  onSortChange?: (patch: Partial<SortPreference>) => void;
 }
 
 export function Header({
@@ -31,6 +37,9 @@ export function Header({
   filterActive = false,
   filterOpen = false,
   onToggleFilter,
+  showSortButton = false,
+  sortPreference,
+  onSortChange,
 }: HeaderProps) {
   const [profileImage, setProfileImage] = useState<string | null>(null);
 
@@ -92,6 +101,9 @@ export function Header({
       </div>
 
       <div className="navbar-end gap-2">
+        {showSortButton && sortPreference && onSortChange && (
+          <SortButton preference={sortPreference} onChange={onSortChange} />
+        )}
         {showFilterButton && (
           <button
             className={`btn btn-sm ${

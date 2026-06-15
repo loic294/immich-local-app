@@ -202,6 +202,23 @@ export const DEFAULT_FILTER_CRITERIA: AssetFilterCriteria = {
   personId: null,
 };
 
+/** The dimension by which assets are sorted. */
+export type SortField = "date_captured" | "filename";
+
+/** Direction of a sort. */
+export type SortDirection = "asc" | "desc";
+
+/** User-selected sort preference, persisted globally across all views. */
+export type SortPreference = {
+  field: SortField;
+  direction: SortDirection;
+};
+
+export const DEFAULT_SORT_PREFERENCE: SortPreference = {
+  field: "date_captured",
+  direction: "desc",
+};
+
 /** True when any filter dimension is active (i.e. would narrow the result set). */
 export function isFilterActive(criteria: AssetFilterCriteria): boolean {
   return (

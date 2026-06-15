@@ -20,6 +20,7 @@ import { FilterBar } from "../components/Filters/FilterBar";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
 import { useAssetFilters } from "../hooks/useAssetFilters";
+import { useSortPreference } from "../hooks/useSortPreference";
 import { useConnectionContext } from "../hooks/connectionContext";
 import type { Session } from "../hooks/useSession";
 import type { AlbumSummary, ViewScope } from "../types";
@@ -77,6 +78,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     () => ({ kind: "album", albumId: selectedAlbumId }),
     [selectedAlbumId],
   );
+  const {
+    preference: sortPreference,
+    setField: setSortField,
+    setDirection: setSortDirection,
+  } = useSortPreference();
 
   const getValidSavedFolderPath = useCallback(
     (albumId: string): string | null => {
@@ -133,11 +139,12 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         selectedAlbumId ?? "",
         containerWidth,
         filterPayload,
+        sortPreference,
       ),
     // albumRefreshNonce is intentionally part of the deps so the grid reloads
     // its layout once the lazy on-open refresh has updated the local cache.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedAlbumId, albumRefreshNonce, filterPayload],
+    [selectedAlbumId, albumRefreshNonce, filterPayload, sortPreference],
   );
   const albumLoadFullLayout =
     selectedAlbumId && searchInput.trim().length === 0
@@ -156,6 +163,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     selectedAlbumId !== null,
     selectedAlbumId ?? "",
     filterPayload,
+    sortPreference,
   );
 
   // Local-first lazy sync: when an album is opened, render from the local cache
@@ -545,6 +553,13 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
           onToggleFilter={filters.toggleOpen}
+          showSortButton={selectedAlbumId !== null}
+          sortPreference={sortPreference}
+          onSortChange={(patch) => {
+            if (patch.field !== undefined) setSortField(patch.field);
+            if (patch.direction !== undefined)
+              setSortDirection(patch.direction);
+          }}
         />
 
         {selectedAlbumId !== null && (

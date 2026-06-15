@@ -2,7 +2,7 @@ use chrono::{DateTime, Datelike, Local, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-use crate::services::db::{AssetFilterCriteria, ViewScope};
+use crate::services::db::{AssetFilterCriteria, SortParams, ViewScope};
 use crate::services::immich_client::{AssetSummary, PersonSummary};
 use crate::AppState;
 
@@ -23,6 +23,15 @@ fn is_visible_in_grid(asset: &AssetSummary) -> bool {
 
     let visibility = asset.visibility.as_deref().unwrap_or_default().to_ascii_lowercase();
     visibility != "archive"
+}
+
+/// Build a [`SortParams`] from optional frontend strings, defaulting to
+/// date_captured DESC when either value is absent or unrecognised.
+fn make_sort_params(sort_field: Option<String>, sort_direction: Option<String>) -> SortParams {
+    SortParams {
+        field: sort_field,
+        direction: sort_direction,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -236,11 +245,14 @@ pub async fn get_calendar_assets_paged(
     page: u32,
     page_size: u32,
     criteria: Option<AssetFilterCriteria>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
+    let sort = make_sort_params(sort_field, sort_direction);
     let (cached_items, cached_has_next_page) = state
         .db
-        .get_calendar_assets(year, month, page, page_size, criteria.as_ref())
+        .get_calendar_assets(year, month, page, page_size, criteria.as_ref(), Some(&sort))
         .map_err(|err| format!("calendar cache read failed: {err}"))?;
 
     Ok(AssetPage {
@@ -258,12 +270,15 @@ pub async fn get_cached_assets(
     search: Option<String>,
     filter: Option<String>,
     criteria: Option<AssetFilterCriteria>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
     let started_at = Instant::now();
+    let sort = make_sort_params(sort_field, sort_direction);
     let (items, has_next_page) = state
         .db
-        .get_assets(page, page_size, search.as_deref(), filter.as_deref(), criteria.as_ref())
+        .get_assets(page, page_size, search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
         .map_err(|err| format!("cache read failed: {err}"))?;
 
     log::warn!(
@@ -290,11 +305,14 @@ pub async fn get_all_cached_assets(
     search: Option<String>,
     filter: Option<String>,
     criteria: Option<AssetFilterCriteria>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<AssetSummary>, String> {
+    let sort = make_sort_params(sort_field, sort_direction);
     state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref())
+        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
         .map_err(|err| format!("cache read failed: {err}"))
 }
 
@@ -303,12 +321,15 @@ pub async fn get_cached_asset_days(
     search: Option<String>,
     filter: Option<String>,
     criteria: Option<AssetFilterCriteria>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
     let started_at = Instant::now();
+    let sort = make_sort_params(sort_field, sort_direction);
     let result = state
         .db
-        .get_asset_days(search.as_deref(), filter.as_deref(), criteria.as_ref())
+        .get_asset_days(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
         .map_err(|err| format!("asset day query failed: {err}"))?;
 
     log::warn!(
@@ -362,6 +383,8 @@ pub async fn get_cached_timeline_layout(
     container_width: f64,
     filter: Option<String>,
     criteria: Option<AssetFilterCriteria>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<TimelineLayoutResponse, String> {
     let started_at = Instant::now();
@@ -374,9 +397,10 @@ pub async fn get_cached_timeline_layout(
         });
     }
 
+    let sort = make_sort_params(sort_field, sort_direction);
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref())
+        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
         .map_err(|err| format!("timeline layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
@@ -460,6 +484,8 @@ pub async fn get_cached_full_grid_layout(
     container_width: f64,
     filter: Option<String>,
     criteria: Option<AssetFilterCriteria>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
@@ -470,9 +496,10 @@ pub async fn get_cached_full_grid_layout(
         });
     }
 
+    let sort = make_sort_params(sort_field, sort_direction);
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref())
+        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
         .map_err(|err| format!("full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
@@ -508,6 +535,8 @@ pub async fn get_cached_calendar_full_grid_layout(
     month: u32,
     container_width: f64,
     criteria: Option<AssetFilterCriteria>,
+    sort_field: Option<String>,
+    sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
@@ -517,9 +546,10 @@ pub async fn get_cached_calendar_full_grid_layout(
         });
     }
 
+    let sort = make_sort_params(sort_field, sort_direction);
     let all_assets = state
         .db
-        .get_all_calendar_assets(year, month, criteria.as_ref())
+        .get_all_calendar_assets(year, month, criteria.as_ref(), Some(&sort))
         .map_err(|err| format!("calendar full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets

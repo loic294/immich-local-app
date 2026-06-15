@@ -8,6 +8,7 @@ import { FilterBar } from "../components/Filters/FilterBar";
 import { useFolderAssets } from "../hooks/useFolderAssets";
 import { useFolderPaths } from "../hooks/useFolderPaths";
 import { useAssetFilters } from "../hooks/useAssetFilters";
+import { useSortPreference } from "../hooks/useSortPreference";
 import {
   addAssetsToAlbum,
   createAlbumWithAssets,
@@ -48,6 +49,11 @@ export function FoldersPage({
     () => ({ kind: "folder", path: currentPath }),
     [currentPath],
   );
+  const {
+    preference: sortPreference,
+    setField: setSortField,
+    setDirection: setSortDirection,
+  } = useSortPreference();
 
   const paths = useMemo(
     () => (folderPathsQuery.data ?? []).map((path) => normalizePath(path)),
@@ -71,6 +77,7 @@ export function FoldersPage({
     !folderPathsQuery.isLoading,
     currentPath,
     filterPayload,
+    sortPreference,
   );
 
   const allAssets = useMemo(
@@ -91,8 +98,13 @@ export function FoldersPage({
 
   const loadFolderFullLayout = useCallback(
     (containerWidth: number) =>
-      getCachedFolderFullGridLayout(currentPath, containerWidth, filterPayload),
-    [currentPath, filterPayload],
+      getCachedFolderFullGridLayout(
+        currentPath,
+        containerWidth,
+        filterPayload,
+        sortPreference,
+      ),
+    [currentPath, filterPayload, sortPreference],
   );
 
   useEffect(() => {
@@ -213,6 +225,13 @@ export function FoldersPage({
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
           onToggleFilter={filters.toggleOpen}
+          showSortButton={shouldShowPhotoGrid}
+          sortPreference={sortPreference}
+          onSortChange={(patch) => {
+            if (patch.field !== undefined) setSortField(patch.field);
+            if (patch.direction !== undefined)
+              setSortDirection(patch.direction);
+          }}
         />
 
         {shouldShowPhotoGrid && (

@@ -1,7 +1,7 @@
 import { X, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Session } from "../../hooks/useSession";
-import type { AlbumSummary } from "../../types";
+import type { AlbumSummary, SortPreference } from "../../types";
 import { Header } from "./Header";
 import { SelectionActions } from "./SelectionActions";
 
@@ -29,6 +29,10 @@ interface AppTopBarProps {
   /** Whether the filter bar is currently open. */
   filterOpen?: boolean;
   onToggleFilter?: () => void;
+  /** Whether to show the Sort button (only on photo grid views). */
+  showSortButton?: boolean;
+  sortPreference?: SortPreference;
+  onSortChange?: (patch: Partial<SortPreference>) => void;
 }
 
 export function AppTopBar({
@@ -49,6 +53,9 @@ export function AppTopBar({
   filterActive = false,
   filterOpen = false,
   onToggleFilter,
+  showSortButton = false,
+  sortPreference,
+  onSortChange,
 }: AppTopBarProps) {
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
@@ -187,6 +194,9 @@ export function AppTopBar({
       filterActive={filterActive}
       filterOpen={filterOpen}
       onToggleFilter={onToggleFilter}
+      showSortButton={showSortButton}
+      sortPreference={sortPreference}
+      onSortChange={onSortChange}
     />
   );
 }

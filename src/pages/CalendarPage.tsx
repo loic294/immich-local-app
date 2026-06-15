@@ -7,6 +7,7 @@ import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { FilterBar } from "../components/Filters/FilterBar";
 import { useCalendarAssets } from "../hooks/useCalendarAssets";
 import { useAssetFilters } from "../hooks/useAssetFilters";
+import { useSortPreference } from "../hooks/useSortPreference";
 import { useConnectionContext } from "../hooks/connectionContext";
 import {
   addAssetsToAlbum,
@@ -204,8 +205,19 @@ function MonthView({
     () => ({ kind: "month", year, month }),
     [year, month],
   );
+  const {
+    preference: sortPreference,
+    setField: setSortField,
+    setDirection: setSortDirection,
+  } = useSortPreference();
 
-  const assetsQuery = useCalendarAssets(true, year, month, filterPayload);
+  const assetsQuery = useCalendarAssets(
+    true,
+    year,
+    month,
+    filterPayload,
+    sortPreference,
+  );
   const assets = useMemo(
     () => assetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [assetsQuery.data?.pages],
@@ -310,11 +322,12 @@ function MonthView({
         month,
         containerWidth,
         filterPayload,
+        sortPreference,
       ),
     // monthRefreshNonce is intentionally part of the deps so the grid reloads
     // its layout once the lazy on-open refresh has updated the local cache.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [year, month, monthRefreshNonce, filterPayload],
+    [year, month, monthRefreshNonce, filterPayload, sortPreference],
   );
 
   return (
@@ -366,6 +379,13 @@ function MonthView({
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
           onToggleFilter={filters.toggleOpen}
+          showSortButton
+          sortPreference={sortPreference}
+          onSortChange={(patch) => {
+            if (patch.field !== undefined) setSortField(patch.field);
+            if (patch.direction !== undefined)
+              setSortDirection(patch.direction);
+          }}
         />
 
         <FilterBar
