@@ -5,12 +5,22 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MyPhotosRule {
+    pub start_date: String,
+    pub end_date: Option<String>,
+    pub end_date_current: bool,
+    pub camera: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub live_photo_autoplay: bool,
     pub thumbnail_cache_path: String,
     pub video_cache_path: String,
     pub user_local_folder_path: String,
     pub menu_items: Vec<String>,
+    pub my_photos_rules: Vec<MyPhotosRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
+  getCamerasInScope,
   getCacheStats,
   getCachePath,
   getSettings,
@@ -17,9 +18,10 @@ import {
   updateSettings,
 } from "../api/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { CacheStats, Settings } from "../types";
+import type { CacheStats, MyPhotosRule, Settings } from "../types";
 import type { AppPage } from "../components/Layout/Sidebar";
 import { MENU_ITEMS, type MenuItemKey } from "../components/Layout/Sidebar";
+import { DaisyCalendarPicker } from "../components/Settings/DaisyCalendarPicker";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { useAppUpdate } from "../hooks/useAppUpdate";
 import { useInvalidateSettings } from "../hooks/useSettings";
@@ -37,6 +39,11 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingLocalFolder, setIsSavingLocalFolder] = useState(false);
   const [localFolderDraft, setLocalFolderDraft] = useState("");
+  const [availableCameras, setAvailableCameras] = useState<string[]>([]);
+  const [myPhotosRulesDraft, setMyPhotosRulesDraft] = useState<MyPhotosRule[]>(
+    [],
+  );
+  const [isSavingMyPhotosRules, setIsSavingMyPhotosRules] = useState(false);
   const [isForcingFullSync, setIsForcingFullSync] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
@@ -56,15 +63,18 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     const loadData = async () => {
       try {
         setIsLoading(true);
-        const [settingsData, stats, path] = await Promise.all([
+        const [settingsData, stats, path, cameras] = await Promise.all([
           getSettings(),
           getCacheStats(),
           getCachePath(),
+          getCamerasInScope({ kind: "all", filter: "all" }),
         ]);
         setSettings(settingsData);
         setLocalFolderDraft(settingsData.userLocalFolderPath ?? "");
+        setMyPhotosRulesDraft(settingsData.myPhotosRules ?? []);
         setCacheStats(stats);
         setCachePath(path);
+        setAvailableCameras(cameras);
       } catch (error) {
         console.error("Failed to load settings:", error);
       } finally {
@@ -82,6 +92,10 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         console.error("Failed to read app version:", error);
       });
   }, []);
+
+  useEffect(() => {
+    setMyPhotosRulesDraft(settings?.myPhotosRules ?? []);
+  }, [settings?.myPhotosRules]);
 
   const handleToggleLivePhotoAutoplay = async () => {
     if (!settings) return;
@@ -186,6 +200,64 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     console.log("Cache clearing not yet implemented");
   };
 
+  const handleAddMyPhotosRule = () => {
+    const fallbackCamera = availableCameras[0] ?? "";
+    setMyPhotosRulesDraft((current) => [
+      ...current,
+      {
+        startDate: toLocalDateInputValue(new Date()),
+        endDate: null,
+        endDateCurrent: true,
+        camera: fallbackCamera,
+      },
+    ]);
+  };
+
+  const handlePatchMyPhotosRule = (
+    index: number,
+    patch: Partial<MyPhotosRule>,
+  ) => {
+    setMyPhotosRulesDraft((current) =>
+      current.map((rule, i) => {
+        if (i !== index) {
+          return rule;
+        }
+        const next = { ...rule, ...patch };
+        if (next.endDateCurrent) {
+          next.endDate = null;
+        }
+        return next;
+      }),
+    );
+  };
+
+  const handleRemoveMyPhotosRule = (index: number) => {
+    setMyPhotosRulesDraft((current) => current.filter((_, i) => i !== index));
+  };
+
+  const handleSaveMyPhotosRules = async () => {
+    if (!settings) {
+      return;
+    }
+    const normalizedRules = normalizeMyPhotosRules(myPhotosRulesDraft);
+
+    try {
+      setIsSavingMyPhotosRules(true);
+      const updated = await updateSettings({
+        ...settings,
+        myPhotosRules: normalizedRules,
+      });
+      setSettings(updated);
+      setMyPhotosRulesDraft(updated.myPhotosRules ?? []);
+      await invalidateSettings();
+    } catch (error) {
+      console.error("Failed to save My Photos rules:", error);
+      window.alert("Failed to save My Photos rules.");
+    } finally {
+      setIsSavingMyPhotosRules(false);
+    }
+  };
+
   const handleForceFullSync = async () => {
     try {
       setIsForcingFullSync(true);
@@ -235,6 +307,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const isSyncComplete =
     syncStatus?.lastSyncCompletedAt !== null &&
     syncStatus?.lastSyncCompletedAt !== undefined;
+  const hasMyPhotosRuleChanges =
+    JSON.stringify(myPhotosRulesDraft) !==
+    JSON.stringify(settings?.myPhotosRules ?? []);
 
   if (isLoading) {
     return (
@@ -386,6 +461,125 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   </label>
                 );
               })}
+            </div>
+          </div>
+        </div>
+
+        {/* Live Photo Settings */}
+        <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
+          <div className="card-body">
+            <h2 className="card-title">My Photos</h2>
+            <p className="text-sm text-base-content/70 mb-3">
+              Define which photos are considered yours using date ranges and a
+              camera. The My Photos filter will match assets that satisfy any
+              rule below.
+            </p>
+
+            <div className="space-y-3">
+              {myPhotosRulesDraft.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-base-300 p-3 text-sm text-base-content/60">
+                  No rules yet. Add at least one rule to enable meaningful My
+                  Photos filtering.
+                </div>
+              ) : (
+                myPhotosRulesDraft.map((rule, index) => (
+                  <div
+                    key={`my-photo-rule-${index}`}
+                    className="rounded-lg border border-base-300 bg-base-200/50 p-3"
+                  >
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="form-control">
+                        <span className="label-text text-xs">Start date</span>
+                        <DaisyCalendarPicker
+                          value={rule.startDate}
+                          onChange={(value) =>
+                            handlePatchMyPhotosRule(index, {
+                              startDate: value,
+                            })
+                          }
+                        />
+                      </label>
+
+                      <label className="form-control">
+                        <span className="label-text text-xs">Camera</span>
+                        <select
+                          className="select select-sm select-bordered"
+                          value={rule.camera}
+                          onChange={(event) =>
+                            handlePatchMyPhotosRule(index, {
+                              camera: event.currentTarget.value,
+                            })
+                          }
+                        >
+                          <option value="">Select a camera</option>
+                          {availableCameras.map((camera) => (
+                            <option key={camera} value={camera}>
+                              {camera}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="form-control">
+                        <span className="label-text text-xs">End date</span>
+                        <DaisyCalendarPicker
+                          value={rule.endDate ?? ""}
+                          disabled={rule.endDateCurrent}
+                          onChange={(value) =>
+                            handlePatchMyPhotosRule(index, {
+                              endDate: value || null,
+                            })
+                          }
+                        />
+                      </label>
+
+                      <label className="label cursor-pointer justify-start gap-3 self-end">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm checkbox-primary"
+                          checked={rule.endDateCurrent}
+                          onChange={(event) =>
+                            handlePatchMyPhotosRule(index, {
+                              endDateCurrent: event.currentTarget.checked,
+                            })
+                          }
+                        />
+                        <span className="label-text">Use current date</span>
+                      </label>
+                    </div>
+
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs text-error"
+                        onClick={() => handleRemoveMyPhotosRule(index)}
+                      >
+                        Remove rule
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-between">
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={handleAddMyPhotosRule}
+              >
+                Add rule
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!hasMyPhotosRuleChanges || isSavingMyPhotosRules}
+                onClick={() => {
+                  void handleSaveMyPhotosRules();
+                }}
+              >
+                {isSavingMyPhotosRules ? "Saving..." : "Save My Photos Rules"}
+              </button>
             </div>
           </div>
         </div>
@@ -700,4 +894,39 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
       </div>
     </div>
   );
+}
+
+function toLocalDateInputValue(date: Date): string {
+  const timezoneAdjusted = new Date(
+    date.getTime() - date.getTimezoneOffset() * 60_000,
+  );
+  return timezoneAdjusted.toISOString().slice(0, 10);
+}
+
+function normalizeMyPhotosRules(rules: MyPhotosRule[]): MyPhotosRule[] {
+  return rules
+    .map((rule) => {
+      const startDate = rule.startDate.trim();
+      const camera = rule.camera.trim();
+      const endDateCurrent = rule.endDateCurrent === true;
+      const endDate = endDateCurrent
+        ? null
+        : (rule.endDate ?? "").trim() || null;
+
+      if (!startDate || !camera) {
+        return null;
+      }
+
+      if (!endDateCurrent && !endDate) {
+        return null;
+      }
+
+      return {
+        startDate,
+        endDate,
+        endDateCurrent,
+        camera,
+      } satisfies MyPhotosRule;
+    })
+    .filter((rule): rule is MyPhotosRule => rule != null);
 }

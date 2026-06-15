@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::settings::Settings;
+use crate::commands::settings::{MyPhotosRule, Settings};
 use crate::services::immich_client::AssetSummary;
 
 /// Boxed SQL parameters used when a query is assembled dynamically (e.g. the
@@ -26,6 +26,8 @@ pub struct AssetFilterCriteria {
     pub rating_mode: Option<String>,
     /// When true, only favorite assets are included.
     pub favorite_only: Option<bool>,
+    /// When true, only assets matching My Photos rules are included.
+    pub my_photos_only: Option<bool>,
     /// Media type: "photo" (non-RAW images), "raw", "photo_raw" (all images) or
     /// "video".
     pub media_type: Option<String>,
@@ -41,6 +43,7 @@ impl AssetFilterCriteria {
     fn is_empty(&self) -> bool {
         self.rating.is_none()
             && self.favorite_only != Some(true)
+            && self.my_photos_only != Some(true)
             && self.media_type.as_deref().map(str::trim).unwrap_or("").is_empty()
             && self.camera.as_deref().map(str::trim).unwrap_or("").is_empty()
             && self.person_id.as_deref().map(str::trim).unwrap_or("").is_empty()
@@ -130,6 +133,88 @@ fn video_predicate() -> String {
     )
 }
 
+fn normalize_date_only(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.len() != 10 {
+        return None;
+    }
+    let bytes = trimmed.as_bytes();
+    if bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    if bytes
+        .iter()
+        .enumerate()
+        .any(|(idx, b)| idx != 4 && idx != 7 && !b.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn normalized_asset_day(input: Option<&str>) -> Option<String> {
+    let value = input?;
+    if value.len() < 10 {
+        return None;
+    }
+    normalize_date_only(&value[0..10])
+}
+
+fn load_my_photos_rules(conn: &Connection) -> Vec<MyPhotosRule> {
+    let mut stmt = match conn.prepare("SELECT value FROM settings WHERE key = ?1") {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            log::warn!("[my-photos.rules] failed to prepare settings query: {}", err);
+            return Vec::new();
+        }
+    };
+
+    let raw = stmt
+        .query_row(params!["my_photos_rules"], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|_| "[]".to_string());
+
+    match serde_json::from_str::<Vec<MyPhotosRule>>(&raw) {
+        Ok(rules) => rules,
+        Err(err) => {
+            log::warn!("[my-photos.rules] failed to parse settings value: {}", err);
+            Vec::new()
+        }
+    }
+}
+
+fn rule_matches_asset(rule: &MyPhotosRule, camera: &str, day: &str, today: &str) -> bool {
+    let rule_camera = rule.camera.trim();
+    if rule_camera.is_empty() || rule_camera != camera {
+        return false;
+    }
+
+    let Some(start_day) = normalize_date_only(&rule.start_date) else {
+        return false;
+    };
+
+    if day < start_day.as_str() {
+        return false;
+    }
+
+    if rule.end_date_current {
+        return day <= today;
+    }
+
+    let Some(end_day) = rule
+        .end_date
+        .as_deref()
+        .and_then(normalize_date_only)
+    else {
+        return false;
+    };
+
+    if end_day < start_day {
+        return false;
+    }
+
+    day <= end_day.as_str()
+}
+
 /// Build the optional `AND <id_column> IN (SELECT id FROM assets WHERE ...)`
 /// fragment plus its bind parameters for the given criteria. The fragment is
 /// self-contained (always selects from the `assets` table) so it can be appended
@@ -145,6 +230,7 @@ fn video_predicate() -> String {
 /// trailing `?N`. The returned params MUST be bound after the outer query's
 /// positional params so binding order matches the assigned numbers.
 fn criteria_filter(
+    conn: &Connection,
     criteria: Option<&AssetFilterCriteria>,
     id_column: &str,
     start_index: usize,
@@ -172,6 +258,67 @@ fn criteria_filter(
 
     if criteria.favorite_only == Some(true) {
         conditions.push("is_favorite = 1".to_string());
+    }
+
+    if criteria.my_photos_only == Some(true) {
+        let rules = load_my_photos_rules(conn);
+        let mut rule_conditions: Vec<String> = Vec::new();
+        let mut valid_rule_count = 0usize;
+
+        for rule in rules {
+            let camera = rule.camera.trim();
+            let Some(start_day) = normalize_date_only(&rule.start_date) else {
+                continue;
+            };
+            if camera.is_empty() {
+                continue;
+            }
+
+            let end_day = if rule.end_date_current {
+                None
+            } else {
+                let Some(end_day) = rule.end_date.as_deref().and_then(normalize_date_only) else {
+                    continue;
+                };
+                if end_day < start_day {
+                    continue;
+                }
+                Some(end_day)
+            };
+
+            let mut clause = format!(
+                "(camera = ?{} AND file_created_at IS NOT NULL AND substr(file_created_at, 1, 10) >= ?{}",
+                next_index,
+                next_index + 1
+            );
+            params.push(Box::new(camera.to_string()));
+            params.push(Box::new(start_day.clone()));
+            next_index += 2;
+
+            if rule.end_date_current {
+                clause.push_str(" AND substr(file_created_at, 1, 10) <= date('now', 'localtime'))");
+            } else if let Some(end_day) = end_day {
+                clause.push_str(&format!(" AND substr(file_created_at, 1, 10) <= ?{})", next_index));
+                params.push(Box::new(end_day));
+                next_index += 1;
+            }
+
+            valid_rule_count += 1;
+            rule_conditions.push(clause);
+        }
+
+        if rule_conditions.is_empty() {
+            log::warn!(
+                "[my-photos.filter] active but no valid rules found; forcing empty result"
+            );
+            conditions.push("0=1".to_string());
+        } else {
+            log::warn!(
+                "[my-photos.filter] active with {} valid rules",
+                valid_rule_count
+            );
+            conditions.push(format!("({})", rule_conditions.join(" OR ")));
+        }
     }
 
     match criteria.media_type.as_deref().map(str::trim) {
@@ -280,6 +427,7 @@ pub struct AssetSummaryExtended {
     pub people: Option<String>,
     pub tags: Option<String>,
     pub exif_info_json: Option<String>,
+    pub is_my_photo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -507,6 +655,11 @@ impl Database {
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('menu_items', ?1)",
             params![default_menu_items_json()],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('my_photos_rules', '[]')",
+            [],
         )
         .map_err(|err| err.to_string())?;
 
@@ -924,7 +1077,7 @@ impl Database {
 
         let mut items = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=limit, ?2=offset, ?3=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 4);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 4);
             let query = format!(
                 "
                     SELECT
@@ -976,7 +1129,7 @@ impl Database {
             branch_items
         } else {
             // Criteria placeholders start after ?1=limit, ?2=offset.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
             let query = format!(
                 "
                     SELECT
@@ -1038,7 +1191,7 @@ impl Database {
 
         let items = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
             let query = format!(
                 "
                     SELECT
@@ -1088,7 +1241,7 @@ impl Database {
             branch_items
         } else {
             // No positional params; criteria placeholders start at ?1.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 1);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1);
             let query = format!(
                 "
                     SELECT
@@ -1141,7 +1294,7 @@ impl Database {
 
         let days = if let Some(pattern) = search_pattern.as_deref() {
                         // Criteria placeholders start after ?1=pattern.
-                        let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
+                        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
                         let query = format!(
                                 "
                                         SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
@@ -1180,7 +1333,7 @@ impl Database {
             branch_days
         } else {
             // No positional params; criteria placeholders start at ?1.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 1);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1);
             let query = format!(
                 "
                     SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
@@ -1256,7 +1409,20 @@ impl Database {
             .map_err(|err| err.to_string())?;
 
         match rows.next() {
-            Some(result) => result.map(Some).map_err(|err| err.to_string()),
+            Some(result) => {
+                let mut asset = result.map_err(|err| err.to_string())?;
+                let rules = load_my_photos_rules(&conn);
+                let day = normalized_asset_day(asset.file_created_at.as_deref());
+                let camera = asset.camera.as_deref().map(str::trim).unwrap_or("");
+                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                asset.is_my_photo = match day {
+                    Some(day) if !camera.is_empty() => rules
+                        .iter()
+                        .any(|rule| rule_matches_asset(rule, camera, &day, &today)),
+                    _ => false,
+                };
+                Ok(Some(asset))
+            }
             None => Ok(None),
         }
     }
@@ -1298,7 +1464,7 @@ impl Database {
 
         let exists = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=date_key, ?2=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
             let query = format!(
                 "
                 SELECT EXISTS(
@@ -1327,7 +1493,7 @@ impl Database {
             })
         } else {
             // Criteria placeholders start after ?1=date_key.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
             let query = format!(
                 "
                 SELECT EXISTS(
@@ -1354,7 +1520,7 @@ impl Database {
 
         let newer_count = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=date_key, ?2=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
             let query = format!(
                 "
                                 SELECT COUNT(*)
@@ -1381,7 +1547,7 @@ impl Database {
             })
         } else {
             // Criteria placeholders start after ?1=date_key.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
             let query = format!(
                 "
                                 SELECT COUNT(*)
@@ -1601,7 +1767,7 @@ impl Database {
         let offset = i64::from(page) * i64::from(page_size);
         let limit = i64::from(page_size) + 1;
         // Criteria placeholders start after ?1=album_id, ?2=limit, ?3=offset.
-        let (criteria_sql, criteria_params) = criteria_filter(criteria, "a.id", 4);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 4);
         let query = format!(
             "
                 SELECT
@@ -1660,7 +1826,7 @@ impl Database {
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         // Criteria placeholders start after ?1=album_id.
-        let (criteria_sql, criteria_params) = criteria_filter(criteria, "a.id", 2);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 2);
         let query = format!(
             "
                 SELECT
@@ -1755,7 +1921,7 @@ impl Database {
         if path == "/" {
             // Root: match paths with exactly one segment, e.g. /file.jpg
             // Criteria placeholders start after ?1=limit, ?2=offset.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
             let query = format!(
                 "
                     SELECT
@@ -1798,7 +1964,7 @@ impl Database {
             // 1-based position of the first character after the prefix (for substr)
             let remaining_start = (path_prefix.len() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining, ?3=limit, ?4=offset.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 5);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 5);
 
             let query = format!(
                 "
@@ -1862,7 +2028,7 @@ impl Database {
 
         if path == "/" {
             // No positional params; criteria placeholders start at ?1.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 1);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1);
             let query = format!(
                 "
                     SELECT
@@ -1899,7 +2065,7 @@ impl Database {
             let like_pattern = format!("{}%", path_prefix);
             let remaining_start = (path_prefix.len() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining.
-            let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
 
             let query = format!(
                 "
@@ -1955,7 +2121,7 @@ impl Database {
         let limit = i64::from(page_size) + 1;
         let month_key = format!("{:04}-{:02}", year, month);
         // Criteria placeholders start after ?1=month_key, ?2=limit, ?3=offset.
-        let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 4);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 4);
         let query = format!(
             "
                 SELECT
@@ -2012,7 +2178,7 @@ impl Database {
         let conn = self.open()?;
         let month_key = format!("{:04}-{:02}", year, month);
         // Criteria placeholders start after ?1=month_key.
-        let (criteria_sql, criteria_params) = criteria_filter(criteria, "id", 2);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
         let query = format!(
             "
                 SELECT
@@ -2195,12 +2361,19 @@ impl Database {
             .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
             .unwrap_or_else(default_menu_items);
 
+        let my_photos_rules = stmt
+            .query_row(params!["my_photos_rules"], |row| row.get::<_, String>(0))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Vec<MyPhotosRule>>(&raw).ok())
+            .unwrap_or_default();
+
         Ok(Settings {
             live_photo_autoplay,
             thumbnail_cache_path: thumbnail_cache_path.to_string_lossy().to_string(),
             video_cache_path: video_cache_path.to_string_lossy().to_string(),
             user_local_folder_path,
             menu_items,
+            my_photos_rules,
         })
     }
 
@@ -2222,6 +2395,13 @@ impl Database {
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('menu_items', ?1)",
             params![menu_items_json],
+        )
+        .map_err(|err| err.to_string())?;
+        let my_photos_rules_json =
+            serde_json::to_string(&settings.my_photos_rules).map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('my_photos_rules', ?1)",
+            params![my_photos_rules_json],
         )
         .map_err(|err| err.to_string())?;
 
@@ -2446,6 +2626,7 @@ fn map_asset_summary_extended(
         people: row.get(19)?,
         tags: row.get(20)?,
         exif_info_json: row.get(21)?,
+        is_my_photo: false,
     })
 }
 

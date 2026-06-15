@@ -76,6 +76,11 @@ export function FullscreenInfoPanel({
   return (
     <aside className="pointer-events-auto h-full w-[min(22rem,28vw)] min-w-72 shrink-0 overflow-y-auto bg-zinc-950 p-3 text-xs text-white/80">
       <div className="rounded-sm bg-zinc-900 p-4">
+        {details?.isMyPhoto ? (
+          <span className="mb-1.5 inline-block rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-content">
+            My Photo
+          </span>
+        ) : null}
         <p className="text-sm font-medium text-white">
           {make ?? "Unknown make"} {details?.camera ?? "Unknown camera"}
         </p>

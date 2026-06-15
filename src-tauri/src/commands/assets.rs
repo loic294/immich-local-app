@@ -161,6 +161,7 @@ pub struct CachedAssetDetails {
     pub people: Option<String>,
     pub tags: Option<String>,
     pub exif_info_json: Option<String>,
+    pub is_my_photo: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -703,6 +704,7 @@ pub async fn get_cached_asset_details(
         people: asset.people,
         tags: asset.tags,
         exif_info_json: asset.exif_info_json,
+        is_my_photo: asset.is_my_photo,
     }))
 }
 

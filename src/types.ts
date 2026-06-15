@@ -132,12 +132,20 @@ export type AlbumSaveResponse = {
   folderPath: string;
 };
 
+export type MyPhotosRule = {
+  startDate: string;
+  endDate: string | null;
+  endDateCurrent: boolean;
+  camera: string;
+};
+
 export type Settings = {
   livePhotoAutoplay: boolean;
   thumbnailCachePath: string;
   videoCachePath: string;
   userLocalFolderPath: string;
   menuItems: string[];
+  myPhotosRules: MyPhotosRule[];
 };
 
 export type LocalCopyResult = {
@@ -178,6 +186,7 @@ export type AssetFilterCriteria = {
   rating: number | null;
   ratingMode: RatingMode | null;
   favoriteOnly: boolean | null;
+  myPhotosOnly: boolean | null;
   mediaType: MediaTypeFilter | null;
   camera: string | null;
   personId: string | null;
@@ -187,6 +196,7 @@ export const DEFAULT_FILTER_CRITERIA: AssetFilterCriteria = {
   rating: null,
   ratingMode: "gte",
   favoriteOnly: null,
+  myPhotosOnly: null,
   mediaType: null,
   camera: null,
   personId: null,
@@ -197,6 +207,7 @@ export function isFilterActive(criteria: AssetFilterCriteria): boolean {
   return (
     criteria.rating != null ||
     criteria.favoriteOnly === true ||
+    criteria.myPhotosOnly === true ||
     criteria.mediaType != null ||
     (criteria.camera != null && criteria.camera !== "") ||
     (criteria.personId != null && criteria.personId !== "")
@@ -255,4 +266,5 @@ export type AssetCacheDetails = {
   people: string | null;
   tags: string | null;
   exifInfoJson: string | null;
+  isMyPhoto: boolean;
 };

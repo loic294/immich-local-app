@@ -3,6 +3,7 @@ import type { AssetFilterCriteria, ViewScope } from "../../types";
 import { useCameras, usePeople } from "../../hooks/useScopedFilterOptions";
 import { RatingFilter } from "./RatingFilter";
 import { FavoriteFilter } from "./FavoriteFilter";
+import { MyPhotosFilter } from "./MyPhotosFilter";
 import { TypeFilter } from "./TypeFilter";
 import { CameraFilter } from "./CameraFilter";
 import { PeopleFilter } from "./PeopleFilter";
@@ -20,7 +21,7 @@ interface FilterBarProps {
 
 /**
  * Reusable filter bar shown directly under the header on any photo grid view
- * (all photos, albums, calendar months, folders). Combines the five reusable
+ * (all photos, albums, calendar months, folders). Combines the reusable
  * filter controls and scopes the Camera/People options to the current view.
  */
 export function FilterBar({
@@ -40,6 +41,11 @@ export function FilterBar({
 
   return (
     <div className="flex flex-nowrap items-center gap-4 overflow-x-auto border-b border-base-300 bg-base-300 px-4 py-3">
+      <MyPhotosFilter
+        active={criteria.myPhotosOnly === true}
+        onChange={(active) => onChange({ myPhotosOnly: active ? true : null })}
+      />
+
       <RatingFilter
         rating={criteria.rating}
         mode={criteria.ratingMode ?? "gte"}

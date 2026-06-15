@@ -668,6 +668,7 @@ fn to_enriched_asset_record(
             people: metadata.as_ref().and_then(|m| m.people.clone()),
             tags: metadata.as_ref().and_then(|m| m.tags.clone()),
             exif_info_json: metadata.as_ref().and_then(|m| m.exif_info_json.clone()),
+            is_my_photo: false,
         },
         person_ids: metadata
             .as_ref()
