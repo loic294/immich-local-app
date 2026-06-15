@@ -1,7 +1,9 @@
 import { Check, RefreshCw } from "lucide-react";
 import { useSyncStatus } from "../../hooks/useSyncStatus";
+import { useI18n } from "../../i18n";
 
 export function SyncStatusCard() {
+  const { t } = useI18n();
   const {
     syncStatus,
     isSyncing,
@@ -49,8 +51,10 @@ export function SyncStatusCard() {
               max="100"
             ></progress>
             <div className="text-xs text-base-content/70">
-              {syncStatus.processedAssets} / {syncStatus.totalAssets} photos
-              synced
+              {t("syncCard.syncedCount", {
+                processed: syncStatus.processedAssets,
+                total: syncStatus.totalAssets,
+              })}
             </div>
           </>
         ) : isChecking ? (
@@ -58,7 +62,7 @@ export function SyncStatusCard() {
             <div className="flex items-center gap-2">
               <span className="loading loading-spinner loading-xs"></span>
               <span className="text-xs text-base-content/70">
-                Checking for new assets...
+                {t("syncCard.checking")}
               </span>
             </div>
           </>
@@ -71,7 +75,7 @@ export function SyncStatusCard() {
               <div className="flex items-center gap-2">
                 <Check size={16} className="text-success" />
                 <span className="text-xs font-medium text-success">
-                  Sync Complete
+                  {t("syncCard.complete")}
                 </span>
               </div>
             </div>
@@ -79,7 +83,7 @@ export function SyncStatusCard() {
         ) : (
           <>
             <div className="text-xs text-base-content/70">
-              Ready to sync photos
+              {t("syncCard.ready")}
             </div>
           </>
         )}
@@ -89,9 +93,9 @@ export function SyncStatusCard() {
           onClick={() => void handleAction()}
           disabled={isBusy}
         >
-          {isSyncing && "Syncing..."}
-          {isChecking && "Checking..."}
-          {!isSyncing && !isChecking && "Check for New Photos"}
+          {isSyncing && t("syncCard.syncing")}
+          {isChecking && t("syncCard.checkingShort")}
+          {!isSyncing && !isChecking && t("syncCard.checkForNew")}
         </button>
 
         {error && (

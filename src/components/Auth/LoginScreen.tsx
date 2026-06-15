@@ -1,5 +1,6 @@
 import { useState, FormEvent } from "react";
 import logoUrl from "../../assets/logo.svg";
+import { useI18n } from "../../i18n";
 
 type LoginScreenProps = {
   serverUrl: string;
@@ -20,6 +21,7 @@ export function LoginScreen({
   error,
   onBack,
 }: LoginScreenProps) {
+  const { t } = useI18n();
   const [callbackUrl, setCallbackUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [authorizationStarted, setAuthorizationStarted] = useState(false);
@@ -48,9 +50,9 @@ export function LoginScreen({
     <section className="card mx-auto mt-20 w-full max-w-md border border-base-300 bg-base-100 shadow-xl">
       <div className="card-body">
         <img src={logoUrl} alt="" className="mb-2 h-14 w-14 rounded-lg" />
-        <h1 className="card-title text-2xl">Sign in to Immich</h1>
+        <h1 className="card-title text-2xl">{t("auth.signInTitle")}</h1>
         <p className="text-sm text-base-content/70">
-          Connect to your Immich server at {serverUrl}
+          {t("auth.connectAt", { serverUrl })}
         </p>
 
         <div className="join w-full">
@@ -63,7 +65,7 @@ export function LoginScreen({
             disabled={isLoading}
             className={`btn join-item flex-1 ${authMode === "dev" ? "btn-primary" : "btn-outline"}`}
           >
-            Dev Mode
+            {t("auth.modeDev")}
           </button>
           <button
             type="button"
@@ -75,22 +77,22 @@ export function LoginScreen({
             disabled={isLoading}
             className={`btn join-item flex-1 ${authMode === "apiKey" ? "btn-primary" : "btn-outline"}`}
           >
-            API Key
+            {t("auth.modeApiKey")}
           </button>
         </div>
 
         {authMode === "apiKey" ? (
           <form onSubmit={handleApiKeySubmit} className="space-y-4">
             <p className="text-sm text-base-content/70">
-              Paste your Immich API key to sign in directly.
+              {t("auth.apiKeyHelp")}
             </p>
 
             <label className="form-control w-full">
-              <span className="label-text mb-1">API Key</span>
+              <span className="label-text mb-1">{t("auth.apiKeyLabel")}</span>
               <input
                 required
                 type="password"
-                placeholder="immich_api_key..."
+                placeholder={t("auth.apiKeyPlaceholder")}
                 value={apiKey}
                 className="input input-bordered w-full"
                 onChange={(event) => setApiKey(event.target.value)}
@@ -104,7 +106,7 @@ export function LoginScreen({
                 disabled={isLoading || !apiKey.trim()}
                 className="btn btn-primary w-full"
               >
-                {isLoading ? "Signing in..." : "Sign in with API Key"}
+                {isLoading ? t("auth.signingIn") : t("auth.apiKeySubmit")}
               </button>
               <button
                 type="button"
@@ -112,7 +114,7 @@ export function LoginScreen({
                 disabled={isLoading}
                 className="btn btn-ghost w-full"
               >
-                Back
+                {t("auth.back")}
               </button>
             </div>
           </form>
@@ -123,35 +125,31 @@ export function LoginScreen({
               disabled={isLoading}
               className="btn btn-primary w-full"
             >
-              {isLoading ? "Opening browser..." : "Start OAuth in Browser"}
+              {isLoading ? t("auth.openingBrowser") : t("auth.startOauth")}
             </button>
             <button
               onClick={onBack}
               disabled={isLoading}
               className="btn btn-ghost w-full"
             >
-              Back
+              {t("auth.back")}
             </button>
           </div>
         ) : (
           <form onSubmit={handleCodeSubmit} className="space-y-4">
             <p className="text-sm text-base-content/70">
-              After signing in, you should be redirected back to this app
-              automatically.
+              {t("auth.oauthHelpA")}
             </p>
             <p className="text-sm text-base-content/70">
-              If it does not complete, paste either the full redirect URL or
-              just the value of the code parameter below.
+              {t("auth.oauthHelpB")}
             </p>
 
             <label className="form-control w-full">
-              <span className="label-text mb-1">
-                Authorization Code or Callback URL
-              </span>
+              <span className="label-text mb-1">{t("auth.authCodeLabel")}</span>
               <input
                 required
                 type="text"
-                placeholder="code=... or app.immich:///oauth-callback?..."
+                placeholder={t("auth.authCodePlaceholder")}
                 value={callbackUrl}
                 className="input input-bordered w-full"
                 onChange={(event) => setCallbackUrl(event.target.value)}
@@ -165,7 +163,7 @@ export function LoginScreen({
                 disabled={isLoading || !callbackUrl.trim()}
                 className="btn btn-primary w-full"
               >
-                {isLoading ? "Verifying..." : "Verify Code"}
+                {isLoading ? t("auth.verifying") : t("auth.verifyCode")}
               </button>
               <button
                 type="button"
@@ -173,7 +171,7 @@ export function LoginScreen({
                 disabled={isLoading}
                 className="btn btn-ghost w-full"
               >
-                Cancel
+                {t("auth.cancel")}
               </button>
             </div>
           </form>

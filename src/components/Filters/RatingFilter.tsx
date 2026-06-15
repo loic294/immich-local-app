@@ -1,5 +1,6 @@
 import { Star, Equal, ChevronUp, ChevronDown } from "lucide-react";
 import type { RatingMode } from "../../types";
+import { useI18n } from "../../i18n";
 
 interface RatingFilterProps {
   /** The selected rating threshold (1-5), or null when inactive. */
@@ -10,12 +11,6 @@ interface RatingFilterProps {
 }
 
 const RATING_MODES: RatingMode[] = ["gte", "eq", "lte"];
-
-const MODE_LABEL: Record<RatingMode, string> = {
-  gte: "Rating and above",
-  eq: "Rating exactly",
-  lte: "Rating and below",
-};
 
 function ModeIcon({ mode }: { mode: RatingMode }) {
   if (mode === "gte") return "≥";
@@ -29,6 +24,13 @@ function ModeIcon({ mode }: { mode: RatingMode }) {
  * again clears the rating filter.
  */
 export function RatingFilter({ rating, mode, onChange }: RatingFilterProps) {
+  const { t } = useI18n();
+  const modeLabels: Record<RatingMode, string> = {
+    gte: t("filters.ratingGte"),
+    eq: t("filters.ratingEq"),
+    lte: t("filters.ratingLte"),
+  };
+
   const handleStarClick = (value: number) => {
     if (rating === value) {
       onChange(null, mode);
@@ -50,8 +52,8 @@ export function RatingFilter({ rating, mode, onChange }: RatingFilterProps) {
           type="button"
           className="btn btn-xs btn-ghost btn-square"
           onClick={cycleMode}
-          aria-label={MODE_LABEL[mode]}
-          title={MODE_LABEL[mode]}
+          aria-label={modeLabels[mode]}
+          title={modeLabels[mode]}
         >
           <ModeIcon mode={mode} />
         </button>
@@ -64,7 +66,10 @@ export function RatingFilter({ rating, mode, onChange }: RatingFilterProps) {
                 type="button"
                 className="btn btn-xs btn-ghost btn-square"
                 onClick={() => handleStarClick(value)}
-                aria-label={`${value} star${value > 1 ? "s" : ""}`}
+                aria-label={t("filters.starsAria", {
+                  count: value,
+                  suffix: value > 1 ? "s" : "",
+                })}
                 aria-pressed={filled}
               >
                 <Star

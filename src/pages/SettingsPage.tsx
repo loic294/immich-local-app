@@ -25,6 +25,7 @@ import { DaisyCalendarPicker } from "../components/Settings/DaisyCalendarPicker"
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { useAppUpdate } from "../hooks/useAppUpdate";
 import { useInvalidateSettings } from "../hooks/useSettings";
+import { useI18n, type AppLocale } from "../i18n";
 
 interface SettingsPageProps {
   onNavigate?: (page: AppPage) => void;
@@ -32,6 +33,7 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
+  const { locale, setLocale, t } = useI18n();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [cachePath, setCachePath] = useState<string | null>(null);
@@ -164,7 +166,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
       setLocalFolderDraft(updated.userLocalFolderPath ?? "");
     } catch (error) {
       console.error("Failed to save local folder path:", error);
-      window.alert("Failed to save local folder path.");
+      window.alert(t("settings.failedSaveLocalFolder"));
     } finally {
       setIsSavingLocalFolder(false);
     }
@@ -184,15 +186,13 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
       setLocalFolderDraft(selected);
     } catch (error) {
       console.error("Failed to open folder picker:", error);
-      window.alert("Failed to open folder picker.");
+      window.alert(t("settings.failedOpenFolderPicker"));
     }
   };
 
   const handleClearCache = async () => {
     if (
-      !window.confirm(
-        "Are you sure you want to clear all cached videos and thumbnails? This will free up space but may take time to reload media.",
-      )
+      !window.confirm(t("settings.clearCacheConfirm"))
     ) {
       return;
     }
@@ -252,9 +252,36 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
       await invalidateSettings();
     } catch (error) {
       console.error("Failed to save My Photos rules:", error);
-      window.alert("Failed to save My Photos rules.");
+      window.alert(t("settings.failedSaveMyPhotosRules"));
     } finally {
       setIsSavingMyPhotosRules(false);
+    }
+  };
+
+  const handleChangeLocale = async (nextLocale: AppLocale) => {
+    if (!settings || settings.locale === nextLocale) {
+      return;
+    }
+
+    const previous = settings;
+    setLocale(nextLocale);
+    setSettings({ ...settings, locale: nextLocale });
+
+    try {
+      setIsSaving(true);
+      const updated = await updateSettings({
+        ...settings,
+        locale: nextLocale,
+      });
+      setSettings(updated);
+      await invalidateSettings();
+    } catch (error) {
+      console.error("Failed to update locale setting:", error);
+      setLocale(previous.locale);
+      setSettings(previous);
+      window.alert(t("settings.saveFailed"));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -292,7 +319,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     if (!dateString) return "";
     try {
       const date = new Date(dateString);
-      return date.toLocaleDateString(undefined, {
+      return date.toLocaleDateString(locale, {
         year: "numeric",
         month: "short",
         day: "numeric",
@@ -329,36 +356,65 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             onClick={() => onNavigate?.("photos")}
           >
             <ArrowLeft size={16} />
-            Exit Settings
+            {t("settings.exit")}
           </button>
-          <h1 className="text-3xl font-bold text-base-content">Settings</h1>
-          <p className="text-base-content/60">
-            Manage your app preferences and cache
-          </p>
+          <h1 className="text-3xl font-bold text-base-content">
+            {t("settings.title")}
+          </h1>
+          <p className="text-base-content/60">{t("settings.subtitle")}</p>
         </div>
 
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">Sync</h2>
+            <h2 className="card-title">{t("settings.languageTitle")}</h2>
+            <p className="text-sm text-base-content/70 mb-3">
+              {t("settings.languageDescription")}
+            </p>
+            <label className="form-control w-full max-w-sm">
+              <span className="label-text mb-1">
+                {t("settings.languageLabel")}
+              </span>
+              <select
+                className="select select-bordered"
+                value={settings?.locale ?? locale}
+                disabled={isSaving || !settings}
+                onChange={(event) => {
+                  void handleChangeLocale(
+                    event.currentTarget.value as AppLocale,
+                  );
+                }}
+              >
+                <option value="en-CA">{t("settings.localeEnCa")}</option>
+                <option value="fr-CA">{t("settings.localeFrCa")}</option>
+              </select>
+            </label>
+            {isSaving && (
+              <p className="mt-2 text-xs text-base-content/60">
+                {t("settings.languageSaving")}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
+          <div className="card-body">
+            <h2 className="card-title">{t("settings.sectionSync")}</h2>
             <p className="text-sm text-base-content/70 mb-4">
-              <span className="font-medium text-base-content">Quick sync</span>{" "}
-              only checks for recent new photos and is fast.{" "}
-              <span className="font-medium text-base-content">Full sync</span>{" "}
-              re-scans your entire library and refreshes all local metadata.
+              {t("settings.syncDescription")}
             </p>
 
             {isQuickSyncing && !isSyncing ? (
               <div className="flex items-center gap-2 mb-3">
                 <span className="loading loading-spinner loading-xs"></span>
                 <span className="text-xs text-base-content/70">
-                  Quick sync running...
+                  {t("settings.quickSyncRunning")}
                 </span>
               </div>
             ) : isForcingFullSync && !isSyncing ? (
               <>
                 <progress className="progress progress-primary progress-sm mb-2"></progress>
                 <div className="text-xs text-base-content/70 mb-3">
-                  Starting full sync...
+                  {t("settings.fullSyncStarting")}
                 </div>
               </>
             ) : isSyncing && syncStatus ? (
@@ -369,27 +425,31 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   max="100"
                 ></progress>
                 <div className="text-xs text-base-content/70 mb-3">
-                  {syncStatus.processedAssets} / {syncStatus.totalAssets} photos
-                  synced
+                  {t("settings.syncedCount", {
+                    processed: syncStatus.processedAssets,
+                    total: syncStatus.totalAssets,
+                  })}
                 </div>
               </>
             ) : isChecking ? (
               <div className="flex items-center gap-2 mb-3">
                 <span className="loading loading-spinner loading-xs"></span>
                 <span className="text-xs text-base-content/70">
-                  Checking for new assets...
+                  {t("settings.checkingNewAssets")}
                 </span>
               </div>
             ) : isSyncComplete && syncStatus ? (
               <div className="flex items-center gap-2 mb-3">
                 <Check size={16} className="text-success" />
                 <span className="text-xs font-medium text-success">
-                  Last full sync: {formatDate(syncStatus.lastSyncCompletedAt)}
+                  {t("settings.lastFullSync", {
+                    date: formatDate(syncStatus.lastSyncCompletedAt),
+                  })}
                 </span>
               </div>
             ) : (
               <div className="text-xs text-base-content/70 mb-3">
-                Ready to sync
+                {t("settings.readyToSync")}
               </div>
             )}
 
@@ -404,8 +464,8 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               >
                 <RefreshCcw size={16} />
                 {isQuickSyncing || isChecking
-                  ? "Quick Syncing..."
-                  : "Quick Sync"}
+                  ? t("settings.quickSyncingCta")
+                  : t("settings.quickSyncCta")}
               </button>
 
               <button
@@ -417,9 +477,11 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 className="btn btn-outline btn-warning gap-2"
               >
                 <RefreshCcw size={16} />
-                {isForcingFullSync && "Starting Full Sync..."}
-                {isSyncing && !isForcingFullSync && "Syncing..."}
-                {!isForcingFullSync && !isSyncing && "Force Full Sync"}
+                {isForcingFullSync && t("settings.startFullSyncCta")}
+                {isSyncing && !isForcingFullSync && t("settings.syncingCta")}
+                {!isForcingFullSync &&
+                  !isSyncing &&
+                  t("settings.forceFullSyncCta")}
               </button>
             </div>
 
@@ -434,13 +496,12 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         {/* Navigation Menu Settings */}
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">Navigation Menu</h2>
+            <h2 className="card-title">{t("settings.sectionNavigation")}</h2>
             <p className="text-sm text-base-content/70 mb-2">
-              Choose which items appear in the sidebar. Settings is always
-              shown.
+              {t("settings.navigationDescription")}
             </p>
             <div className="flex flex-col">
-              {MENU_ITEMS.map(({ key, label, icon: Icon }) => {
+              {MENU_ITEMS.map(({ key, labelKey, icon: Icon }) => {
                 const checked = settings?.menuItems?.includes(key) ?? false;
                 return (
                   <label
@@ -457,7 +518,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                       disabled={isSaving || !settings}
                     />
                     <Icon size={16} className="shrink-0 text-base-content/70" />
-                    <span className="label-text">{label}</span>
+                    <span className="label-text">{t(labelKey)}</span>
                   </label>
                 );
               })}
@@ -468,18 +529,15 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         {/* Live Photo Settings */}
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">My Photos</h2>
+            <h2 className="card-title">{t("settings.sectionMyPhotos")}</h2>
             <p className="text-sm text-base-content/70 mb-3">
-              Define which photos are considered yours using date ranges and a
-              camera. The My Photos filter will match assets that satisfy any
-              rule below.
+              {t("settings.myPhotosDescription")}
             </p>
 
             <div className="space-y-3">
               {myPhotosRulesDraft.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-base-300 p-3 text-sm text-base-content/60">
-                  No rules yet. Add at least one rule to enable meaningful My
-                  Photos filtering.
+                  {t("settings.myPhotosEmpty")}
                 </div>
               ) : (
                 myPhotosRulesDraft.map((rule, index) => (
@@ -489,7 +547,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   >
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="form-control">
-                        <span className="label-text text-xs">Start date</span>
+                        <span className="label-text text-xs">
+                          {t("settings.myPhotosStartDate")}
+                        </span>
                         <DaisyCalendarPicker
                           value={rule.startDate}
                           onChange={(value) =>
@@ -501,7 +561,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                       </label>
 
                       <label className="form-control">
-                        <span className="label-text text-xs">Camera</span>
+                        <span className="label-text text-xs">
+                          {t("settings.myPhotosCamera")}
+                        </span>
                         <select
                           className="select select-sm select-bordered"
                           value={rule.camera}
@@ -511,7 +573,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                             })
                           }
                         >
-                          <option value="">Select a camera</option>
+                          <option value="">
+                            {t("settings.myPhotosSelectCamera")}
+                          </option>
                           {availableCameras.map((camera) => (
                             <option key={camera} value={camera}>
                               {camera}
@@ -521,7 +585,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                       </label>
 
                       <label className="form-control">
-                        <span className="label-text text-xs">End date</span>
+                        <span className="label-text text-xs">
+                          {t("settings.myPhotosEndDate")}
+                        </span>
                         <DaisyCalendarPicker
                           value={rule.endDate ?? ""}
                           disabled={rule.endDateCurrent}
@@ -544,7 +610,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                             })
                           }
                         />
-                        <span className="label-text">Use current date</span>
+                        <span className="label-text">
+                          {t("settings.myPhotosUseCurrentDate")}
+                        </span>
                       </label>
                     </div>
 
@@ -554,7 +622,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                         className="btn btn-ghost btn-xs text-error"
                         onClick={() => handleRemoveMyPhotosRule(index)}
                       >
-                        Remove rule
+                        {t("settings.myPhotosRemoveRule")}
                       </button>
                     </div>
                   </div>
@@ -568,7 +636,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 className="btn btn-outline btn-sm"
                 onClick={handleAddMyPhotosRule}
               >
-                Add rule
+                {t("settings.myPhotosAddRule")}
               </button>
               <button
                 type="button"
@@ -578,7 +646,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   void handleSaveMyPhotosRules();
                 }}
               >
-                {isSavingMyPhotosRules ? "Saving..." : "Save My Photos Rules"}
+                {isSavingMyPhotosRules
+                  ? t("settings.saving")
+                  : t("settings.myPhotosSaveRules")}
               </button>
             </div>
           </div>
@@ -587,11 +657,11 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         {/* Live Photo Settings */}
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">Live Photos</h2>{" "}
+            <h2 className="card-title">{t("settings.sectionLivePhotos")}</h2>{" "}
             <div className="form-control">
               <label className="label cursor-pointer">
                 <span className="label-text">
-                  Automatically play live photos on hover
+                  {t("settings.livePhotosAutoplay")}
                 </span>
                 <input
                   type="checkbox"
@@ -602,8 +672,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 />
               </label>
               <p className="mt-2 text-sm text-base-content/60">
-                When disabled, you can still play live photos manually using the
-                button in the viewer.
+                {t("settings.livePhotosHelp")}
               </p>
             </div>
           </div>
@@ -612,12 +681,12 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         {/* Cache Settings */}
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">Cache & Storage</h2>
+            <h2 className="card-title">{t("settings.sectionCache")}</h2>
 
             <div className="form-control mb-4">
               <label className="label">
                 <span className="label-text font-medium">
-                  Local Files Folder
+                  {t("settings.localFolderLabel")}
                 </span>
               </label>
               <div className="flex items-center gap-2">
@@ -625,7 +694,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   type="text"
                   value={localFolderDraft}
                   onChange={(event) => setLocalFolderDraft(event.target.value)}
-                  placeholder="Choose a folder for copied local files"
+                  placeholder={t("settings.localFolderPlaceholder")}
                   className="input input-bordered input-sm flex-1 text-sm"
                 />
                 <button
@@ -635,7 +704,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                     void handlePickLocalFolderPath();
                   }}
                 >
-                  Browse
+                  {t("settings.browse")}
                 </button>
                 <button
                   type="button"
@@ -645,7 +714,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   }}
                   disabled={isSavingLocalFolder}
                 >
-                  {isSavingLocalFolder ? "Saving..." : "Save"}
+                  {isSavingLocalFolder
+                    ? t("settings.saving")
+                    : t("settings.save")}
                 </button>
               </div>
               <div className="mt-2 flex items-center gap-2">
@@ -661,25 +732,24 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                       settings.userLocalFolderPath,
                     ).catch((error) => {
                       console.error("Failed to open local folder:", error);
-                      window.alert(
-                        "Failed to open local folder in file explorer.",
-                      );
+                      window.alert(t("settings.failedOpenLocalFolder"));
                     });
                   }}
                 >
-                  Open local folder
+                  {t("settings.openLocalFolder")}
                 </button>
               </div>
               <p className="mt-1 text-sm text-base-content/60">
-                Selected assets are copied here when using Open in file
-                explorer. This folder is separate from the app cache.
+                {t("settings.localFolderHelp")}
               </p>
             </div>
 
             {/* Cache Path */}
             <div className="form-control mb-4">
               <label className="label">
-                <span className="label-text font-medium">Cache Location</span>
+                <span className="label-text font-medium">
+                  {t("settings.cacheLocation")}
+                </span>
               </label>
               <div className="flex items-center gap-2">
                 <input
@@ -696,16 +766,14 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                       void openFolderInFileExplorer(cachePath).catch(
                         (error) => {
                           console.error("Failed to open cache folder:", error);
-                          window.alert(
-                            "Failed to open cache folder in file explorer.",
-                          );
+                          window.alert(t("settings.failedOpenCacheFolder"));
                         },
                       );
                     }
                   }}
                 >
                   <FolderOpen size={16} />
-                  Open
+                  {t("settings.open")}
                 </button>
               </div>
             </div>
@@ -715,13 +783,13 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
 
             <div className="space-y-3">
               <p className="text-sm font-medium text-base-content">
-                Storage Usage
+                {t("settings.storageUsage")}
               </p>
 
               {/* Total Size */}
               <div className="flex items-center justify-between rounded-lg bg-base-200 p-3">
                 <span className="text-sm text-base-content/70">
-                  Total Cache Size
+                  {t("settings.totalCacheSize")}
                 </span>
                 <span className="font-mono font-bold text-primary">
                   {formatBytes(cacheStats?.totalSize ?? 0)}
@@ -733,11 +801,16 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-base-content">
-                      Videos
+                      {t("settings.videos")}
                     </p>
                     <p className="text-xs text-base-content/60">
-                      {cacheStats?.videosCount ?? 0} file
-                      {(cacheStats?.videosCount ?? 0) !== 1 ? "s" : ""}
+                      {(cacheStats?.videosCount ?? 0) === 1
+                        ? t("settings.fileCountSingular", {
+                            count: cacheStats?.videosCount ?? 0,
+                          })
+                        : t("settings.fileCountPlural", {
+                            count: cacheStats?.videosCount ?? 0,
+                          })}
                     </p>
                   </div>
                   <span className="font-mono text-sm font-semibold text-base-content">
@@ -751,11 +824,16 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-base-content">
-                      Thumbnails
+                      {t("settings.thumbnails")}
                     </p>
                     <p className="text-xs text-base-content/60">
-                      {cacheStats?.thumbnailsCount ?? 0} file
-                      {(cacheStats?.thumbnailsCount ?? 0) !== 1 ? "s" : ""}
+                      {(cacheStats?.thumbnailsCount ?? 0) === 1
+                        ? t("settings.fileCountSingular", {
+                            count: cacheStats?.thumbnailsCount ?? 0,
+                          })
+                        : t("settings.fileCountPlural", {
+                            count: cacheStats?.thumbnailsCount ?? 0,
+                          })}
                     </p>
                   </div>
                   <span className="font-mono text-sm font-semibold text-base-content">
@@ -773,11 +851,10 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               className="btn btn-outline btn-error btn-sm gap-2 w-full"
             >
               <Trash2 size={16} />
-              Clear Cache
+              {t("settings.clearCache")}
             </button>
             <p className="mt-2 text-xs text-base-content/60">
-              Clearing the cache will not affect your photos. They will be
-              re-downloaded as needed.
+              {t("settings.clearCacheHelp")}
             </p>
           </div>
         </div>
@@ -785,10 +862,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         {/* Account */}
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">Account</h2>
+            <h2 className="card-title">{t("settings.sectionAccount")}</h2>
             <p className="text-sm text-base-content/70 mb-4">
-              Sign out to connect to a different Immich server or change your
-              API key.
+              {t("settings.accountDescription")}
             </p>
             <button
               type="button"
@@ -796,7 +872,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               className="btn btn-outline btn-error gap-2"
             >
               <LogOut size={16} />
-              Sign Out
+              {t("settings.signOut")}
             </button>
           </div>
         </div>
@@ -804,16 +880,16 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         {/* App Updates */}
         <div className="card mb-6 border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">App Updates</h2>
+            <h2 className="card-title">{t("settings.sectionUpdates")}</h2>
             <p className="text-sm text-base-content/70 mb-1">
-              Current version: {appVersion ?? "…"}
+              {t("settings.currentVersion", { version: appVersion ?? "..." })}
             </p>
 
             {appUpdate.status === "checking" && (
               <div className="flex items-center gap-2 mb-3">
                 <span className="loading loading-spinner loading-xs"></span>
                 <span className="text-xs text-base-content/70">
-                  Checking for updates…
+                  {t("settings.updatesChecking")}
                 </span>
               </div>
             )}
@@ -826,7 +902,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   max="100"
                 ></progress>
                 <div className="text-xs text-base-content/70">
-                  Downloading update {appUpdate.newVersion}…
+                  {t("settings.updatesDownloading", {
+                    version: appUpdate.newVersion ?? "",
+                  })}
                 </div>
               </div>
             )}
@@ -835,7 +913,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               <div className="flex items-center gap-2 mb-3">
                 <Check size={16} className="text-success" />
                 <span className="text-xs font-medium text-success">
-                  You are on the latest version.
+                  {t("settings.updatesLatest")}
                 </span>
               </div>
             )}
@@ -843,7 +921,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             {appUpdate.status === "error" && (
               <div className="alert alert-error alert-sm mb-3">
                 <span className="text-xs">
-                  {appUpdate.error ?? "Failed to check for updates."}
+                  {appUpdate.error ?? t("settings.updatesCheckFailed")}
                 </span>
               </div>
             )}
@@ -857,7 +935,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 className="btn btn-primary gap-2"
               >
                 <RefreshCcw size={16} />
-                Restart to install {appUpdate.newVersion}
+                {t("settings.restartInstall", {
+                  version: appUpdate.newVersion ?? "",
+                })}
               </button>
             ) : (
               <button
@@ -872,7 +952,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 className="btn btn-outline gap-2"
               >
                 <Download size={16} />
-                Check for Updates
+                {t("settings.checkForUpdates")}
               </button>
             )}
           </div>
@@ -881,13 +961,12 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         {/* About */}
         <div className="card border border-base-300 bg-base-100 shadow-sm">
           <div className="card-body">
-            <h2 className="card-title">About</h2>
+            <h2 className="card-title">{t("settings.sectionAbout")}</h2>
             <p className="text-sm text-base-content/70">
               immich.local v{appVersion ?? "0.1.0"}
             </p>
             <p className="text-xs text-base-content/60 mt-2">
-              A local photo browsing app for Immich servers with support for
-              live photos, albums, and offline caching.
+              {t("settings.aboutDescription")}
             </p>
           </div>
         </div>

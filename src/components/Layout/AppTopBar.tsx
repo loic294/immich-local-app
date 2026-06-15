@@ -4,6 +4,7 @@ import type { Session } from "../../hooks/useSession";
 import type { AlbumSummary, SortPreference } from "../../types";
 import { Header } from "./Header";
 import { SelectionActions } from "./SelectionActions";
+import { useI18n } from "../../i18n";
 
 interface AppTopBarProps {
   session: Session;
@@ -57,6 +58,7 @@ export function AppTopBar({
   sortPreference,
   onSortChange,
 }: AppTopBarProps) {
+  const { t } = useI18n();
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -83,7 +85,7 @@ export function AppTopBar({
       onClearSelection?.();
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Failed to archive photos";
+        error instanceof Error ? error.message : t("topBar.archiveFailed");
       setSelectionError(message);
     } finally {
       setIsArchiving(false);
@@ -101,17 +103,17 @@ export function AppTopBar({
               onClick={onClearSelection}
             >
               <X size={16} />
-              Cancel
+              {t("topBar.cancel")}
             </button>
             <button
               type="button"
               className="btn btn-sm btn-neutral"
               onClick={onSelectAll}
             >
-              Select All
+              {t("topBar.selectAll")}
             </button>
             <p className="text-sm font-semibold text-base-content">
-              {selectedCount} selected
+              {t("topBar.selectedCount", { count: selectedCount })}
             </p>
           </div>
 
@@ -134,18 +136,22 @@ export function AppTopBar({
               }}
             >
               <Trash2 size={16} />
-              Delete
+              {t("topBar.delete")}
             </button>
           </div>
         </header>
 
         {showArchiveModal ? (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/45 p-4">
+          <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/45 p-4">
             <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
-              <h3 className="m-0 text-lg font-semibold">Archive photos?</h3>
+              <h3 className="m-0 text-lg font-semibold">
+                {t("topBar.archiveConfirmTitle")}
+              </h3>
               <p className="mb-4 mt-1 text-sm text-base-content/70">
-                This will archive {selectedCount} selected photo
-                {selectedCount > 1 ? "s" : ""}. You can restore them later.
+                {t("topBar.archiveConfirmBody", {
+                  count: selectedCount,
+                  suffix: selectedCount > 1 ? "s" : "",
+                })}
               </p>
 
               {selectionError ? (
@@ -161,7 +167,7 @@ export function AppTopBar({
                   onClick={() => setShowArchiveModal(false)}
                   disabled={isArchiving}
                 >
-                  Cancel
+                  {t("topBar.cancel")}
                 </button>
                 <button
                   type="button"
@@ -171,7 +177,7 @@ export function AppTopBar({
                   }}
                   disabled={isArchiving}
                 >
-                  {isArchiving ? "Archiving..." : "Archive"}
+                  {isArchiving ? t("topBar.archiving") : t("topBar.archive")}
                 </button>
               </div>
             </div>

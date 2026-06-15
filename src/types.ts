@@ -140,6 +140,7 @@ export type MyPhotosRule = {
 };
 
 export type Settings = {
+  locale: "en-CA" | "fr-CA";
   livePhotoAutoplay: boolean;
   thumbnailCachePath: string;
   videoCachePath: string;

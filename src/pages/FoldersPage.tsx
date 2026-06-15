@@ -19,6 +19,7 @@ import {
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 import type { ViewScope } from "../types";
+import { useI18n } from "../i18n";
 
 interface FoldersPageProps {
   session: Session;
@@ -31,6 +32,7 @@ export function FoldersPage({
   onNavigate,
   onLogout,
 }: FoldersPageProps) {
+  const { t } = useI18n();
   const [currentPath, setCurrentPath] = useState("/");
   const [searchInput, setSearchInput] = useState("");
   const [selectedCount, setSelectedCount] = useState(0);
@@ -90,7 +92,10 @@ export function FoldersPage({
     [currentPath, paths],
   );
 
-  const breadcrumbs = useMemo(() => getBreadcrumbs(currentPath), [currentPath]);
+  const breadcrumbs = useMemo(
+    () => getBreadcrumbs(currentPath, t("folders.root")),
+    [currentPath, t],
+  );
   const hasSubfolders = subfolders.length > 0;
   const hasFolderAssets = allAssets.length > 0;
   const shouldShowPhotoGrid =
@@ -220,7 +225,7 @@ export function FoldersPage({
           onSelectAll={() => {
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
-          searchPlaceholder="Search folder photos"
+          searchPlaceholder={t("folders.searchPlaceholder")}
           showFilterButton={shouldShowPhotoGrid}
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
@@ -255,12 +260,12 @@ export function FoldersPage({
           >
             <div className="flex items-center gap-2">
               <PageBackButton
-                ariaLabel="Back"
+                ariaLabel={t("folders.backAria")}
                 disabled={currentPath === "/"}
                 onClick={() => setCurrentPath(getParentPath(currentPath))}
               />
               <h1 className="m-0 text-2xl font-bold text-base-content">
-                Folders
+                {t("folders.title")}
               </h1>
             </div>
 
@@ -288,7 +293,7 @@ export function FoldersPage({
             >
               <span>
                 {(folderPathsQuery.error as Error | null)?.message ??
-                  "Could not load folders"}
+                  t("folders.loadFoldersFailed")}
               </span>
             </div>
           ) : null}
@@ -296,7 +301,7 @@ export function FoldersPage({
           {hasSubfolders ? (
             <section data-test="subfolders" className="shrink-0">
               <h2 className="mb-2 mt-0 text-sm font-semibold uppercase tracking-wide text-base-content/60">
-                Subfolders
+                {t("folders.subfolders")}
               </h2>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {subfolders.map((folder) => (
@@ -322,7 +327,7 @@ export function FoldersPage({
             >
               <span>
                 {(assetsQuery.error as Error | null)?.message ??
-                  "Could not load photos for this folder"}
+                  t("folders.loadFolderFailed")}
               </span>
             </div>
           ) : shouldShowPhotoGrid ? (
@@ -347,7 +352,7 @@ export function FoldersPage({
           !hasSubfolders &&
           !hasFolderAssets ? (
             <div className="rounded-xl bg-base-100 px-3 py-4 text-sm text-base-content/60 ring-1 ring-base-300/80">
-              This folder is empty.
+              {t("folders.emptyFolder")}
             </div>
           ) : null}
         </section>
@@ -417,9 +422,9 @@ function getParentPath(path: string): string {
   return path.slice(0, index);
 }
 
-function getBreadcrumbs(path: string) {
+function getBreadcrumbs(path: string, rootLabel: string) {
   const parts = path.split("/").filter(Boolean);
-  const crumbs = [{ label: "root", path: "/" }];
+  const crumbs = [{ label: rootLabel, path: "/" }];
 
   let current = "";
   for (const part of parts) {

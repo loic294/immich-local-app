@@ -1,6 +1,7 @@
 import type { AppPage } from "../components/Layout/Sidebar";
 import { PhotosPage } from "./PhotosPage";
 import type { Session } from "../hooks/useSession";
+import { useI18n } from "../i18n";
 
 type FavoritesPageProps = {
   session: Session;
@@ -13,6 +14,8 @@ export function FavoritesPage({
   onNavigate,
   onLogout,
 }: FavoritesPageProps) {
+  const { t } = useI18n();
+
   return (
     <PhotosPage
       session={session}
@@ -20,7 +23,7 @@ export function FavoritesPage({
       onLogout={onLogout}
       activePage="favorites"
       assetFilter="favorites"
-      searchLabel="Favorites"
+      searchLabel={t("nav.favorites")}
     />
   );
 }

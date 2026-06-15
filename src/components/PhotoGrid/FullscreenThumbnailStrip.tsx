@@ -2,6 +2,7 @@ import * as React from "react";
 import { useEffect, useState } from "react";
 import { CirclePlay, Film } from "lucide-react";
 import { getAssetThumbnail } from "../../api/tauri";
+import { useI18n } from "../../i18n";
 import type { AssetSummary } from "../../types";
 
 interface FullscreenThumbnailStripProps {
@@ -20,6 +21,7 @@ const ThumbnailButton = React.forwardRef<
   HTMLButtonElement,
   ThumbnailButtonProps
 >(({ asset, isActive, onClick }, ref) => {
+  const { t } = useI18n();
   const [src, setSrc] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(isActive);
   const buttonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -92,7 +94,9 @@ const ThumbnailButton = React.forwardRef<
           : "border-white/15 hover:border-white/40"
       }`}
       onClick={onClick}
-      aria-label={`Open ${asset.originalFileName}`}
+      aria-label={t("photoGrid.openThumbnailAria", {
+        name: asset.originalFileName,
+      })}
     >
       {src ? (
         <img

@@ -7,6 +7,7 @@ import { MyPhotosFilter } from "./MyPhotosFilter";
 import { TypeFilter } from "./TypeFilter";
 import { CameraFilter } from "./CameraFilter";
 import { PeopleFilter } from "./PeopleFilter";
+import { useI18n } from "../../i18n";
 
 interface FilterBarProps {
   /** Whether the bar is visible. */
@@ -32,6 +33,7 @@ export function FilterBar({
   onChange,
   onReset,
 }: FilterBarProps) {
+  const { t } = useI18n();
   const camerasQuery = useCameras(scope, open);
   const peopleQuery = usePeople(scope, open);
 
@@ -81,10 +83,10 @@ export function FilterBar({
           type="button"
           className="btn btn-sm btn-ghost"
           onClick={onReset}
-          aria-label="Clear all filters"
+          aria-label={t("filters.clearAllAria")}
         >
           <X size={16} />
-          Clear
+          {t("filters.clear")}
         </button>
       )}
     </div>

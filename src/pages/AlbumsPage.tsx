@@ -24,6 +24,7 @@ import { useSortPreference } from "../hooks/useSortPreference";
 import { useConnectionContext } from "../hooks/connectionContext";
 import type { Session } from "../hooks/useSession";
 import type { AlbumSummary, ViewScope } from "../types";
+import { useI18n } from "../i18n";
 import {
   addAssetsToAlbum,
   canManageAlbumSharing,
@@ -47,6 +48,7 @@ interface AlbumsPageProps {
 type AlbumFilter = "all" | "owned" | "shared";
 
 export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
+  const { locale, t } = useI18n();
   const [searchInput, setSearchInput] = useState("");
   const [filter, setFilter] = useState<AlbumFilter>("all");
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
@@ -547,7 +549,9 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
           searchPlaceholder={
-            selectedAlbumId ? "Search photos in this album" : "Search albums"
+            selectedAlbumId
+              ? t("albums.searchInAlbum")
+              : t("albums.searchAlbums")
           }
           showFilterButton={selectedAlbumId !== null}
           filterActive={filters.isActive}
@@ -589,7 +593,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               >
                 <div className="flex min-w-0 items-center gap-2">
                   <PageBackButton
-                    ariaLabel="Back to albums"
+                    ariaLabel={t("albums.backToAlbumsAria")}
                     onClick={() => {
                       setSelectedAlbumId(null);
                       setSearchInput("");
@@ -611,12 +615,12 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                       {isSavingAlbum ? (
                         <>
                           <LoaderCircle size={16} className="animate-spin" />
-                          Saving...
+                          {t("albums.saving")}
                         </>
                       ) : (
                         <>
                           <HardDrive size={16} />
-                          Save Locally
+                          {t("albums.saveLocally")}
                         </>
                       )}
                     </button>
@@ -627,7 +631,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                       onClick={handleOpenAlbumFolder}
                     >
                       <FolderOpen size={16} />
-                      Open in File Explorer
+                      {t("albums.openExplorer")}
                     </button>
                   )}
 
@@ -638,7 +642,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                       onClick={() => setShowShareAlbumModal(true)}
                     >
                       <Link size={16} />
-                      Share Album
+                      {t("albums.shareAlbum")}
                     </button>
                   ) : null}
                 </div>
@@ -647,7 +651,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               {saveAlbumError ? (
                 <div role="alert" className="alert alert-error shrink-0">
                   <div className="flex items-start gap-2 min-w-0">
-                    <span className="text-sm break-words">
+                    <span className="text-sm wrap-break-word">
                       {saveAlbumError}
                     </span>
                     <button
@@ -676,7 +680,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 >
                   <span>
                     {(albumAssetsQuery.error as Error | null)?.message ??
-                      "Could not load album photos"}
+                      t("albums.loadAlbumFailed")}
                   </span>
                 </div>
               ) : (
@@ -711,7 +715,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
             <section className="space-y-4 pb-2">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <h1 className="m-0 text-2xl font-bold text-base-content">
-                  Albums
+                  {t("albums.title")}
                 </h1>
                 <div className="join">
                   <button
@@ -719,21 +723,21 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                     className={`btn btn-sm join-item ${filter === "all" ? "btn-primary" : "btn-ghost"}`}
                     onClick={() => setFilter("all")}
                   >
-                    All
+                    {t("albums.filterAll")}
                   </button>
                   <button
                     type="button"
                     className={`btn btn-sm join-item ${filter === "owned" ? "btn-primary" : "btn-ghost"}`}
                     onClick={() => setFilter("owned")}
                   >
-                    My albums
+                    {t("albums.filterMine")}
                   </button>
                   <button
                     type="button"
                     className={`btn btn-sm join-item ${filter === "shared" ? "btn-primary" : "btn-ghost"}`}
                     onClick={() => setFilter("shared")}
                   >
-                    Shared with me
+                    {t("albums.filterShared")}
                   </button>
                 </div>
               </div>
@@ -745,7 +749,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 >
                   <span>
                     {(albumsQuery.error as Error | null)?.message ??
-                      "Could not load albums"}
+                      t("albums.loadAlbumsFailed")}
                   </span>
                 </div>
               ) : null}
@@ -753,13 +757,13 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               {albumsQuery.isLoading ? (
                 <div className="flex items-center gap-2 px-1 py-8 text-sm text-base-content/70">
                   <span className="loading loading-spinner loading-sm" />
-                  Loading albums...
+                  {t("albums.loadingAlbums")}
                 </div>
               ) : null}
 
               {!albumsQuery.isLoading && groups.length === 0 ? (
                 <div className="alert alert-info alert-soft text-sm">
-                  <span>No albums found for this filter.</span>
+                  <span>{t("albums.noAlbumsForFilter")}</span>
                 </div>
               ) : null}
 
@@ -769,7 +773,9 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                     <h2 className="mb-3 mt-0 text-3xl font-semibold text-base-content">
                       {group.year}{" "}
                       <span className="text-sm font-medium text-base-content/60">
-                        ({group.albums.length} albums)
+                        {t("albums.albumsCount", {
+                          count: group.albums.length,
+                        })}
                       </span>
                     </h2>
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
@@ -778,7 +784,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                           key={album.id}
                           album={album}
                           isOwned={album.ownerId === session.userId}
-                          dateLabel={getAlbumDateLabel(album)}
+                          dateLabel={getAlbumDateLabel(
+                            album,
+                            locale,
+                            t("albums.unknownDate"),
+                          )}
                           onClick={() => {
                             setSelectedAlbumId(album.id);
                             setSearchInput("");
@@ -821,18 +831,22 @@ function getAlbumDateMs(album: AlbumSummary): number {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
-function getAlbumDateLabel(album: AlbumSummary): string {
-  const start = formatMonthYear(album.startDate ?? album.createdAt);
-  const end = formatMonthYear(album.endDate ?? album.updatedAt);
+function getAlbumDateLabel(
+  album: AlbumSummary,
+  locale: string,
+  unknownDate: string,
+): string {
+  const start = formatMonthYear(album.startDate ?? album.createdAt, locale);
+  const end = formatMonthYear(album.endDate ?? album.updatedAt, locale);
 
   if (start && end && start !== end) {
     return `${start} - ${end}`;
   }
 
-  return start ?? end ?? "Unknown date";
+  return start ?? end ?? unknownDate;
 }
 
-function formatMonthYear(value: string | null): string | null {
+function formatMonthYear(value: string | null, locale: string): string | null {
   if (!value) {
     return null;
   }
@@ -842,7 +856,7 @@ function formatMonthYear(value: string | null): string | null {
     return null;
   }
 
-  return parsed.toLocaleDateString(undefined, {
+  return parsed.toLocaleDateString(locale, {
     month: "short",
     year: "numeric",
   });
@@ -872,6 +886,7 @@ interface AlbumDescriptionSectionProps {
 function AlbumDescriptionSection({
   description,
 }: AlbumDescriptionSectionProps) {
+  const { t } = useI18n();
   const url = extractFirstUrl(description);
   const textWithoutUrl = url
     ? description.replace(url, "").trim()
@@ -907,7 +922,7 @@ function AlbumDescriptionSection({
             </svg>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-base-content">
-                {isAdobeUrl(url) ? "View more photos on Lightroom" : url}
+                {isAdobeUrl(url) ? t("albums.lightroomCta") : url}
               </p>
               {isAdobeUrl(url) ? (
                 <p className="text-xs text-base-content/50 truncate">{url}</p>

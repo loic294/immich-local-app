@@ -21,27 +21,13 @@ import {
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 import type { ViewScope } from "../types";
+import { useI18n } from "../i18n";
 
 interface CalendarPageProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
   onLogout: () => void;
 }
-
-const MONTH_NAMES = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
 
 interface SelectedMonth {
   year: number;
@@ -53,6 +39,7 @@ export function CalendarPage({
   onNavigate,
   onLogout,
 }: CalendarPageProps) {
+  const { locale, t } = useI18n();
   const [selected, setSelected] = useState<SelectedMonth | null>(null);
 
   const timelineQuery = useQuery({
@@ -106,19 +93,19 @@ export function CalendarPage({
           onLogout={onLogout}
           searchInput=""
           onSearchChange={() => {}}
-          searchPlaceholder="Calendar"
+          searchPlaceholder={t("calendar.monthSearchPlaceholder")}
         />
 
         <section className="flex-1 min-h-0 overflow-y-auto p-2 sm:p-3 lg:p-4">
           <h1 className="mb-4 text-2xl font-bold text-base-content">
-            Calendar
+            {t("calendar.title")}
           </h1>
 
           {timelineQuery.isError ? (
             <div role="alert" className="alert alert-error alert-soft text-sm">
               <span>
                 {(timelineQuery.error as Error | null)?.message ??
-                  "Could not load timeline"}
+                  t("calendar.loadTimelineFailed")}
               </span>
             </div>
           ) : null}
@@ -126,13 +113,13 @@ export function CalendarPage({
           {timelineQuery.isLoading ? (
             <div className="flex items-center gap-2 py-8 text-sm text-base-content/70">
               <span className="loading loading-spinner loading-sm" />
-              Loading timeline…
+              {t("calendar.loadingTimeline")}
             </div>
           ) : null}
 
           {!timelineQuery.isLoading && yearGroups.length === 0 ? (
             <div className="alert alert-info alert-soft text-sm">
-              <span>No photos found.</span>
+              <span>{t("calendar.noPhotos")}</span>
             </div>
           ) : null}
 
@@ -152,7 +139,9 @@ export function CalendarPage({
                     >
                       <div className="card-body p-4">
                         <p className="text-base font-semibold text-base-content">
-                          {MONTH_NAMES[month - 1]}
+                          {new Date(year, month - 1, 1).toLocaleString(locale, {
+                            month: "long",
+                          })}
                         </p>
                         <p className="text-xs text-base-content/50">{year}</p>
                       </div>
@@ -185,6 +174,7 @@ function MonthView({
   month,
   onBack,
 }: MonthViewProps) {
+  const { locale, t } = useI18n();
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const [selectedCount, setSelectedCount] = useState(0);
@@ -374,7 +364,7 @@ function MonthView({
           onSelectAll={() => {
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
-          searchPlaceholder="Calendar"
+          searchPlaceholder={t("calendar.monthSearchPlaceholder")}
           showFilterButton
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
@@ -405,13 +395,22 @@ function MonthView({
             data-test="month-title"
             className="mb-1 flex items-center gap-2 shrink-0"
           >
-            <PageBackButton ariaLabel="Back" onClick={onBack} />
+            <PageBackButton
+              ariaLabel={t("calendar.backAria")}
+              onClick={onBack}
+            />
             <h1 className="m-0 text-xl font-bold text-base-content">
-              {MONTH_NAMES[month - 1]} {year}
+              {new Date(year, month - 1, 1).toLocaleString(locale, {
+                month: "long",
+              })}{" "}
+              {year}
             </h1>
             {assetsQuery.isSuccess ? (
               <span className="text-sm text-base-content/60">
-                ({assets.length} photo{assets.length !== 1 ? "s" : ""})
+                {t("calendar.monthCount", {
+                  count: assets.length,
+                  suffix: assets.length !== 1 ? "s" : "",
+                })}
               </span>
             ) : null}
           </div>
@@ -424,7 +423,7 @@ function MonthView({
             >
               <span>
                 {(assetsQuery.error as Error | null)?.message ??
-                  "Could not load photos for this month"}
+                  t("calendar.loadMonthFailed")}
               </span>
             </div>
           ) : (

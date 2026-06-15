@@ -25,6 +25,7 @@ import { useSortPreference } from "../hooks/useSortPreference";
 import { FilterBar } from "../components/Filters/FilterBar";
 import { useRef } from "react";
 import type { AssetFilter, ViewScope } from "../types";
+import { useI18n } from "../i18n";
 
 interface PhotosPageProps {
   session: Session;
@@ -41,8 +42,10 @@ export function PhotosPage({
   onLogout,
   activePage = "photos",
   assetFilter = "all",
-  searchLabel = "Search",
+  searchLabel,
 }: PhotosPageProps) {
+  const { t } = useI18n();
+  const effectiveSearchLabel = searchLabel ?? t("photos.searchLabel");
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [archiveRefreshNonce, setArchiveRefreshNonce] = useState(0);
@@ -310,7 +313,7 @@ export function PhotosPage({
                     setSearchTerm("");
                   }}
                 >
-                  {searchLabel}: {searchInput.trim()} x
+                  {effectiveSearchLabel}: {searchInput.trim()} x
                 </button>
               ) : null}
             </div>
@@ -326,7 +329,7 @@ export function PhotosPage({
               <span>
                 {assetsWindow.error?.message ??
                   (memoriesQuery.error as Error | null)?.message ??
-                  "An error occurred"}
+                  t("photos.genericError")}
               </span>
             </div>
           ) : (

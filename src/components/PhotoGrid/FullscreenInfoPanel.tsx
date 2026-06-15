@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AssetCacheDetails, AssetSummary } from "../../types";
 import { MapTilerLocationMap } from "./MapTilerLocationMap";
+import { useI18n } from "../../i18n";
 
 interface FullscreenInfoPanelProps {
   asset: AssetSummary;
@@ -17,6 +18,7 @@ export function FullscreenInfoPanel({
   isUpdatingDescription,
   onUpdateDescription,
 }: FullscreenInfoPanelProps) {
+  const { locale, t } = useI18n();
   const exif = useMemo(() => {
     if (!details?.exifInfoJson) {
       return null;
@@ -78,17 +80,17 @@ export function FullscreenInfoPanel({
       <div className="rounded-sm bg-zinc-900 p-4">
         {details?.isMyPhoto ? (
           <span className="mb-1.5 inline-block rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-content">
-            My Photo
+            {t("photoGrid.myPhotoBadge")}
           </span>
         ) : null}
         <p className="text-sm font-medium text-white">
-          {make ?? "Unknown make"} {details?.camera ?? "Unknown camera"}
+          {make ?? t("photoGrid.unknownMake")} {details?.camera ?? t("photoGrid.unknownCamera")}
         </p>
         {details?.lens ? (
           <p className="mt-0.5 text-xs text-white/65">{details.lens}</p>
         ) : null}
         <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px] text-white/65">
-          <span>{headerLine || "Unknown dimensions"}</span>
+          <span>{headerLine || t("photoGrid.unknownDimensions")}</span>
           {formatBadge ? (
             <span className="rounded-md bg-zinc-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white">
               {formatBadge}
@@ -101,59 +103,73 @@ export function FullscreenInfoPanel({
         {isLoading ? (
           <div className="mb-3 flex items-center gap-2 text-[11px] text-white/60">
             <span className="loading loading-spinner loading-xs" />
-            Loading cached metadata...
+            {t("photoGrid.loadingCachedMetadata")}
           </div>
         ) : null}
 
         <div className="space-y-1.5">
-          <InlineInfoRow label="FOCAL LENGTH" value={focalLength} />
-          <InlineInfoRow label="SHUTTER SPEED" value={shutterSpeed} />
-          <InlineInfoRow label="APERTURE" value={formatAperture(aperture)} />
-          <InlineInfoRow label="ISO" value={iso} />
+          <InlineInfoRow label={t("photoGrid.labelFocalLength")} value={focalLength} />
+          <InlineInfoRow label={t("photoGrid.labelShutterSpeed")} value={shutterSpeed} />
+          <InlineInfoRow
+            label={t("photoGrid.labelAperture")}
+            value={formatAperture(aperture)}
+          />
+          <InlineInfoRow label={t("photoGrid.labelIso")} value={iso} />
         </div>
       </div>
 
       <div className="mt-3 space-y-2 rounded-sm bg-zinc-900 p-4">
         <InfoRow
-          label="Captured"
+          label={t("photoGrid.labelCaptured")}
           value={formatCapturedAt(
             details?.fileCreatedAt ?? asset.fileCreatedAt,
+            locale,
           )}
+          unknownText={t("photoGrid.unknownValue")}
         />
 
         <div>
           <p className="text-[10px] uppercase tracking-wide text-white/45">
-            Description
+            {t("photoGrid.labelDescription")}
           </p>
           <textarea
             className="textarea textarea-sm mt-1 min-h-24 w-full rounded-sm border-white/10 bg-zinc-950 text-sm leading-snug text-white/85"
             value={descriptionDraft}
-            placeholder="Add a description"
+            placeholder={t("photoGrid.descriptionPlaceholder")}
             onChange={(event) => setDescriptionDraft(event.currentTarget.value)}
             onBlur={() => onUpdateDescription(descriptionDraft)}
             disabled={isUpdatingDescription}
           />
           {isUpdatingDescription ? (
             <p className="mt-1 text-[10px] text-white/45">
-              Saving description...
+              {t("photoGrid.savingDescription")}
             </p>
           ) : null}
         </div>
 
-        <InfoRow label="File Name" value={fileName} />
+        <InfoRow
+          label={t("photoGrid.labelFileName")}
+          value={fileName}
+          unknownText={t("photoGrid.unknownValue")}
+        />
 
-        <InfoInputRow label="File Location" value={locationValue} />
+        <InfoInputRow label={t("photoGrid.labelFileLocation")} value={locationValue} />
       </div>
 
       <div className="mt-3 space-y-2 rounded-sm bg-zinc-900 p-4">
-        <InfoRow label="Location" value={`${city}, ${state}, ${country}`} />
         <InfoRow
-          label="GPS"
+          label={t("photoGrid.labelLocation")}
+          value={`${city}, ${state}, ${country}`}
+          unknownText={t("photoGrid.unknownValue")}
+        />
+        <InfoRow
+          label={t("photoGrid.labelGps")}
           value={
             latitude !== null && longitude !== null
               ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
               : null
           }
+          unknownText={t("photoGrid.unknownValue")}
         />
 
         {latitude !== null && longitude !== null ? (
@@ -167,7 +183,7 @@ export function FullscreenInfoPanel({
                 />
               ) : mapSrc ? (
                 <iframe
-                  title="Photo location map"
+                  title={t("photoGrid.mapTitle")}
                   src={mapSrc}
                   className="h-90 w-full overflow-hidden rounded-lg border border-white/10 bg-zinc-950"
                   loading="lazy"
@@ -181,8 +197,16 @@ export function FullscreenInfoPanel({
 
       {details?.people || details?.tags ? (
         <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-zinc-900 p-3">
-          <InfoRow label="People" value={details.people} />
-          <InfoRow label="Tags" value={details.tags} />
+          <InfoRow
+            label={t("photoGrid.labelPeople")}
+            value={details.people}
+            unknownText={t("photoGrid.unknownValue")}
+          />
+          <InfoRow
+            label={t("photoGrid.labelTags")}
+            value={details.tags}
+            unknownText={t("photoGrid.unknownValue")}
+          />
         </div>
       ) : null}
     </aside>
@@ -204,14 +228,22 @@ function InlineInfoRow({
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string | null }) {
+function InfoRow({
+  label,
+  value,
+  unknownText,
+}: {
+  label: string;
+  value: string | null;
+  unknownText?: string;
+}) {
   return (
     <div>
       <p className="text-[10px] uppercase tracking-wide text-white/45">
         {label}
       </p>
       <p className="mt-0.5 text-xs leading-snug text-white/85">
-        {value ?? "-"}
+        {value ?? unknownText ?? "-"}
       </p>
     </div>
   );
@@ -289,7 +321,7 @@ function formatAperture(value: string | null): string | null {
   return value.startsWith("f/") ? value : `f/${value}`;
 }
 
-function formatCapturedAt(value: string | null): string | null {
+function formatCapturedAt(value: string | null, locale: string): string | null {
   if (!value) {
     return null;
   }
@@ -299,7 +331,7 @@ function formatCapturedAt(value: string | null): string | null {
     return value;
   }
 
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString(locale, {
     year: "numeric",
     month: "long",
     day: "numeric",

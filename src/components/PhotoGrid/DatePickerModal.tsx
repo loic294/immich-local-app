@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useI18n } from "../../i18n";
 
 type DatePickerModalProps = {
   isOpen: boolean;
@@ -14,6 +15,7 @@ export function DatePickerModal({
   onSelectDate,
   availableDates,
 }: DatePickerModalProps) {
+  const { locale, t } = useI18n();
   const initialDate = useMemo(() => {
     const fallback = new Date();
     const firstAvailableDate = availableDates[0];
@@ -70,7 +72,7 @@ export function DatePickerModal({
   };
 
   const monthName = new Date(selectedYear, selectedMonth - 1).toLocaleString(
-    "default",
+    locale,
     { month: "long" },
   );
 
@@ -79,7 +81,7 @@ export function DatePickerModal({
       className="fixed inset-0 z-10000 flex items-center justify-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Jump to date"
+      aria-label={t("photoGrid.jumpToDateAria")}
       onClick={onClose}
     >
       <div
@@ -90,16 +92,16 @@ export function DatePickerModal({
           type="button"
           className="btn btn-circle btn-ghost btn-sm absolute right-4 top-4"
           onClick={onClose}
-          aria-label="Close date picker"
+          aria-label={t("photoGrid.closeDatePickerAria")}
         >
           <X size={20} />
         </button>
 
-        <h2 className="mb-4 text-lg font-semibold">Jump to Date</h2>
+        <h2 className="mb-4 text-lg font-semibold">{t("photoGrid.datePickerTitle")}</h2>
 
         <div className="space-y-4">
           <div>
-            <label className="label text-sm font-medium">Year</label>
+            <label className="label text-sm font-medium">{t("photoGrid.datePickerYear")}</label>
             <select
               value={selectedYear}
               onChange={(e) => {
@@ -127,7 +129,7 @@ export function DatePickerModal({
           </div>
 
           <div>
-            <label className="label text-sm font-medium">Month</label>
+            <label className="label text-sm font-medium">{t("photoGrid.datePickerMonth")}</label>
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(parseInt(e.target.value, 10))}
@@ -135,7 +137,7 @@ export function DatePickerModal({
             >
               {availableMonths.map((month) => (
                 <option key={month} value={month}>
-                  {new Date(selectedYear, month - 1).toLocaleString("default", {
+                  {new Date(selectedYear, month - 1).toLocaleString(locale, {
                     month: "long",
                   })}
                 </option>
@@ -164,7 +166,7 @@ export function DatePickerModal({
               </div>
             ) : (
               <p className="text-sm text-base-content/60">
-                No photos available for this month
+                {t("photoGrid.datePickerNoPhotos")}
               </p>
             )}
           </div>
@@ -172,7 +174,7 @@ export function DatePickerModal({
 
         <div className="modal-action mt-6">
           <button type="button" className="btn btn-ghost" onClick={onClose}>
-            Cancel
+            {t("photoGrid.datePickerCancel")}
           </button>
         </div>
       </div>

@@ -12,6 +12,7 @@ import { SyncStatusCard } from "./SyncStatusCard";
 import { OfflineBanner } from "./OfflineBanner";
 import { useConnectionContext } from "../../hooks/connectionContext";
 import { useSettings } from "../../hooks/useSettings";
+import { useI18n } from "../../i18n";
 import logoUrl from "../../assets/logo_with_title.svg";
 
 interface SidebarProps {
@@ -39,7 +40,7 @@ export type MenuItemKey =
 
 type MenuItemDef = {
   key: MenuItemKey;
-  label: string;
+  labelKey: string;
   icon: LucideIcon;
   /** "main" items sit in the top group; "library" in the second group. */
   group: "main" | "library";
@@ -51,15 +52,26 @@ type MenuItemDef = {
  * shown (it lives in the footer) and is intentionally not part of this list.
  */
 export const MENU_ITEMS: MenuItemDef[] = [
-  { key: "photos", label: "Photos", icon: Image, group: "main" },
-  { key: "albums", label: "Albums", icon: Images, group: "main" },
-  { key: "calendar", label: "Calendar", icon: CalendarDays, group: "main" },
-  { key: "folders", label: "Folders", icon: FolderTree, group: "main" },
-  { key: "favorites", label: "Favorites", icon: Heart, group: "library" },
-  { key: "deleted", label: "Deleted", icon: Archive, group: "library" },
+  { key: "photos", labelKey: "nav.photos", icon: Image, group: "main" },
+  { key: "albums", labelKey: "nav.albums", icon: Images, group: "main" },
+  {
+    key: "calendar",
+    labelKey: "nav.calendar",
+    icon: CalendarDays,
+    group: "main",
+  },
+  { key: "folders", labelKey: "nav.folders", icon: FolderTree, group: "main" },
+  {
+    key: "favorites",
+    labelKey: "nav.favorites",
+    icon: Heart,
+    group: "library",
+  },
+  { key: "deleted", labelKey: "nav.deleted", icon: Archive, group: "library" },
 ];
 
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
+  const { t } = useI18n();
   const { isOnline, pendingCount } = useConnectionContext();
   const settingsQuery = useSettings();
   // Until settings load, show every item so navigation is never empty.
@@ -89,7 +101,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
         <div className="min-h-0 flex-1 w-full overflow-y-auto pr-1">
           {mainItems.length > 0 ? (
             <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
-              {mainItems.map(({ key, label, icon: Icon }) => (
+              {mainItems.map(({ key, labelKey, icon: Icon }) => (
                 <button
                   key={key}
                   className={navClass(key)}
@@ -97,7 +109,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
                   onClick={() => onNavigate?.(key)}
                 >
                   <Icon size={16} className="shrink-0" />
-                  <span>{label}</span>
+                  <span>{t(labelKey)}</span>
                 </button>
               ))}
             </nav>
@@ -106,10 +118,10 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
           {libraryItems.length > 0 ? (
             <>
               <div className="mt-3 w-full px-2 text-sm font-semibold uppercase tracking-wide text-base-content/50">
-                Library
+                {t("nav.library")}
               </div>
               <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
-                {libraryItems.map(({ key, label, icon: Icon }) => (
+                {libraryItems.map(({ key, labelKey, icon: Icon }) => (
                   <button
                     key={key}
                     className={navClass(key)}
@@ -117,7 +129,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
                     onClick={() => onNavigate?.(key)}
                   >
                     <Icon size={16} className="shrink-0" />
-                    <span>{label}</span>
+                    <span>{t(labelKey)}</span>
                   </button>
                 ))}
               </nav>
@@ -133,7 +145,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
               onClick={() => onNavigate?.("settings")}
             >
               <Settings size={16} className="shrink-0" />
-              <span>Settings</span>
+              <span>{t("nav.settings")}</span>
             </button>
           </nav>
           {isOnline === false ? (

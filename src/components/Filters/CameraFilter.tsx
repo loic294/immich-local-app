@@ -1,3 +1,5 @@
+import { useI18n } from "../../i18n";
+
 interface CameraFilterProps {
   /** Selected camera name, or null for all cameras. */
   value: string | null;
@@ -14,6 +16,8 @@ export function CameraFilter({
   isLoading,
   onChange,
 }: CameraFilterProps) {
+  const { t } = useI18n();
+
   return (
     <div className="flex shrink-0 flex-col gap-1">
       <select
@@ -24,9 +28,11 @@ export function CameraFilter({
           const next = event.target.value;
           onChange(next === "" ? null : next);
         }}
-        aria-label="Filter by camera"
+        aria-label={t("filters.cameraAria")}
       >
-        <option value="">{isLoading ? "Loading…" : "All cameras"}</option>
+        <option value="">
+          {isLoading ? t("filters.loading") : t("filters.allCameras")}
+        </option>
         {cameras.map((camera) => (
           <option key={camera} value={camera}>
             {camera}

@@ -442,6 +442,39 @@ fn default_menu_items_json() -> String {
     serde_json::to_string(&default_menu_items()).unwrap_or_else(|_| "[]".to_string())
 }
 
+fn normalize_locale(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "en-CA".to_string();
+    }
+
+    let normalized = trimmed.replace('_', "-").to_ascii_lowercase();
+    if normalized.starts_with("fr") {
+        "fr-CA".to_string()
+    } else {
+        "en-CA".to_string()
+    }
+}
+
+fn detect_system_locale() -> String {
+    let locale_hint = std::env::var("LC_ALL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("LC_MESSAGES")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .or_else(|| {
+            std::env::var("LANG")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "en-CA".to_string());
+
+    normalize_locale(&locale_hint)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
     pub id: String,
@@ -718,6 +751,12 @@ impl Database {
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('my_photos_rules', '[]')",
             [],
+        )
+        .map_err(|err| err.to_string())?;
+        let default_locale = detect_system_locale();
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('locale', ?1)",
+            params![default_locale],
         )
         .map_err(|err| err.to_string())?;
 
@@ -2442,6 +2481,15 @@ impl Database {
             .map(|v| v == "true")
             .unwrap_or(true);
 
+        let locale = stmt
+            .query_row(params!["locale"], |row| row.get::<_, String>(0))
+            .map(|v| normalize_locale(&v))
+            .unwrap_or_else(|_| {
+                let detected = detect_system_locale();
+                log::info!("[i18n.locale] locale setting missing, defaulting to {detected}");
+                detected
+            });
+
         let user_local_folder_path = stmt
             .query_row(params!["user_local_folder_path"], |row| {
                 row.get::<_, String>(0)
@@ -2461,6 +2509,7 @@ impl Database {
             .unwrap_or_default();
 
         Ok(Settings {
+            locale,
             live_photo_autoplay,
             thumbnail_cache_path: thumbnail_cache_path.to_string_lossy().to_string(),
             video_cache_path: video_cache_path.to_string_lossy().to_string(),
@@ -2472,6 +2521,14 @@ impl Database {
 
     pub fn update_settings(&self, settings: &Settings) -> Result<Settings, String> {
         let conn = self.open()?;
+        let locale = normalize_locale(&settings.locale);
+        log::info!("[i18n.locale] persisting locale={locale}");
+
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('locale', ?1)",
+            params![locale],
+        )
+        .map_err(|err| err.to_string())?;
 
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('live_photo_autoplay', ?1)",

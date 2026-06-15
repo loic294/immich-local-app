@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PersonSummary } from "../../types";
 import { PersonThumbnail } from "./PersonThumbnail";
+import { useI18n } from "../../i18n";
 
 interface PeopleFilterProps {
   /** Selected person ID, or null for everyone. */
@@ -12,8 +13,8 @@ interface PeopleFilterProps {
   onChange: (value: string | null) => void;
 }
 
-function personLabel(person: PersonSummary): string {
-  return person.name?.trim() || "Unnamed";
+function personLabel(person: PersonSummary, unnamedLabel: string): string {
+  return person.name?.trim() || unnamedLabel;
 }
 
 /**
@@ -32,6 +33,7 @@ export function PeopleFilter({
   isLoading,
   onChange,
 }: PeopleFilterProps) {
+  const { t } = useI18n();
   const selected = people.find((person) => person.id === value) ?? null;
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -109,7 +111,7 @@ export function PeopleFilter({
         ref={buttonRef}
         type="button"
         className="btn btn-sm w-48 justify-between font-normal"
-        aria-label="Filter by person"
+        aria-label={t("filters.peopleAria")}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={toggle}
@@ -122,11 +124,13 @@ export function PeopleFilter({
                 name={selected.name}
                 size={20}
               />
-              <span className="truncate">{personLabel(selected)}</span>
+              <span className="truncate">
+                {personLabel(selected, t("filters.unnamedPerson"))}
+              </span>
             </>
           ) : (
             <span className="text-base-content/70">
-              {isLoading ? "Loading…" : "All people"}
+              {isLoading ? t("filters.loading") : t("filters.allPeople")}
             </span>
           )}
         </span>
@@ -152,7 +156,7 @@ export function PeopleFilter({
                 className="flex items-center justify-between"
                 onClick={() => select(null)}
               >
-                <span>All people</span>
+                <span>{t("filters.allPeople")}</span>
                 {value === null && <Check size={14} />}
               </button>
             </li>
@@ -169,7 +173,9 @@ export function PeopleFilter({
                       name={person.name}
                       size={24}
                     />
-                    <span className="truncate">{personLabel(person)}</span>
+                    <span className="truncate">
+                      {personLabel(person, t("filters.unnamedPerson"))}
+                    </span>
                   </span>
                   {value === person.id && (
                     <Check size={14} className="shrink-0" />
@@ -179,7 +185,9 @@ export function PeopleFilter({
             ))}
             {!isLoading && people.length === 0 && (
               <li className="menu-disabled">
-                <span className="text-base-content/60">No people found</span>
+                <span className="text-base-content/60">
+                  {t("filters.noPeopleFound")}
+                </span>
               </li>
             )}
           </ul>,

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getProfileImage } from "../../api/tauri";
 import { SortButton } from "../Filters/SortButton";
 import type { SortPreference } from "../../types";
+import { useI18n } from "../../i18n";
 
 interface HeaderProps {
   searchInput: string;
@@ -32,7 +33,7 @@ export function Header({
   userId,
   userName,
   onLogout,
-  searchPlaceholder = "Search your photos",
+  searchPlaceholder,
   showFilterButton = false,
   filterActive = false,
   filterOpen = false,
@@ -41,6 +42,7 @@ export function Header({
   sortPreference,
   onSortChange,
 }: HeaderProps) {
+  const { t } = useI18n();
   const [profileImage, setProfileImage] = useState<string | null>(null);
 
   const initials = useMemo(() => {
@@ -89,7 +91,7 @@ export function Header({
           <Search size={16} className="text-base-content/60" />
           <input
             id="asset-search"
-            placeholder={searchPlaceholder}
+            placeholder={searchPlaceholder ?? t("header.searchPhotos")}
             type="text"
             className="grow"
             value={searchInput}
@@ -112,23 +114,23 @@ export function Header({
             type="button"
             onClick={onToggleFilter}
             aria-pressed={filterOpen}
-            aria-label="Filter photos"
+            aria-label={t("header.filterAria")}
           >
             <Funnel size={14} className="shrink-0" />
-            <span>Filter</span>
+            <span>{t("header.filter")}</span>
           </button>
         )}
         <details className="dropdown dropdown-end">
           <summary
             className="btn btn-ghost btn-circle list-none"
-            aria-label="Open account menu"
+            aria-label={t("header.accountMenuAria")}
           >
             {profileImage ? (
               <div className="avatar">
                 <div className="w-8 rounded-full">
                   <img
                     src={profileImage}
-                    alt="Profile"
+                    alt={t("header.profileAlt")}
                     className="object-cover"
                   />
                 </div>
@@ -141,7 +143,7 @@ export function Header({
               </div>
             )}
           </summary>
-          <div className="dropdown-content z-[20] mt-2 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow">
+          <div className="dropdown-content z-20 mt-2 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow">
             <p className="m-0 text-sm font-semibold text-base-content">
               {userName}
             </p>
@@ -155,7 +157,7 @@ export function Header({
               onClick={onLogout}
             >
               <LogOut size={14} className="shrink-0" />
-              <span>Sign out</span>
+              <span>{t("header.signOut")}</span>
             </button>
           </div>
         </details>

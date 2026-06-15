@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { useI18n } from "../../i18n";
 
 type ServerUrlScreenProps = {
   onSubmit: (serverUrl: string) => Promise<void>;
@@ -13,6 +14,7 @@ export function ServerUrlScreen({
   isLoading,
   error,
 }: ServerUrlScreenProps) {
+  const { t } = useI18n();
   const [serverUrl, setServerUrl] = useState(
     initialServerUrl ?? "http://localhost:2283",
   );
@@ -25,25 +27,23 @@ export function ServerUrlScreen({
   return (
     <section className="card mx-auto mt-20 w-full max-w-md border border-base-300 bg-base-100 shadow-xl">
       <div className="card-body">
-        <h1 className="card-title text-2xl">Connect to Immich</h1>
-        <p className="text-sm text-base-content/70">
-          Enter your Immich server URL to get started.
-        </p>
+        <h1 className="card-title text-2xl">{t("server.title")}</h1>
+        <p className="text-sm text-base-content/70">{t("server.subtitle")}</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <label className="form-control w-full">
-            <span className="label-text mb-1">Server URL</span>
+            <span className="label-text mb-1">{t("server.label")}</span>
             <input
               required
               type="url"
               value={serverUrl}
-              placeholder="https://immich.example.com"
+              placeholder={t("server.placeholder")}
               className="input input-bordered w-full"
               onChange={(event) => setServerUrl(event.target.value)}
               disabled={isLoading}
             />
             <span className="label-text-alt text-xs text-base-content/50 mt-1">
-              e.g. http://localhost:2283 or https://immich.example.com
+              {t("server.hint")}
             </span>
           </label>
 
@@ -52,7 +52,7 @@ export function ServerUrlScreen({
             type="submit"
             className="btn btn-primary w-full"
           >
-            {isLoading ? "Connecting..." : "Next"}
+            {isLoading ? t("server.connecting") : t("server.next")}
           </button>
         </form>
 

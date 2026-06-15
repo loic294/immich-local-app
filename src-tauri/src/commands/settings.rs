@@ -15,6 +15,7 @@ pub struct MyPhotosRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    pub locale: String,
     pub live_photo_autoplay: bool,
     pub thumbnail_cache_path: String,
     pub video_cache_path: String,
@@ -46,8 +47,7 @@ pub async fn update_settings(
     state
         .db
         .update_settings(&settings)
-        .map_err(|err| err.to_string())?;
-    Ok(settings)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]

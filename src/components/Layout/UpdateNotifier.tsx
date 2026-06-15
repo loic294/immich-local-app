@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Download, RefreshCw, X } from "lucide-react";
 import type { UseAppUpdateResult } from "../../hooks/useAppUpdate";
+import { useI18n } from "../../i18n";
 
 interface UpdateNotifierProps {
   update: UseAppUpdateResult;
@@ -12,6 +13,7 @@ interface UpdateNotifierProps {
  * the background (see App startup check).
  */
 export function UpdateNotifier({ update }: UpdateNotifierProps) {
+  const { t } = useI18n();
   const [dismissed, setDismissed] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
 
@@ -28,7 +30,9 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
         <div className="alert border border-base-300 bg-base-200 text-base-content shadow-lg">
           <Download size={18} className="shrink-0 text-primary" />
           <div className="flex flex-col gap-1">
-            <span className="text-sm font-medium">Downloading update…</span>
+            <span className="text-sm font-medium">
+              {t("updateNotifier.downloading")}
+            </span>
             <progress
               className="progress progress-primary w-48"
               value={update.progress ?? 0}
@@ -41,10 +45,10 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
           <RefreshCw size={18} className="shrink-0 text-primary" />
           <div className="flex flex-col">
             <span className="text-sm font-medium">
-              Update {update.newVersion} is ready
+              {t("updateNotifier.ready", { version: update.newVersion ?? "" })}
             </span>
             <span className="text-xs text-base-content/60">
-              Restart to finish installing.
+              {t("updateNotifier.restartHint")}
             </span>
           </div>
           <div className="flex items-center gap-1">
@@ -59,12 +63,14 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
                 });
               }}
             >
-              {isInstalling ? "Restarting…" : "Restart now"}
+              {isInstalling
+                ? t("updateNotifier.restarting")
+                : t("updateNotifier.restartNow")}
             </button>
             <button
               type="button"
               className="btn btn-ghost btn-sm btn-square"
-              aria-label="Dismiss update notification"
+              aria-label={t("updateNotifier.dismissAria")}
               disabled={isInstalling}
               onClick={() => setDismissed(true)}
             >

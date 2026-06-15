@@ -1,4 +1,5 @@
 import type { MediaTypeFilter } from "../../types";
+import { useI18n } from "../../i18n";
 
 interface TypeFilterProps {
   /** The selected media type, or null for all types. */
@@ -6,18 +7,19 @@ interface TypeFilterProps {
   onChange: (value: MediaTypeFilter | null) => void;
 }
 
-const OPTIONS: { value: MediaTypeFilter; label: string }[] = [
-  { value: "photo", label: "Photo" },
-  { value: "raw", label: "RAW" },
-  { value: "photo_raw", label: "Photo + RAW" },
-  { value: "video", label: "Video" },
-];
-
 /**
  * daisyUI select for the media type. The empty option clears the type filter
  * (returns to "all types").
  */
 export function TypeFilter({ value, onChange }: TypeFilterProps) {
+  const { t } = useI18n();
+  const options: { value: MediaTypeFilter; label: string }[] = [
+    { value: "photo", label: t("filters.mediaPhoto") },
+    { value: "raw", label: t("filters.mediaRaw") },
+    { value: "photo_raw", label: t("filters.mediaPhotoRaw") },
+    { value: "video", label: t("filters.mediaVideo") },
+  ];
+
   return (
     <div className="flex shrink-0 flex-col gap-1">
       <select
@@ -27,10 +29,10 @@ export function TypeFilter({ value, onChange }: TypeFilterProps) {
           const next = event.target.value;
           onChange(next === "" ? null : (next as MediaTypeFilter));
         }}
-        aria-label="Filter by media type"
+        aria-label={t("filters.mediaTypeAria")}
       >
-        <option value="">All types</option>
-        {OPTIONS.map((option) => (
+        <option value="">{t("filters.allTypes")}</option>
+        {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>

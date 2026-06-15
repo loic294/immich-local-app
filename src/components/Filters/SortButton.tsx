@@ -1,21 +1,12 @@
 import { ArrowDownAZ, ArrowUpAZ } from "lucide-react";
 import type { SortDirection, SortField, SortPreference } from "../../types";
 import { DEFAULT_SORT_PREFERENCE } from "../../types";
+import { useI18n } from "../../i18n";
 
 interface SortButtonProps {
   preference: SortPreference;
   onChange: (patch: Partial<SortPreference>) => void;
 }
-
-const FIELDS: { value: SortField; label: string }[] = [
-  { value: "date_captured", label: "Date Captured" },
-  { value: "filename", label: "Filename" },
-];
-
-const DIRECTIONS: { value: SortDirection; label: string }[] = [
-  { value: "desc", label: "Descending" },
-  { value: "asc", label: "Ascending" },
-];
 
 function isNonDefault(preference: SortPreference): boolean {
   return (
@@ -25,6 +16,16 @@ function isNonDefault(preference: SortPreference): boolean {
 }
 
 export function SortButton({ preference, onChange }: SortButtonProps) {
+  const { t } = useI18n();
+  const fields: { value: SortField; label: string }[] = [
+    { value: "date_captured", label: t("filters.sortDateCaptured") },
+    { value: "filename", label: t("filters.sortFilename") },
+  ];
+  const directions: { value: SortDirection; label: string }[] = [
+    { value: "desc", label: t("filters.sortDescending") },
+    { value: "asc", label: t("filters.sortAscending") },
+  ];
+
   const active = isNonDefault(preference);
   const Icon = preference.direction === "asc" ? ArrowUpAZ : ArrowDownAZ;
 
@@ -32,17 +33,17 @@ export function SortButton({ preference, onChange }: SortButtonProps) {
     <details className="dropdown dropdown-end">
       <summary
         className={`btn btn-sm list-none ${active ? "btn-primary" : "btn-ghost"}`}
-        aria-label="Sort photos"
+        aria-label={t("filters.sortAria")}
       >
         <Icon size={14} className="shrink-0" />
-        <span>Sort</span>
+        <span>{t("filters.sort")}</span>
       </summary>
 
       <div className="dropdown-content z-20 mt-2 w-52 rounded-box border border-base-300 bg-base-100 p-2 shadow">
         <p className="px-2 py-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide">
-          Sort by
+          {t("filters.sortBy")}
         </p>
-        {FIELDS.map(({ value, label }) => (
+        {fields.map(({ value, label }) => (
           <button
             key={value}
             type="button"
@@ -59,9 +60,9 @@ export function SortButton({ preference, onChange }: SortButtonProps) {
         <div className="divider my-1" />
 
         <p className="px-2 py-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide">
-          Order
+          {t("filters.sortOrder")}
         </p>
-        {DIRECTIONS.map(({ value, label }) => (
+        {directions.map(({ value, label }) => (
           <button
             key={value}
             type="button"

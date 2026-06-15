@@ -51,6 +51,7 @@ import {
   updateAssetRating,
   updateAssetVisibility,
 } from "../../api/tauri";
+import { useI18n } from "../../i18n";
 
 import { isThumbnailCached } from "../../api/tauri";
 type PhotoGridProps = {
@@ -121,6 +122,7 @@ export function PhotoGrid({
   onSelectedIdsChange,
   selectionCommand,
 }: PhotoGridProps) {
+  const { t } = useI18n();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -527,10 +529,10 @@ export function PhotoGrid({
 
   const loadedCountText = useMemo(() => {
     if (!hasNextPage) {
-      return `${displayAssets.length} loaded (all)`;
+      return t("photoGrid.loadedAll", { count: displayAssets.length });
     }
-    return `${displayAssets.length} loaded`;
-  }, [displayAssets.length, hasNextPage]);
+    return t("photoGrid.loaded", { count: displayAssets.length });
+  }, [displayAssets.length, hasNextPage, t]);
 
   const assetsById = useMemo(
     () => new Map(displayAssets.map((asset) => [asset.id, asset])),
@@ -1798,10 +1800,10 @@ export function PhotoGrid({
             type="button"
             className="btn btn-ghost btn-sm gap-1"
             onClick={() => setShowDatePicker(true)}
-            aria-label="Jump to date"
+            aria-label={t("photoGrid.jumpToDateAria")}
           >
             <Calendar size={16} />
-            Jump to Date
+            {t("photoGrid.jumpToDate")}
           </button>
         ) : null}
       </div>
@@ -1986,12 +1988,12 @@ export function PhotoGrid({
 
       {isFetching ? (
         <p className="shrink-0 mt-2 text-xs text-base-content/60">
-          Loading more assets...
+          {t("photoGrid.loadingMoreAssets")}
         </p>
       ) : null}
       {!hasNextPage ? (
         <p className="shrink-0 mt-2 text-xs text-base-content/60">
-          No more assets to load.
+          {t("photoGrid.noMoreAssets")}
         </p>
       ) : null}
 
@@ -2004,7 +2006,7 @@ export function PhotoGrid({
           <button
             type="button"
             className="btn btn-circle btn-sm btn-ghost absolute left-4 top-4 border border-white/15 bg-zinc-900 text-white"
-            aria-label="Back"
+            aria-label={t("photoGrid.backAria")}
             onClick={(event) => {
               event.stopPropagation();
               closeLightbox();
@@ -2026,7 +2028,7 @@ export function PhotoGrid({
               <button
                 type="button"
                 className="btn btn-circle btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
-                aria-label="Play live photo again"
+                aria-label={t("photoGrid.playLiveAgainAria")}
                 onClick={(event) => {
                   event.stopPropagation();
                   setIsPlayingLivePhoto(false);
@@ -2058,14 +2060,14 @@ export function PhotoGrid({
             <button
               type="button"
               className={`btn btn-sm border border-white/15 ${showInfoPanel ? "bg-white text-black hover:bg-white" : "bg-zinc-900 text-white"}`}
-              aria-label="Toggle info panel"
+              aria-label={t("photoGrid.toggleInfoAria")}
               onClick={(event) => {
                 event.stopPropagation();
                 setShowInfoPanel((current) => !current);
               }}
             >
               <Info size={16} />
-              Info
+              {t("photoGrid.info")}
             </button>
           </div>
 
@@ -2077,7 +2079,7 @@ export function PhotoGrid({
               <button
                 type="button"
                 className="pointer-events-auto btn btn-circle btn-md btn-ghost absolute left-2 top-1/2 z-30 -translate-y-1/2 border border-white/15 bg-zinc-900 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
-                aria-label="Previous image"
+                aria-label={t("photoGrid.previousImageAria")}
                 onClick={(event) => {
                   event.stopPropagation();
                   goPrev();
@@ -2090,7 +2092,7 @@ export function PhotoGrid({
               <button
                 type="button"
                 className="pointer-events-auto btn btn-circle btn-md btn-ghost absolute right-2 top-1/2 z-30 -translate-y-1/2 border border-white/15 bg-zinc-900 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
-                aria-label="Next image"
+                aria-label={t("photoGrid.nextImageAria")}
                 onClick={(event) => {
                   event.stopPropagation();
                   goNext();
@@ -2127,7 +2129,7 @@ export function PhotoGrid({
                   ) : (
                     <div className="flex items-center gap-2 text-sm text-white/80">
                       <span className="loading loading-spinner loading-sm" />
-                      Loading video...
+                      {t("photoGrid.loadingVideo")}
                     </div>
                   )
                 ) : isPlayingLivePhoto && activeAsset.livePhotoVideoId ? (
@@ -2300,6 +2302,7 @@ function AssetThumbnail({
     startedAtMs: number;
   } | null;
 }) {
+  const { t } = useI18n();
   const [src, setSrc] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [livePhotoVideoSrc, setLivePhotoVideoSrc] = useState<string | null>(
@@ -2542,7 +2545,7 @@ function AssetThumbnail({
             aria-hidden="true"
           />
         ) : (
-          "Loading preview..."
+          t("photoGrid.loadingPreview")
         )}
       </div>
     );
@@ -2554,7 +2557,9 @@ function AssetThumbnail({
         type="button"
         className="relative block h-full w-full cursor-zoom-in"
         onClick={onOpen}
-        aria-label={`Open ${asset.originalFileName} in full screen`}
+        aria-label={t("photoGrid.openFullscreenAria", {
+          name: asset.originalFileName,
+        })}
       >
         {thumbhashPlaceholderSrc ? (
           <img
@@ -2565,7 +2570,7 @@ function AssetThumbnail({
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center bg-base-300 text-xs text-base-content/60">
-            Loading preview...
+            {t("photoGrid.loadingPreview")}
           </div>
         )}
       </button>
@@ -2587,12 +2592,18 @@ function AssetThumbnail({
           retryTimeoutRef.current = null;
         }
       }}
-      aria-label={`Open ${asset.originalFileName} in full screen`}
+      aria-label={t("photoGrid.openFullscreenAria", {
+        name: asset.originalFileName,
+      })}
     >
       <div
         role="button"
         tabIndex={-1}
-        aria-label={isSelected ? "Deselect photo" : "Select photo"}
+        aria-label={
+          isSelected
+            ? t("photoGrid.deselectPhotoAria")
+            : t("photoGrid.selectPhotoAria")
+        }
         aria-pressed={isSelected}
         className={`absolute left-1 top-1 z-20 flex h-5 w-5 cursor-pointer items-center justify-center rounded border text-[10px] transition ${
           isSelected
@@ -2737,7 +2748,7 @@ function AssetThumbnail({
       {isLivePhoto ? (
         <div className="absolute right-1 top-1 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] text-white">
           <Film size={12} />
-          <span>LIVE</span>
+          <span>{t("photoGrid.liveBadge")}</span>
         </div>
       ) : null}
 

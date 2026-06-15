@@ -2,6 +2,7 @@ import { Archive, ArchiveRestore, Heart } from "lucide-react";
 import { Star } from "lucide-react";
 import { useState } from "react";
 import type { AssetSummary } from "../../types";
+import { useI18n } from "../../i18n";
 
 interface FullscreenMetadataBarProps {
   asset: AssetSummary;
@@ -22,6 +23,7 @@ export function FullscreenMetadataBar({
   onToggleArchive,
   onSetRating,
 }: FullscreenMetadataBarProps) {
+  const { t } = useI18n();
   const [hoverRating, setHoverRating] = useState<number | null>(null);
   const rating = asset.rating ?? 0;
 
@@ -50,7 +52,7 @@ export function FullscreenMetadataBar({
               onMouseEnter={() => setHoverRating(value)}
               onMouseLeave={() => setHoverRating(null)}
               disabled={isUpdatingRating}
-              aria-label={`Set rating to ${value}`}
+              aria-label={t("photoGrid.setRatingAria", { value })}
             >
               <Star
                 size={14}
@@ -67,14 +69,18 @@ export function FullscreenMetadataBar({
       <div className="join">
         <div
           className="tooltip"
-          data-tip={asset.isFavorite ? "Remove favorite" : "Add to favorites"}
+          data-tip={
+            asset.isFavorite
+              ? t("photoGrid.removeFavorite")
+              : t("photoGrid.addFavorite")
+          }
         >
           <button
             type="button"
             className="btn join-item btn-ghost btn-sm text-white/80"
             onClick={onToggleFavorite}
             disabled={isUpdatingFavorite}
-            aria-label="Toggle favorite"
+            aria-label={t("photoGrid.toggleFavoriteAria")}
           >
             <Heart
               size={14}
@@ -87,14 +93,16 @@ export function FullscreenMetadataBar({
 
         <div
           className="tooltip"
-          data-tip={asset.isArchived ? "Unarchive" : "Archive"}
+          data-tip={
+            asset.isArchived ? t("photoGrid.unarchive") : t("photoGrid.archive")
+          }
         >
           <button
             type="button"
             className="btn join-item btn-ghost btn-sm text-white/80"
             onClick={onToggleArchive}
             disabled={isUpdatingArchive}
-            aria-label="Toggle archive"
+            aria-label={t("photoGrid.toggleArchiveAria")}
           >
             {asset.isArchived ? (
               <ArchiveRestore size={14} className="text-info" />
