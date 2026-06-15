@@ -191,9 +191,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   };
 
   const handleClearCache = async () => {
-    if (
-      !window.confirm(t("settings.clearCacheConfirm"))
-    ) {
+    if (!window.confirm(t("settings.clearCacheConfirm"))) {
       return;
     }
     // TODO: Implement cache clearing

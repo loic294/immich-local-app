@@ -84,7 +84,8 @@ export function FullscreenInfoPanel({
           </span>
         ) : null}
         <p className="text-sm font-medium text-white">
-          {make ?? t("photoGrid.unknownMake")} {details?.camera ?? t("photoGrid.unknownCamera")}
+          {make ?? t("photoGrid.unknownMake")}{" "}
+          {details?.camera ?? t("photoGrid.unknownCamera")}
         </p>
         {details?.lens ? (
           <p className="mt-0.5 text-xs text-white/65">{details.lens}</p>
@@ -108,8 +109,14 @@ export function FullscreenInfoPanel({
         ) : null}
 
         <div className="space-y-1.5">
-          <InlineInfoRow label={t("photoGrid.labelFocalLength")} value={focalLength} />
-          <InlineInfoRow label={t("photoGrid.labelShutterSpeed")} value={shutterSpeed} />
+          <InlineInfoRow
+            label={t("photoGrid.labelFocalLength")}
+            value={focalLength}
+          />
+          <InlineInfoRow
+            label={t("photoGrid.labelShutterSpeed")}
+            value={shutterSpeed}
+          />
           <InlineInfoRow
             label={t("photoGrid.labelAperture")}
             value={formatAperture(aperture)}
@@ -153,7 +160,10 @@ export function FullscreenInfoPanel({
           unknownText={t("photoGrid.unknownValue")}
         />
 
-        <InfoInputRow label={t("photoGrid.labelFileLocation")} value={locationValue} />
+        <InfoInputRow
+          label={t("photoGrid.labelFileLocation")}
+          value={locationValue}
+        />
       </div>
 
       <div className="mt-3 space-y-2 rounded-sm bg-zinc-900 p-4">

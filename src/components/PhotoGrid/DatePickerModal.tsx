@@ -97,11 +97,15 @@ export function DatePickerModal({
           <X size={20} />
         </button>
 
-        <h2 className="mb-4 text-lg font-semibold">{t("photoGrid.datePickerTitle")}</h2>
+        <h2 className="mb-4 text-lg font-semibold">
+          {t("photoGrid.datePickerTitle")}
+        </h2>
 
         <div className="space-y-4">
           <div>
-            <label className="label text-sm font-medium">{t("photoGrid.datePickerYear")}</label>
+            <label className="label text-sm font-medium">
+              {t("photoGrid.datePickerYear")}
+            </label>
             <select
               value={selectedYear}
               onChange={(e) => {
@@ -129,7 +133,9 @@ export function DatePickerModal({
           </div>
 
           <div>
-            <label className="label text-sm font-medium">{t("photoGrid.datePickerMonth")}</label>
+            <label className="label text-sm font-medium">
+              {t("photoGrid.datePickerMonth")}
+            </label>
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(parseInt(e.target.value, 10))}

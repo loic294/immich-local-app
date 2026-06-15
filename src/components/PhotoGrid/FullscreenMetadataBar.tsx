@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Heart } from "lucide-react";
+import { Archive, ArchiveRestore, Heart, Trash, Trash2 } from "lucide-react";
 import { Star } from "lucide-react";
 import { useState } from "react";
 import type { AssetSummary } from "../../types";
@@ -105,9 +105,9 @@ export function FullscreenMetadataBar({
             aria-label={t("photoGrid.toggleArchiveAria")}
           >
             {asset.isArchived ? (
-              <ArchiveRestore size={14} className="text-info" />
+              <Trash size={14} className="text-info" />
             ) : (
-              <Archive size={14} className="text-white/80" />
+              <Trash2 size={14} className="text-white/80" />
             )}
           </button>
         </div>
