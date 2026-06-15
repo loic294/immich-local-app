@@ -1,5 +1,6 @@
 use crate::services::db::SyncState;
 use crate::AppState;
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use std::time::Instant;
 use tokio::sync::Semaphore;
@@ -430,6 +431,7 @@ pub async fn check_for_new_assets(
     // via "Force Full Sync". This is what keeps the app from continuously
     // re-syncing all files.
     const QUICK_SYNC_MAX_PAGES: u32 = 10;
+    const QUICK_SYNC_OVERLAP_HOURS: i64 = 24;
 
     // Refresh the people list once (single cheap request) so faces on any newly
     // discovered assets resolve correctly.
@@ -454,6 +456,8 @@ pub async fn check_for_new_assets(
     let mut total_fetched_items: usize = 0;
     let mut total_written_items: usize = 0;
     let mut total_new_items: usize = 0;
+    let mut overlap_window_start: Option<DateTime<Utc>> = None;
+    let mut overlap_window_reached = false;
 
     loop {
         let page_started_at = Instant::now();
@@ -473,6 +477,44 @@ pub async fn check_for_new_assets(
 
         let item_count = result.items.len();
         total_fetched_items += item_count;
+
+        let page_timestamps: Vec<DateTime<Utc>> = result
+            .items
+            .iter()
+            .filter_map(|asset| parse_asset_created_at_utc(asset.file_created_at.as_deref()))
+            .collect();
+
+        if page == 0 {
+            if let Some(latest_on_first_page) = page_timestamps.iter().max().cloned() {
+                let window_start = latest_on_first_page - Duration::hours(QUICK_SYNC_OVERLAP_HOURS);
+                overlap_window_start = Some(window_start);
+                log::warn!(
+                    "[sync.check_for_new_assets] overlap window anchored latest={} window_start={} hours={}",
+                    latest_on_first_page.to_rfc3339(),
+                    window_start.to_rfc3339(),
+                    QUICK_SYNC_OVERLAP_HOURS
+                );
+            } else {
+                log::warn!(
+                    "[sync.check_for_new_assets] page=0 had no parseable file_created_at timestamps; overlap-window stop condition disabled"
+                );
+            }
+        }
+
+        if let (Some(window_start), Some(oldest_on_page)) = (
+            overlap_window_start,
+            page_timestamps.iter().min().cloned(),
+        ) {
+            if oldest_on_page <= window_start {
+                overlap_window_reached = true;
+                log::warn!(
+                    "[sync.check_for_new_assets] overlap window reached on page={} oldest_on_page={} window_start={}",
+                    page,
+                    oldest_on_page.to_rfc3339(),
+                    window_start.to_rfc3339()
+                );
+            }
+        }
 
         log::warn!(
             "[sync.check_for_new_assets] fetched page={} item_count={} has_next_page={} fetch_duration_ms={}",
@@ -551,11 +593,18 @@ pub async fn check_for_new_assets(
 
         // Stop once we reach a page that contains nothing new (we've caught up).
         if new_on_page == 0 {
-            log::warn!(
-                "[sync.check_for_new_assets] stopping early: page {} had no new assets (caught up)",
-                page
-            );
-            break;
+            if overlap_window_start.is_some() && !overlap_window_reached {
+                log::warn!(
+                    "[sync.check_for_new_assets] continuing despite no new assets on page {}: overlap window not fully scanned yet",
+                    page
+                );
+            } else {
+                log::warn!(
+                    "[sync.check_for_new_assets] stopping early: page {} had no new assets and overlap window is covered",
+                    page
+                );
+                break;
+            }
         }
 
         if !result.has_next_page {
@@ -675,4 +724,15 @@ fn to_enriched_asset_record(
             .map(|m| m.person_ids.clone())
             .unwrap_or_default(),
     }
+}
+
+fn parse_asset_created_at_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
+    let raw = value?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|timestamp| timestamp.with_timezone(&Utc))
 }
