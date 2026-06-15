@@ -31,7 +31,9 @@ export function DaisyCalendarPicker({
         setOpen((event.currentTarget as HTMLDetailsElement).open);
       }}
     >
-      <summary className={`btn btn-sm w-full justify-between ${disabled ? "btn-disabled" : "btn-outline"}`}>
+      <summary
+        className={`btn btn-sm w-full justify-between ${disabled ? "btn-disabled" : "btn-outline"}`}
+      >
         <span className="truncate">{value ?? "Select date"}</span>
         <CalendarDays size={16} />
       </summary>
@@ -58,7 +60,9 @@ function parseDateOnly(value: string | null): Date | undefined {
   if (!value) {
     return undefined;
   }
-  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  const [year, month, day] = value
+    .split("-")
+    .map((part) => Number.parseInt(part, 10));
   if (!year || !month || !day) {
     return undefined;
   }
