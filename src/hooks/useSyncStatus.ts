@@ -148,6 +148,13 @@ export function useSyncStatus(): UseSyncStatusReturn {
       } else if (typeof err === "object" && err !== null && "message" in err) {
         message = String((err as any).message);
       }
+      // A transient "offline:" marker just means the server was unreachable for
+      // this quick check. The local cache is intact and the offline UI handles
+      // connectivity, so don't surface it as a hard error in the sync card.
+      if (message.startsWith("offline:")) {
+        console.warn("[useSyncStatus] quick sync skipped (offline)");
+        return false;
+      }
       console.error("Check error:", err);
       setError(message);
       return false;

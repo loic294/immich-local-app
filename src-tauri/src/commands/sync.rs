@@ -2,6 +2,7 @@ use crate::services::db::SyncState;
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::time::Instant;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -457,7 +458,9 @@ pub async fn check_for_new_assets(
     let mut total_written_items: usize = 0;
     let mut total_new_items: usize = 0;
     let mut overlap_window_start: Option<DateTime<Utc>> = None;
+    let mut overlap_window_end: Option<DateTime<Utc>> = None;
     let mut overlap_window_reached = false;
+    let mut overlap_remote_ids: HashSet<String> = HashSet::new();
 
     loop {
         let page_started_at = Instant::now();
@@ -488,6 +491,7 @@ pub async fn check_for_new_assets(
             if let Some(latest_on_first_page) = page_timestamps.iter().max().cloned() {
                 let window_start = latest_on_first_page - Duration::hours(QUICK_SYNC_OVERLAP_HOURS);
                 overlap_window_start = Some(window_start);
+                overlap_window_end = Some(latest_on_first_page);
                 log::warn!(
                     "[sync.check_for_new_assets] overlap window anchored latest={} window_start={} hours={}",
                     latest_on_first_page.to_rfc3339(),
@@ -513,6 +517,18 @@ pub async fn check_for_new_assets(
                     oldest_on_page.to_rfc3339(),
                     window_start.to_rfc3339()
                 );
+            }
+        }
+
+        if let (Some(window_start), Some(window_end)) = (overlap_window_start, overlap_window_end) {
+            for asset in &result.items {
+                let Some(created_at) = parse_asset_created_at_utc(asset.file_created_at.as_deref()) else {
+                    continue;
+                };
+
+                if created_at >= window_start && created_at <= window_end {
+                    overlap_remote_ids.insert(asset.id.clone());
+                }
             }
         }
 
@@ -542,15 +558,45 @@ pub async fn check_for_new_assets(
             .unwrap_or(page_ids.len());
         total_new_items += new_on_page;
 
-        // Hydrate each asset with full metadata and upsert (also refreshes recent
-        // edits to already-cached assets on the first page).
+        // Quick sync must stay cheap. Re-fetching full metadata for every asset
+        // on the page means one HTTP request per asset (100/page), which makes
+        // the sidebar "Check for New Photos" button appear to hang for tens of
+        // seconds even when nothing changed. Only enrich assets that are either
+        // genuinely new OR fall inside the recent overlap window (so recent
+        // edits to already-cached assets are still picked up). Already-cached
+        // assets outside the window are left untouched.
+        let existing_ids = state
+            .db
+            .get_existing_asset_ids(&page_ids)
+            .unwrap_or_default();
+
+        let (assets_to_enrich, skipped_cached): (
+            Vec<crate::services::immich_client::AssetSummary>,
+            usize,
+        ) = {
+            let mut to_enrich = Vec::with_capacity(result.items.len());
+            let mut skipped = 0usize;
+            for asset in result.items {
+                let is_new = !existing_ids.contains(&asset.id);
+                let in_overlap_window = overlap_remote_ids.contains(&asset.id);
+                if is_new || in_overlap_window {
+                    to_enrich.push(asset);
+                } else {
+                    skipped += 1;
+                }
+            }
+            (to_enrich, skipped)
+        };
+
+        // Hydrate the new / recently-edited assets with full metadata and upsert.
         let enrich_started_at = Instant::now();
         let enriched_assets =
-            enrich_assets_with_full_metadata(state.immich.clone(), result.items).await;
+            enrich_assets_with_full_metadata(state.immich.clone(), assets_to_enrich).await;
         log::warn!(
-            "[sync.check_for_new_assets] enriched page={} enriched_count={} new_on_page={} duration_ms={}",
+            "[sync.check_for_new_assets] enriched page={} enriched_count={} skipped_cached={} new_on_page={} duration_ms={}",
             page,
             enriched_assets.len(),
+            skipped_cached,
             new_on_page,
             enrich_started_at.elapsed().as_millis()
         );
@@ -622,6 +668,53 @@ pub async fn check_for_new_assets(
                 QUICK_SYNC_MAX_PAGES
             );
             break;
+        }
+    }
+
+    if let (Some(window_start), Some(window_end)) = (overlap_window_start, overlap_window_end) {
+        if overlap_window_reached {
+            let prune_started_at = Instant::now();
+            let local_ids = state
+                .db
+                .get_asset_ids_in_created_at_window(
+                    &window_start.to_rfc3339(),
+                    &window_end.to_rfc3339(),
+                )
+                .map_err(|err| {
+                    let _ = state.db.fail_check();
+                    format!("Failed to list local assets for quick-sync prune: {}", err)
+                })?;
+
+            let stale_ids: Vec<String> = local_ids
+                .into_iter()
+                .filter(|id| !overlap_remote_ids.contains(id))
+                .collect();
+
+            if stale_ids.is_empty() {
+                log::warn!(
+                    "[sync.check_for_new_assets] prune overlap window found no stale assets duration_ms={}",
+                    prune_started_at.elapsed().as_millis()
+                );
+            } else {
+                let deleted_count = state
+                    .db
+                    .delete_assets_and_links_by_ids(&stale_ids)
+                    .map_err(|err| {
+                        let _ = state.db.fail_check();
+                        format!("Failed to prune deleted assets during quick sync: {}", err)
+                    })?;
+
+                log::warn!(
+                    "[sync.check_for_new_assets] pruned stale assets in overlap window stale_count={} deleted_rows={} duration_ms={}",
+                    stale_ids.len(),
+                    deleted_count,
+                    prune_started_at.elapsed().as_millis()
+                );
+            }
+        } else {
+            log::warn!(
+                "[sync.check_for_new_assets] skipped overlap-window prune because overlap window was not fully scanned"
+            );
         }
     }
 

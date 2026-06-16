@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -1027,6 +1028,102 @@ impl Database {
         }
 
         Ok(ids.len() - existing)
+    }
+
+    /// Return the subset of the given asset ids that already exist in the local
+    /// cache. Quick sync uses this to skip the expensive per-asset metadata
+    /// fetch + re-write for already-cached assets that fall outside the recent
+    /// overlap window, so pressing "Check for New Photos" returns quickly when
+    /// there is nothing new.
+    pub fn get_existing_asset_ids(&self, ids: &[String]) -> Result<HashSet<String>, String> {
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let conn = self.open()?;
+        let mut existing = HashSet::with_capacity(ids.len());
+
+        for id in ids {
+            let found: i64 = conn
+                .query_row(
+                    "SELECT COUNT(1) FROM assets WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|err| err.to_string())?;
+
+            if found > 0 {
+                existing.insert(id.clone());
+            }
+        }
+
+        Ok(existing)
+    }
+
+    pub fn get_asset_ids_in_created_at_window(
+        &self,
+        window_start: &str,
+        window_end: &str,
+    ) -> Result<Vec<String>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT id
+                FROM assets
+                WHERE file_created_at IS NOT NULL
+                  AND julianday(file_created_at) >= julianday(?1)
+                  AND julianday(file_created_at) <= julianday(?2)
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let rows = stmt
+            .query_map(params![window_start, window_end], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?;
+
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row.map_err(|err| err.to_string())?);
+        }
+
+        Ok(ids)
+    }
+
+    pub fn delete_assets_and_links_by_ids(&self, ids: &[String]) -> Result<usize, String> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+        let placeholders = (1..=ids.len())
+            .map(|index| format!("?{}", index))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let delete_asset_people_sql =
+            format!("DELETE FROM asset_people WHERE asset_id IN ({})", placeholders);
+        tx.execute(&delete_asset_people_sql, params_from_iter(ids.iter()))
+            .map_err(|err| err.to_string())?;
+
+        let delete_album_assets_sql =
+            format!("DELETE FROM album_assets WHERE asset_id IN ({})", placeholders);
+        tx.execute(&delete_album_assets_sql, params_from_iter(ids.iter()))
+            .map_err(|err| err.to_string())?;
+
+        let delete_pending_mutations_sql =
+            format!("DELETE FROM pending_mutations WHERE asset_id IN ({})", placeholders);
+        tx.execute(&delete_pending_mutations_sql, params_from_iter(ids.iter()))
+            .map_err(|err| err.to_string())?;
+
+        let delete_assets_sql = format!("DELETE FROM assets WHERE id IN ({})", placeholders);
+        let deleted = tx
+            .execute(&delete_assets_sql, params_from_iter(ids.iter()))
+            .map_err(|err| err.to_string())?;
+
+        tx.commit().map_err(|err| err.to_string())?;
+        Ok(deleted)
     }
 
     pub fn upsert_assets_with_metadata(
