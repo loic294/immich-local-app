@@ -169,9 +169,7 @@ export function LoginScreen({
             </label>
 
             <label className="form-control w-full">
-              <span className="label-text mb-1">
-                {t("auth.passwordLabel")}
-              </span>
+              <span className="label-text mb-1">{t("auth.passwordLabel")}</span>
               <input
                 required
                 type="password"
