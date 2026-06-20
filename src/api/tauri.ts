@@ -89,6 +89,18 @@ export async function authenticate(
   });
 }
 
+export async function authenticateWithPassword(
+  serverUrl: string,
+  email: string,
+  password: string,
+): Promise<AuthResponse> {
+  return invoke<AuthResponse>("authenticate_with_password", {
+    serverUrl,
+    email,
+    password,
+  });
+}
+
 export async function restoreSession(): Promise<RestoreSessionResponse | null> {
   return invoke<RestoreSessionResponse | null>("restore_session");
 }

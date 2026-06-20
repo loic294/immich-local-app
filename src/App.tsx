@@ -33,6 +33,7 @@ export function App() {
     initiateOAuth,
     completeOAuthWithCode,
     login,
+    loginWithPassword,
     logout,
   } = useSession();
 
@@ -166,6 +167,13 @@ export function App() {
             await login({
               serverUrl: serverUrl ?? "http://localhost:2283",
               apiKey,
+            });
+          }}
+          onPasswordSubmit={async (email, password) => {
+            await loginWithPassword({
+              serverUrl: serverUrl ?? "http://localhost:2283",
+              email,
+              password,
             });
           }}
           onBack={() => {

@@ -289,6 +289,80 @@ impl ImmichClient {
         Ok(session)
     }
 
+    pub async fn login_with_credentials(
+        &self,
+        server_url: &str,
+        email: &str,
+        password: &str,
+    ) -> Result<AuthSession, String> {
+        let normalized_url = normalize_base(server_url);
+        let url = format!("{}/api/auth/login", normalized_url);
+        let payload = serde_json::json!({
+            "email": email,
+            "password": password,
+        });
+
+        log::info!(
+            "[auth:password] attempting credentials login server_url={} email={}",
+            normalized_url,
+            email
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "credentials login failed with status {}",
+                response.status()
+            ));
+        }
+
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        let value: Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
+
+        let access_token = value
+            .get("accessToken")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "credentials login response missing access token".to_string())?
+            .to_string();
+        let user_id = value
+            .get("userId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "credentials login response missing user id".to_string())?
+            .to_string();
+        let user_name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+
+        self.set_session_cookie(&normalized_url, &access_token)?;
+
+        let session = AuthSession {
+            server_url: normalized_url,
+            access_token,
+            refresh_token: None,
+            user_id,
+            user_name,
+        };
+
+        let mut guard = self.session.lock().await;
+        *guard = Some(session.clone());
+
+        log::info!(
+            "[auth:password] credentials login succeeded user_id={}",
+            session.user_id
+        );
+
+        Ok(session)
+    }
+
     /// Inject the Immich session cookie into the shared cookie jar so that
     /// subsequent requests authenticate as a session (OAuth) user. Immich
     /// resolves the session token (cookie / bearer) BEFORE the `x-api-key`

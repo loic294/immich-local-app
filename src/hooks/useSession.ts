@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   authenticate,
+  authenticateWithPassword,
   restoreSession,
   logoutFromServer,
   clearWebviewBrowsingData,
@@ -29,6 +30,11 @@ export type UseSessionReturn = {
   initiateOAuth: () => Promise<void>;
   completeOAuthWithCode: (callbackOrCode: string) => Promise<void>;
   login: (input: { serverUrl: string; apiKey: string }) => Promise<void>;
+  loginWithPassword: (input: {
+    serverUrl: string;
+    email: string;
+    password: string;
+  }) => Promise<void>;
   logout: () => void;
 };
 
@@ -362,6 +368,36 @@ export function useSession(): UseSessionReturn {
     }
   }
 
+  async function loginWithPassword(input: {
+    serverUrl: string;
+    email: string;
+    password: string;
+  }) {
+    setError(null);
+    setIsAuthenticating(true);
+
+    try {
+      const authResponse = await authenticateWithPassword(
+        input.serverUrl,
+        input.email,
+        input.password,
+      );
+      setSession({
+        serverUrl: input.serverUrl,
+        accessToken: "",
+        userId: authResponse.userId,
+        userName: authResponse.userName ?? authResponse.userId,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Unknown authentication error";
+      setError(message);
+      setSession(null);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
   function logout() {
     sessionStorage.removeItem("oauth_server_url");
     processedCallbackUrlsRef.current.clear();
@@ -401,6 +437,7 @@ export function useSession(): UseSessionReturn {
     initiateOAuth,
     completeOAuthWithCode,
     login,
+    loginWithPassword,
     logout,
   };
 }

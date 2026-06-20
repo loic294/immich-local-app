@@ -64,6 +64,48 @@ pub async fn authenticate(
 }
 
 #[tauri::command]
+pub async fn authenticate_with_password(
+    server_url: String,
+    email: String,
+    password: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<AuthResponse, String> {
+    log::info!(
+        "[auth:password:command] authenticating server_url={} email={}",
+        server_url,
+        email
+    );
+
+    let session = state
+        .immich
+        .login_with_credentials(&server_url, &email, &password)
+        .await
+        .map_err(|err| format!("password authentication failed: {err}"))?;
+
+    // Credential-based login returns a session token; store it in the OAuth
+    // slot so existing restore/session-cookie logic can rehydrate it.
+    state
+        .db
+        .save_oauth_token(&server_url, &session.access_token)
+        .map_err(|err| format!("failed to persist session token: {err}"))?;
+
+    if let Err(err) = state
+        .db
+        .save_user_info(&session.user_id, session.user_name.as_deref())
+    {
+        log::warn!("[auth:password:command] failed to persist user info: {err}");
+    }
+
+    let preview = session.access_token.chars().take(8).collect::<String>();
+
+    Ok(AuthResponse {
+        access_token_preview: preview,
+        user_id: session.user_id,
+        user_name: session.user_name,
+    })
+}
+
+#[tauri::command]
 pub async fn restore_session(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<RestoreSessionResponse>, String> {

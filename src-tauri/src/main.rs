@@ -22,8 +22,8 @@ use commands::assets::{
     update_asset_description, update_asset_favorite, update_asset_rating, update_asset_visibility,
 };
 use commands::auth::{
-    authenticate, check_server_connection, complete_oauth_flow, get_oauth_authorization_url,
-    get_profile_image, logout, restore_session,
+    authenticate, authenticate_with_password, check_server_connection, complete_oauth_flow,
+    get_oauth_authorization_url, get_profile_image, logout, restore_session,
 };
 use commands::folders::get_cached_folder_full_grid_layout;
 use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
@@ -95,6 +95,7 @@ pub fn main() {
         .manage(AppState { db, immich })
         .invoke_handler(tauri::generate_handler![
             authenticate,
+            authenticate_with_password,
             restore_session,
             check_server_connection,
             logout,
