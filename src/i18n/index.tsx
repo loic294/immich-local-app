@@ -69,6 +69,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       startFullSyncCta: "Starting Full Sync...",
       syncingCta: "Syncing...",
       forceFullSyncCta: "Force Full Sync",
+      syncAlbumsListCta: "Sync Albums List",
+      syncAlbumsListRunning: "Syncing Albums List...",
+      syncAlbumsListHelp:
+        "Refresh album list metadata now. The app also refreshes it automatically at launch and when reconnecting.",
       navigationDescription:
         "Choose which items appear in the sidebar. Settings is always shown.",
       myPhotosDescription:
@@ -383,6 +387,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       startFullSyncCta: "Demarrage de la synchro complete...",
       syncingCta: "Synchronisation...",
       forceFullSyncCta: "Forcer la synchronisation complete",
+      syncAlbumsListCta: "Synchroniser la liste des albums",
+      syncAlbumsListRunning: "Synchronisation de la liste des albums...",
+      syncAlbumsListHelp:
+        "Rafraîchit les métadonnées de la liste d'albums maintenant. L'application les rafraîchit aussi automatiquement au lancement et lors de la reconnexion.",
       navigationDescription:
         "Choisissez les elements affiches dans la barre laterale. Parametres est toujours visible.",
       myPhotosDescription:

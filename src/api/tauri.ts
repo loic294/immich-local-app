@@ -728,6 +728,11 @@ export async function refreshAlbumAssets(albumId: string): Promise<void> {
   return invoke<void>("refresh_album_assets", { albumId });
 }
 
+/** Refresh only the cached album list metadata (local-first). */
+export async function refreshAlbumList(): Promise<number> {
+  return invoke<number>("refresh_album_list");
+}
+
 export async function calculateGridLayout(
   assets: GridLayoutAssetInput[],
   containerWidth: number,

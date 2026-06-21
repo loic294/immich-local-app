@@ -4,6 +4,7 @@ import { useSyncStatus } from "./hooks/useSyncStatus";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useConnection } from "./hooks/useConnection";
 import { ConnectionProvider } from "./hooks/connectionContext";
+import { refreshAlbumList } from "./api/tauri";
 import { ServerUrlScreen } from "./components/Auth/ServerUrlScreen";
 import { LoginScreen } from "./components/Auth/LoginScreen";
 import { LoadingScreen } from "./components/Layout/LoadingScreen";
@@ -22,6 +23,7 @@ export function App() {
   const [showServerUrlScreen, setShowServerUrlScreen] = useState(false);
   const hasTriggeredResume = useRef(false);
   const hasQuickCheckedOnBoot = useRef(false);
+  const hasSyncedAlbumListOnBoot = useRef(false);
   const {
     session,
     error,
@@ -46,6 +48,12 @@ export function App() {
     initialOnline: !restoredOffline,
     onReconnect: () => {
       void checkForNewAssets();
+      void refreshAlbumList().catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!message.startsWith("offline:")) {
+          console.warn("[app] album list refresh on reconnect failed", err);
+        }
+      });
     },
   });
 
@@ -114,6 +122,29 @@ export function App() {
   // checks for recent new content when the app starts (after the initial full
   // sync has completed). This is a cheap "recent only" check, not a full
   // re-scan. See sync.instructions.md.
+  useEffect(() => {
+    if (
+      session &&
+      !isRestoringSession &&
+      isOnline === true &&
+      !hasSyncedAlbumListOnBoot.current
+    ) {
+      hasSyncedAlbumListOnBoot.current = true;
+      void refreshAlbumList().catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!message.startsWith("offline:")) {
+          console.warn("[app] startup album list refresh failed", err);
+        }
+      });
+    }
+  }, [session, isRestoringSession, isOnline]);
+
+  useEffect(() => {
+    if (!session) {
+      hasSyncedAlbumListOnBoot.current = false;
+    }
+  }, [session]);
+
   useEffect(() => {
     if (
       session &&

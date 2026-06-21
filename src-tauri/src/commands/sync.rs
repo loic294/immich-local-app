@@ -378,6 +378,40 @@ pub async fn refresh_album_assets(
     Ok(())
 }
 
+/// Refresh only the album LIST metadata (names, counts, ownership, etc.) and
+/// cache it locally. This does not refresh each album's assets.
+#[tauri::command]
+pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32, String> {
+    let started_at = Instant::now();
+    log::warn!("[sync.refresh_album_list] start");
+
+    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
+        if !state.immich.ping(&server_url).await {
+            log::warn!("[sync.refresh_album_list] server unreachable — skipping (offline)");
+            return Err("offline: server unreachable".to_string());
+        }
+    }
+
+    let albums = state
+        .immich
+        .get_albums()
+        .await
+        .map_err(|err| format!("fetch albums failed: {err}"))?;
+
+    state
+        .db
+        .upsert_albums(&albums)
+        .map_err(|err| format!("cache album list failed: {err}"))?;
+
+    log::warn!(
+        "[sync.refresh_album_list] complete album_count={} duration_ms={}",
+        albums.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(albums.len() as u32)
+}
+
 #[tauri::command]
 pub async fn check_for_new_assets(
     state: tauri::State<'_, AppState>,

@@ -35,7 +35,7 @@ use commands::shell::{
 };
 use commands::sync::{
     check_for_new_assets, force_full_asset_sync, get_sync_status, refresh_album_assets,
-    start_asset_sync,
+    refresh_album_list, start_asset_sync,
 };
 use services::db::Database;
 use services::immich_client::ImmichClient;
@@ -158,7 +158,8 @@ pub fn main() {
             start_asset_sync,
             force_full_asset_sync,
             check_for_new_assets,
-            refresh_album_assets
+            refresh_album_assets,
+            refresh_album_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

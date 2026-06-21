@@ -15,6 +15,7 @@ import {
   getCachePath,
   getSettings,
   openFolderInFileExplorer,
+  refreshAlbumList,
   updateSettings,
 } from "../api/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -48,6 +49,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [isSavingMyPhotosRules, setIsSavingMyPhotosRules] = useState(false);
   const [isForcingFullSync, setIsForcingFullSync] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
+  const [isSyncingAlbumsList, setIsSyncingAlbumsList] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const {
     forceFullSync,
@@ -305,6 +307,17 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     }
   };
 
+  const handleSyncAlbumsList = async () => {
+    try {
+      setIsSyncingAlbumsList(true);
+      await refreshAlbumList();
+    } catch (error) {
+      console.error("Failed to sync album list:", error);
+    } finally {
+      setIsSyncingAlbumsList(false);
+    }
+  };
+
   const formatBytes = (bytes: number): string => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -488,6 +501,27 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 <span className="text-xs">{error}</span>
               </div>
             )}
+
+            <div className="divider my-4"></div>
+
+            <div>
+              <button
+                type="button"
+                className="btn btn-outline btn-secondary gap-2"
+                onClick={() => {
+                  void handleSyncAlbumsList();
+                }}
+                disabled={isSyncingAlbumsList}
+              >
+                <RefreshCcw size={16} />
+                {isSyncingAlbumsList
+                  ? t("settings.syncAlbumsListRunning")
+                  : t("settings.syncAlbumsListCta")}
+              </button>
+              <p className="mt-2 text-sm text-base-content/60">
+                {t("settings.syncAlbumsListHelp")}
+              </p>
+            </div>
           </div>
         </div>
 
