@@ -128,6 +128,7 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       failedSaveMyPhotosRules: "Failed to save My Photos rules.",
       failedOpenLocalFolder: "Failed to open local folder in file explorer.",
       failedOpenCacheFolder: "Failed to open cache folder in file explorer.",
+      savedLocally: "Saved locally",
     },
     auth: {
       signInTitle: "Sign in to Immich",
@@ -240,6 +241,11 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       backToAlbumsAria: "Back to albums",
       saveLocally: "Save Locally",
       openExplorer: "Open in File Explorer",
+      deleteLocal: "Delete local album",
+      deletingLocal: "Deleting...",
+      deleteLocalConfirm:
+        "Delete local files for this album? This will remove the saved local folder.",
+      deleteLocalFailed: "Failed to delete local album",
       shareAlbum: "Share Album",
       saving: "Saving...",
       loadAlbumFailed: "Could not load album photos",
@@ -253,6 +259,7 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       albumsCount: "({count} albums)",
       unknownDate: "Unknown date",
       lightroomCta: "View more photos on Lightroom",
+      savedLocally: "Enregistré localement",
     },
     filters: {
       clearAllAria: "Clear all filters",
@@ -564,6 +571,11 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       backToAlbumsAria: "Retour aux albums",
       saveLocally: "Enregistrer localement",
       openExplorer: "Ouvrir dans l'explorateur",
+      deleteLocal: "Supprimer l'album local",
+      deletingLocal: "Suppression...",
+      deleteLocalConfirm:
+        "Supprimer les fichiers locaux de cet album? Cela supprimera le dossier local enregistre.",
+      deleteLocalFailed: "Impossible de supprimer l'album local",
       shareAlbum: "Partager l'album",
       saving: "Enregistrement...",
       loadAlbumFailed: "Impossible de charger les photos de l'album",

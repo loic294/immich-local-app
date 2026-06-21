@@ -145,6 +145,8 @@ pub struct AlbumSummary {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub saved_local_folder_path: Option<String>,
+    #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
     pub is_read_only: Option<bool>,

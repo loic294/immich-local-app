@@ -527,6 +527,35 @@ export function PhotoGrid({
     [assetOverrides, assets, hideArchivedAssets],
   );
 
+  // Full-layout mode only reloads when its effect dependencies change. Track
+  // the currently hidden archived/visibility IDs so archive apply actions
+  // trigger a layout reload instead of leaving stale rows visible.
+  const hiddenArchivedAssetIdsKey = useMemo(() => {
+    if (!hideArchivedAssets) {
+      return "";
+    }
+
+    const hiddenIds: string[] = [];
+    for (const asset of assets) {
+      const override = assetOverrides[asset.id];
+      const nextIsArchived =
+        typeof override?.isArchived === "boolean"
+          ? override.isArchived
+          : asset.isArchived;
+      const nextVisibility =
+        typeof override?.visibility === "string"
+          ? override.visibility
+          : asset.visibility;
+
+      if (nextIsArchived || (nextVisibility ?? "").toLowerCase() === "archive") {
+        hiddenIds.push(asset.id);
+      }
+    }
+
+    hiddenIds.sort();
+    return hiddenIds.join(",");
+  }, [assetOverrides, assets, hideArchivedAssets]);
+
   const loadedCountText = useMemo(() => {
     if (!hasNextPage) {
       return t("photoGrid.loadedAll", { count: displayAssets.length });
@@ -839,7 +868,7 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [loadFullLayout, viewportWidth]);
+  }, [hiddenArchivedAssetIdsKey, loadFullLayout, viewportWidth]);
 
   // Scroll-position-based load triggers used in full layout mode
   // (IntersectionObserver sentinels are disabled in this mode)

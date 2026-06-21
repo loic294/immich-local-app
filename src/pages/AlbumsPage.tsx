@@ -7,6 +7,7 @@ import {
   Check,
   LoaderCircle,
   FolderOpen,
+  Trash2,
 } from "lucide-react";
 import type { GridLayoutResponse } from "../types";
 import { AlbumCard } from "../components/Albums/AlbumCard";
@@ -30,6 +31,7 @@ import {
   canManageAlbumSharing,
   createAlbumWithAssets,
   createShareLinkForAssets,
+  deleteLocalAlbum,
   fetchAlbums,
   getCachedAlbumFullGridLayout,
   openFolderInFileExplorer,
@@ -62,10 +64,8 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const [showShareAlbumModal, setShowShareAlbumModal] = useState(false);
   const [canManageSharing, setCanManageSharing] = useState(false);
-  const [savedAlbumPaths, setSavedAlbumPaths] = useState<Map<string, string>>(
-    new Map(),
-  );
   const [isSavingAlbum, setIsSavingAlbum] = useState(false);
+  const [isDeletingLocalAlbum, setIsDeletingLocalAlbum] = useState(false);
   const [saveAlbumError, setSaveAlbumError] = useState<string | null>(null);
   const [showSaveProgressModal, setShowSaveProgressModal] = useState(false);
   // Bumped after a lazy on-open album refresh completes so the canvas grid
@@ -87,51 +87,16 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   } = useSortPreference();
 
   const getValidSavedFolderPath = useCallback(
-    (albumId: string): string | null => {
-      const value = savedAlbumPaths.get(albumId);
+    (album: AlbumSummary | null): string | null => {
+      const value = album?.savedLocalFolderPath;
       if (typeof value !== "string") {
         return null;
       }
       const normalized = value.trim();
       return normalized.length > 0 ? normalized : null;
     },
-    [savedAlbumPaths],
+    [],
   );
-
-  // Load saved albums from localStorage on mount
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("saved_album_paths");
-      if (saved) {
-        const paths = JSON.parse(saved) as Record<string, string>;
-        const normalizedEntries = Object.entries(paths).filter(
-          ([, folderPath]) =>
-            typeof folderPath === "string" && folderPath.trim().length > 0,
-        );
-        setSavedAlbumPaths(new Map(normalizedEntries));
-      }
-    } catch (err) {
-      console.error("[album-save-locally] Failed to load saved albums:", err);
-    }
-  }, []);
-
-  // Persist saved albums to localStorage whenever they change
-  useEffect(() => {
-    try {
-      const paths: Record<string, string> = {};
-      for (const [albumId, folderPath] of savedAlbumPaths.entries()) {
-        if (typeof folderPath === "string" && folderPath.trim().length > 0) {
-          paths[albumId] = folderPath;
-        }
-      }
-      localStorage.setItem("saved_album_paths", JSON.stringify(paths));
-    } catch (err) {
-      console.error(
-        "[album-save-locally] Failed to persist saved albums:",
-        err,
-      );
-    }
-  }, [savedAlbumPaths]);
 
   const albumGridFullLayout = useCallback<
     (containerWidth: number) => Promise<GridLayoutResponse>
@@ -386,11 +351,15 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
     try {
       const result = await saveAlbumLocally(selectedAlbum.id);
-      setSavedAlbumPaths((prev) => {
-        const updated = new Map(prev);
-        updated.set(selectedAlbum.id, result.folderPath);
-        return updated;
-      });
+      queryClient.setQueryData<AlbumSummary[]>(
+        ["albums"],
+        (current) =>
+          current?.map((album) =>
+            album.id === selectedAlbum.id
+              ? { ...album, savedLocalFolderPath: result.folderPath }
+              : album,
+          ) ?? current,
+      );
       console.log(
         "[album-save-locally] save success",
         "albumId=",
@@ -426,7 +395,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
       return;
     }
 
-    let folderPath = getValidSavedFolderPath(selectedAlbum.id);
+    let folderPath = getValidSavedFolderPath(selectedAlbum);
     console.log(
       "[album-save-locally] open folder start",
       "albumId=",
@@ -449,11 +418,15 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           throw new Error("Save completed but returned an empty folder path");
         }
 
-        setSavedAlbumPaths((prev) => {
-          const updated = new Map(prev);
-          updated.set(selectedAlbum.id, folderPath as string);
-          return updated;
-        });
+        queryClient.setQueryData<AlbumSummary[]>(
+          ["albums"],
+          (current) =>
+            current?.map((album) =>
+              album.id === selectedAlbum.id
+                ? { ...album, savedLocalFolderPath: folderPath as string }
+                : album,
+            ) ?? current,
+        );
         console.log(
           "[album-save-locally] recovered folder path from save_album_locally",
           selectedAlbum.id,
@@ -500,8 +473,53 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     }
   };
 
+  const handleDeleteLocalAlbum = async () => {
+    if (!selectedAlbum) {
+      console.error(
+        "[album-delete-local] delete requested with no album selected",
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(t("albums.deleteLocalConfirm"));
+    if (!confirmed) {
+      return;
+    }
+
+    setSaveAlbumError(null);
+    setIsDeletingLocalAlbum(true);
+
+    try {
+      await deleteLocalAlbum(selectedAlbum.id);
+      queryClient.setQueryData<AlbumSummary[]>(
+        ["albums"],
+        (current) =>
+          current?.map((album) =>
+            album.id === selectedAlbum.id
+              ? { ...album, savedLocalFolderPath: null }
+              : album,
+          ) ?? current,
+      );
+      console.log("[album-delete-local] success", "albumId=", selectedAlbum.id);
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : t("albums.deleteLocalFailed");
+      setSaveAlbumError(errorMessage);
+      console.error(
+        "[album-delete-local] failed",
+        "albumId=",
+        selectedAlbum.id,
+        "error=",
+        errorMessage,
+        err,
+      );
+    } finally {
+      setIsDeletingLocalAlbum(false);
+    }
+  };
+
   const isAlbumSavedLocally = selectedAlbum
-    ? Boolean(getValidSavedFolderPath(selectedAlbum.id))
+    ? Boolean(getValidSavedFolderPath(selectedAlbum))
     : false;
 
   return (
@@ -608,7 +626,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                   {!isAlbumSavedLocally ? (
                     <button
                       type="button"
-                      className="btn btn-sm btn-secondary shrink-0"
+                      className="btn btn-sm btn-primary shrink-0"
                       onClick={handleSaveAlbumLocally}
                       disabled={isSavingAlbum}
                     >
@@ -625,14 +643,35 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                       )}
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-ghost shrink-0"
-                      onClick={handleOpenAlbumFolder}
-                    >
-                      <FolderOpen size={16} />
-                      {t("albums.openExplorer")}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-neutral shrink-0"
+                        onClick={handleOpenAlbumFolder}
+                        disabled={isDeletingLocalAlbum}
+                      >
+                        <FolderOpen size={16} />
+                        {t("albums.openExplorer")}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-error btn-outline shrink-0"
+                        onClick={handleDeleteLocalAlbum}
+                        disabled={isDeletingLocalAlbum}
+                      >
+                        {isDeletingLocalAlbum ? (
+                          <>
+                            <LoaderCircle size={16} className="animate-spin" />
+                            {t("albums.deletingLocal")}
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 size={16} />
+                            {t("albums.deleteLocal")}
+                          </>
+                        )}
+                      </button>
+                    </>
                   )}
 
                   {canManageSharing ? (

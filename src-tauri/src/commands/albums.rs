@@ -10,6 +10,7 @@ use crate::AppState;
 use chrono::{DateTime, Datelike};
 use serde::Serialize;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::time::Instant;
 use tauri::Emitter;
@@ -65,6 +66,7 @@ pub async fn fetch_albums(state: tauri::State<'_, AppState>) -> Result<Vec<Album
                     email: album.owner_email,
                 }),
                 description: album.description,
+                saved_local_folder_path: album.saved_local_folder_path,
                 role: None,
                 is_read_only: None,
             }
@@ -415,8 +417,10 @@ pub async fn save_album_locally(
         asset_ids,
         destination.to_string_lossy().to_string(),
         true,
-        state,
+        state.clone(),
         Some(app.clone()),
+        "album_save",
+        Some(&album_id),
     )
     .await?;
 
@@ -437,6 +441,97 @@ pub async fn save_album_locally(
     );
 
     let result = destination.to_string_lossy().to_string();
+    state
+        .db
+        .update_album_saved_local_folder_path(&album_id, Some(&result))
+        .map_err(|err| format!("[album-save-locally] failed to persist saved folder path: {}", err))?;
     log::warn!("[album-save-locally] done folder_path={}", result);
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn delete_local_album(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    log::warn!("[album-delete-local] start album_id={}", album_id);
+
+    let albums = state
+        .db
+        .get_albums()
+        .map_err(|err| format!("[album-delete-local] failed to read albums from cache: {}", err))?;
+
+    let Some(album) = albums.iter().find(|a| a.id == album_id) else {
+        return Err(format!("[album-delete-local] album not found: {}", album_id));
+    };
+
+    let saved_folder_path = album
+        .saved_local_folder_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let tracked_paths = state
+        .db
+        .list_local_saved_asset_paths_for_album(&album_id)
+        .map_err(|err| format!("[album-delete-local] failed to read tracked paths: {}", err))?;
+
+    log::warn!(
+        "[album-delete-local] deleting tracked files album_id={} tracked_count={} folder_path={:?}",
+        album_id,
+        tracked_paths.len(),
+        saved_folder_path
+    );
+
+    let mut failures = Vec::new();
+
+    for path in &tracked_paths {
+        let local_path = Path::new(path);
+        if !local_path.exists() {
+            continue;
+        }
+
+        if let Err(err) = fs::remove_file(local_path) {
+            if err.kind() != ErrorKind::NotFound {
+                failures.push(format!("failed to delete file {}: {}", path, err));
+            }
+        }
+    }
+
+    if let Some(folder_path) = &saved_folder_path {
+        let folder = Path::new(folder_path);
+        if folder.exists() {
+            if let Err(err) = fs::remove_dir_all(folder) {
+                failures.push(format!("failed to delete folder {}: {}", folder_path, err));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        log::warn!(
+            "[album-delete-local] failed album_id={} failure_count={}",
+            album_id,
+            failures.len()
+        );
+        return Err(failures.join("; "));
+    }
+
+    state
+        .db
+        .delete_unresolved_local_saved_asset_changes_for_album(&album_id)
+        .map_err(|err| format!("[album-delete-local] failed to clear pending file-change rows: {}", err))?;
+
+    state
+        .db
+        .delete_local_saved_assets_for_album(&album_id)
+        .map_err(|err| format!("[album-delete-local] failed to clear tracked local rows: {}", err))?;
+
+    state
+        .db
+        .update_album_saved_local_folder_path(&album_id, None)
+        .map_err(|err| format!("[album-delete-local] failed to clear saved folder path: {}", err))?;
+
+    log::warn!("[album-delete-local] done album_id={}", album_id);
+    Ok(())
 }

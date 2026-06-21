@@ -111,6 +111,7 @@ export type AlbumSummary = {
   assetCount: number | null;
   owner: AlbumOwnerSummary | null;
   description: string | null;
+  savedLocalFolderPath: string | null;
   role: string | null;
   isReadOnly: boolean | null;
 };
@@ -285,4 +286,20 @@ export type AssetCacheDetails = {
   tags: string | null;
   exifInfoJson: string | null;
   isMyPhoto: boolean;
+};
+
+export type SavedLocalFileChange = {
+  id: number;
+  assetId: string;
+  localPath: string;
+  fileName: string;
+  changeKind: "deleted" | "modified" | string;
+  detailsJson: string;
+  detectedAt: string;
+};
+
+export type ApplySavedLocalFileChangesResult = {
+  appliedCount: number;
+  failedCount: number;
+  errors: string[];
 };

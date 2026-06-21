@@ -71,6 +71,8 @@ pub async fn copy_assets_to_local_folder(
         allow_cached_fallback,
         state,
         None,
+        "explorer_copy",
+        None,
     )
     .await
 }
@@ -81,6 +83,8 @@ pub async fn copy_assets_to_local_folder_internal(
     allow_cached_fallback: bool,
     state: tauri::State<'_, AppState>,
     app: Option<tauri::AppHandle>,
+    source_kind: &str,
+    album_id: Option<&str>,
 ) -> Result<LocalCopyResult, String> {
     log::info!(
         "[local-copy] start asset_count={} destination={} allow_cached_fallback={}",
@@ -165,6 +169,25 @@ pub async fn copy_assets_to_local_folder_internal(
                     &destination,
                     &mut used_names,
                 )
+                .map(|copied_path| {
+                    let (mtime_ms, size_bytes) = get_file_snapshot(&copied_path);
+                    if let Err(err) = state.db.upsert_local_saved_asset(
+                        &details.id,
+                        album_id,
+                        &copied_path.to_string_lossy(),
+                        &details.original_file_name,
+                        source_kind,
+                        mtime_ms,
+                        size_bytes,
+                    ) {
+                        log::warn!(
+                            "[local-copy] failed to persist copied file tracking asset_id={} path={} err={}",
+                            details.id,
+                            copied_path.to_string_lossy(),
+                            err
+                        );
+                    }
+                })
                 .is_ok()
                 {
                     copied_original_count += 1;
@@ -227,6 +250,25 @@ pub async fn copy_assets_to_local_folder_internal(
                         &destination,
                         &mut used_names,
                     )
+                    .map(|copied_path| {
+                        let (mtime_ms, size_bytes) = get_file_snapshot(&copied_path);
+                        if let Err(err) = state.db.upsert_local_saved_asset(
+                            &details.id,
+                            album_id,
+                            &copied_path.to_string_lossy(),
+                            &details.original_file_name,
+                            source_kind,
+                            mtime_ms,
+                            size_bytes,
+                        ) {
+                            log::warn!(
+                                "[local-copy] failed to persist copied file tracking asset_id={} path={} err={}",
+                                details.id,
+                                copied_path.to_string_lossy(),
+                                err
+                            );
+                        }
+                    })
                     .is_ok()
                     {
                         copied_original_count += 1;
@@ -325,6 +367,25 @@ pub async fn copy_assets_to_local_folder_internal(
             }
 
             if stage_file_to_destination(source, &fallback.original_file_name, &destination, &mut used_names)
+                .map(|copied_path| {
+                    let (mtime_ms, size_bytes) = get_file_snapshot(&copied_path);
+                    if let Err(err) = state.db.upsert_local_saved_asset(
+                        &fallback.asset_id,
+                        album_id,
+                        &copied_path.to_string_lossy(),
+                        &fallback.original_file_name,
+                        source_kind,
+                        mtime_ms,
+                        size_bytes,
+                    ) {
+                        log::warn!(
+                            "[local-copy] failed to persist copied fallback tracking asset_id={} path={} err={}",
+                            fallback.asset_id,
+                            copied_path.to_string_lossy(),
+                            err
+                        );
+                    }
+                })
                 .is_ok()
             {
                 copied_cached_count += 1;
@@ -535,6 +596,22 @@ fn infer_cache_kind(asset_type: Option<&str>, duration: Option<&str>) -> CacheKi
     } else {
         CacheKind::Thumbnail
     }
+}
+
+fn get_file_snapshot(path: &Path) -> (Option<i64>, Option<i64>) {
+    let metadata = match fs::metadata(path) {
+        Ok(value) => value,
+        Err(_) => return (None, None),
+    };
+
+    let size_bytes = i64::try_from(metadata.len()).ok();
+    let mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .and_then(|value| i64::try_from(value.as_millis()).ok());
+
+    (mtime_ms, size_bytes)
 }
 
 async fn cached_path_if_exists(

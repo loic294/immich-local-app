@@ -1,11 +1,40 @@
 use crate::services::db::SyncState;
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashSet;
-use std::time::Instant;
+use std::fs;
+use std::path::Path;
+use std::time::{Instant, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSavedFileChangeResponse {
+    pub id: i64,
+    pub asset_id: String,
+    pub local_path: String,
+    pub file_name: String,
+    pub change_kind: String,
+    pub details_json: String,
+    pub detected_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplySavedLocalFileChangesInput {
+    pub change_ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplySavedLocalFileChangesResult {
+    pub applied_count: u32,
+    pub failed_count: u32,
+    pub errors: Vec<String>,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -413,6 +442,345 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
 }
 
 #[tauri::command]
+pub async fn scan_saved_local_files(state: tauri::State<'_, AppState>) -> Result<u32, String> {
+    let tracked = state.db.list_local_saved_assets()?;
+    let mut created_changes = 0u32;
+
+    for item in tracked {
+        let path = Path::new(&item.local_path);
+        if !path.exists() {
+            let details_json = json!({
+                "previousMtimeMs": item.last_known_mtime_ms,
+                "previousSizeBytes": item.last_known_size_bytes,
+                "message": "File deleted locally"
+            })
+            .to_string();
+            state.db.upsert_unresolved_local_saved_asset_change(
+                &item.asset_id,
+                &item.local_path,
+                &item.file_name,
+                "deleted",
+                &details_json,
+            )?;
+            created_changes += 1;
+            continue;
+        }
+
+        let (current_mtime_ms, current_size_bytes) = get_file_snapshot(path);
+        let changed = current_mtime_ms != item.last_known_mtime_ms
+            || current_size_bytes != item.last_known_size_bytes;
+
+        if changed {
+            let details_json = json!({
+                "previousMtimeMs": item.last_known_mtime_ms,
+                "currentMtimeMs": current_mtime_ms,
+                "previousSizeBytes": item.last_known_size_bytes,
+                "currentSizeBytes": current_size_bytes,
+                "message": "File metadata changed locally"
+            })
+            .to_string();
+            state.db.upsert_unresolved_local_saved_asset_change(
+                &item.asset_id,
+                &item.local_path,
+                &item.file_name,
+                "modified",
+                &details_json,
+            )?;
+            created_changes += 1;
+        } else {
+            state
+                .db
+                .resolve_unresolved_local_saved_asset_change(&item.asset_id, &item.local_path, "deleted")?;
+            state
+                .db
+                .resolve_unresolved_local_saved_asset_change(&item.asset_id, &item.local_path, "modified")?;
+        }
+    }
+
+    Ok(created_changes)
+}
+
+#[tauri::command]
+pub async fn get_saved_local_file_changes(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<LocalSavedFileChangeResponse>, String> {
+    let changes = state.db.list_unresolved_local_saved_asset_changes()?;
+    Ok(changes
+        .into_iter()
+        .map(|item| LocalSavedFileChangeResponse {
+            id: item.id,
+            asset_id: item.asset_id,
+            local_path: item.local_path,
+            file_name: item.file_name,
+            change_kind: item.change_kind,
+            details_json: item.details_json,
+            detected_at: item.detected_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn apply_saved_local_file_changes(
+    input: ApplySavedLocalFileChangesInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<ApplySavedLocalFileChangesResult, String> {
+    let mut applied_count = 0u32;
+    let mut failed_count = 0u32;
+    let mut errors = Vec::new();
+
+    for change_id in input.change_ids {
+        let Some(change) = state.db.get_local_saved_asset_change_by_id(change_id)? else {
+            continue;
+        };
+
+        if change.resolved_at.is_some() {
+            continue;
+        }
+
+        match change.change_kind.as_str() {
+            "deleted" => {
+                // Archive in local cache immediately.
+                if let Err(err) = state.db.update_asset_visibility(&change.asset_id, "archive") {
+                    failed_count += 1;
+                    errors.push(format!(
+                        "failed to update local visibility for asset {}: {}",
+                        change.asset_id, err
+                    ));
+                    continue;
+                }
+
+                // Try server update; if unreachable enqueue mutation.
+                match state
+                    .immich
+                    .update_asset_visibility(&change.asset_id, "archive")
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(err) => {
+                        let server_reachable = if let Ok(Some((server_url, _token, _is_oauth))) =
+                            state.db.get_auth_credentials()
+                        {
+                            state.immich.ping(&server_url).await
+                        } else {
+                            false
+                        };
+
+                        if server_reachable {
+                            log::warn!(
+                                "[sync.apply_saved_local_file_changes] archive rejected while online asset_id={} err={}",
+                                change.asset_id,
+                                err
+                            );
+                            failed_count += 1;
+                            let err_lc = err.to_ascii_lowercase();
+                            let reason = if err_lc.contains("asset.update access") {
+                                "asset update permission denied (shared/read-only asset)".to_string()
+                            } else {
+                                err.clone()
+                            };
+                            errors.push(format!(
+                                "failed to archive asset {} while server is reachable: {}",
+                                change.asset_id, reason
+                            ));
+                            continue;
+                        }
+
+                        let payload_json = json!({ "visibility": "archive" }).to_string();
+                        log::warn!(
+                            "[sync.apply_saved_local_file_changes] offline while archiving asset_id={} queueing mutation",
+                            change.asset_id
+                        );
+                        if let Err(queue_err) = state
+                            .db
+                            .enqueue_mutation(&change.asset_id, "visibility", &payload_json)
+                        {
+                            failed_count += 1;
+                            errors.push(format!(
+                                "failed to archive asset {} offline and queue mutation: {} / {}",
+                                change.asset_id, err, queue_err
+                            ));
+                            continue;
+                        }
+                    }
+                }
+
+                // Remove all tracked local copies for this asset from disk.
+                match state.db.list_local_saved_asset_paths_for_asset(&change.asset_id) {
+                    Ok(paths) => {
+                        for path in paths {
+                            if let Err(err) = fs::remove_file(&path) {
+                                if Path::new(&path).exists() {
+                                    log::warn!(
+                                        "[saved-local-files] failed to delete path={} err={}",
+                                        path,
+                                        err
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "[saved-local-files] failed to list tracked paths for asset={} err={}",
+                            change.asset_id,
+                            err
+                        );
+                    }
+                }
+
+                if let Err(err) = state.db.delete_local_saved_assets_for_asset(&change.asset_id) {
+                    failed_count += 1;
+                    errors.push(format!(
+                        "failed to clear tracked local copies for asset {}: {}",
+                        change.asset_id, err
+                    ));
+                    continue;
+                }
+
+                if let Err(err) = state
+                    .db
+                    .resolve_local_saved_asset_changes_by_ids(&[change.id])
+                {
+                    failed_count += 1;
+                    errors.push(format!(
+                        "failed to resolve change {}: {}",
+                        change.id, err
+                    ));
+                    continue;
+                }
+
+                applied_count += 1;
+            }
+            "modified" => {
+                let path = Path::new(&change.local_path);
+                let (mtime_ms, size_bytes) = get_file_snapshot(path);
+                if let Err(err) = state.db.update_local_saved_asset_snapshot(
+                    &change.asset_id,
+                    &change.local_path,
+                    mtime_ms,
+                    size_bytes,
+                ) {
+                    failed_count += 1;
+                    errors.push(format!(
+                        "failed to update local snapshot for asset {}: {}",
+                        change.asset_id, err
+                    ));
+                    continue;
+                }
+
+                // Record the applied local metadata drift on the asset
+                // description so the change is reflected both in local cache
+                // and on the Immich server (or queued if offline).
+                let applied_note = format!(
+                    "[local-file-sync] Applied local file metadata change for '{}' (path: {}).",
+                    change.file_name, change.local_path
+                );
+                let next_description = match state.db.get_asset_details(&change.asset_id) {
+                    Ok(Some(details)) => match details.description {
+                        Some(existing) if !existing.trim().is_empty() => {
+                            format!("{}\n\n{}", existing, applied_note)
+                        }
+                        _ => applied_note.clone(),
+                    },
+                    _ => applied_note.clone(),
+                };
+
+                if let Err(err) = state
+                    .db
+                    .update_asset_description(&change.asset_id, Some(&next_description))
+                {
+                    failed_count += 1;
+                    errors.push(format!(
+                        "failed to persist local metadata note for asset {}: {}",
+                        change.asset_id, err
+                    ));
+                    continue;
+                }
+
+                match state
+                    .immich
+                    .update_asset_description(&change.asset_id, Some(next_description.as_str()))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(err) => {
+                        let server_reachable = if let Ok(Some((server_url, _token, _is_oauth))) =
+                            state.db.get_auth_credentials()
+                        {
+                            state.immich.ping(&server_url).await
+                        } else {
+                            false
+                        };
+
+                        if server_reachable {
+                            log::warn!(
+                                "[sync.apply_saved_local_file_changes] metadata-note update rejected while online asset_id={} err={}",
+                                change.asset_id,
+                                err
+                            );
+                            failed_count += 1;
+                            let err_lc = err.to_ascii_lowercase();
+                            let reason = if err_lc.contains("asset.update access") {
+                                "asset update permission denied (shared/read-only asset)".to_string()
+                            } else {
+                                err.clone()
+                            };
+                            errors.push(format!(
+                                "failed to update asset {} metadata note while server is reachable: {}",
+                                change.asset_id, reason
+                            ));
+                            continue;
+                        }
+
+                        let payload_json =
+                            json!({ "description": next_description }).to_string();
+                        log::warn!(
+                            "[sync.apply_saved_local_file_changes] offline while updating metadata note asset_id={} queueing mutation",
+                            change.asset_id
+                        );
+                        if let Err(queue_err) = state
+                            .db
+                            .enqueue_mutation(&change.asset_id, "description", &payload_json)
+                        {
+                            failed_count += 1;
+                            errors.push(format!(
+                                "failed to queue metadata-note mutation for asset {} offline: {} / {}",
+                                change.asset_id, err, queue_err
+                            ));
+                            continue;
+                        }
+                    }
+                }
+
+                if let Err(err) = state
+                    .db
+                    .resolve_local_saved_asset_changes_by_ids(&[change.id])
+                {
+                    failed_count += 1;
+                    errors.push(format!(
+                        "failed to resolve change {}: {}",
+                        change.id, err
+                    ));
+                    continue;
+                }
+
+                applied_count += 1;
+            }
+            other => {
+                failed_count += 1;
+                errors.push(format!("unsupported change kind for {}: {}", change.id, other));
+            }
+        }
+    }
+
+    Ok(ApplySavedLocalFileChangesResult {
+        applied_count,
+        failed_count,
+        errors,
+    })
+}
+
+#[tauri::command]
 pub async fn check_for_new_assets(
     state: tauri::State<'_, AppState>,
 ) -> Result<SyncStatusResponse, String> {
@@ -805,6 +1173,22 @@ async fn enrich_assets_with_full_metadata(
     }
 
     enriched_assets
+}
+
+fn get_file_snapshot(path: &Path) -> (Option<i64>, Option<i64>) {
+    let metadata = match fs::metadata(path) {
+        Ok(value) => value,
+        Err(_) => return (None, None),
+    };
+
+    let size_bytes = i64::try_from(metadata.len()).ok();
+    let mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .and_then(|value| i64::try_from(value.as_millis()).ok());
+
+    (mtime_ms, size_bytes)
 }
 
 #[derive(Debug, Clone)]

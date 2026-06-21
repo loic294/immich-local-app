@@ -7,7 +7,7 @@ mod util;
 
 use commands::albums::{
     add_assets_to_album, add_user_to_album, can_manage_album_sharing, create_album_with_assets,
-    create_share_link_for_assets, fetch_albums, get_album_assets_paged,
+    create_share_link_for_assets, delete_local_album, fetch_albums, get_album_assets_paged,
     get_album_share_link, get_album_share_users, get_cached_album_full_grid_layout,
     get_or_create_album_share_link, get_shareable_users, remove_user_from_album,
     save_album_locally,
@@ -34,8 +34,9 @@ use commands::shell::{
     open_folder_in_file_explorer, open_url,
 };
 use commands::sync::{
-    check_for_new_assets, force_full_asset_sync, get_sync_status, refresh_album_assets,
-    refresh_album_list, start_asset_sync,
+    apply_saved_local_file_changes, check_for_new_assets, force_full_asset_sync,
+    get_saved_local_file_changes, get_sync_status, refresh_album_assets, refresh_album_list,
+    scan_saved_local_files, start_asset_sync,
 };
 use services::db::Database;
 use services::immich_client::ImmichClient;
@@ -137,6 +138,7 @@ pub fn main() {
             add_user_to_album,
             remove_user_from_album,
             save_album_locally,
+            delete_local_album,
             get_unique_original_paths,
             get_folder_assets_paged,
             get_cached_folder_full_grid_layout,
@@ -159,7 +161,10 @@ pub fn main() {
             force_full_asset_sync,
             check_for_new_assets,
             refresh_album_assets,
-            refresh_album_list
+            refresh_album_list,
+            scan_saved_local_files,
+            get_saved_local_file_changes,
+            apply_saved_local_file_changes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

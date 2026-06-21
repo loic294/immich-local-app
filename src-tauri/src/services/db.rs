@@ -495,7 +495,36 @@ pub struct PendingMutation {
     pub kind: String,
     pub payload_json: String,
     pub created_at: String,
-}#[derive(Debug, Clone, Serialize, Deserialize)]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalSavedAsset {
+    pub id: i64,
+    pub asset_id: String,
+    pub album_id: Option<String>,
+    pub local_path: String,
+    pub file_name: String,
+    pub source_kind: String,
+    pub last_known_mtime_ms: Option<i64>,
+    pub last_known_size_bytes: Option<i64>,
+    pub last_scanned_at: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalSavedAssetChange {
+    pub id: i64,
+    pub asset_id: String,
+    pub local_path: String,
+    pub file_name: String,
+    pub change_kind: String,
+    pub details_json: String,
+    pub detected_at: String,
+    pub resolved_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetSummaryExtended {
     pub id: String,
     pub original_file_name: String,
@@ -537,6 +566,7 @@ pub struct CachedAlbumSummary {
     pub owner_name: Option<String>,
     pub owner_email: Option<String>,
     pub description: Option<String>,
+    pub saved_local_folder_path: Option<String>,
 }
 
 pub struct Database {
@@ -598,7 +628,8 @@ impl Database {
                 asset_count INTEGER,
                 owner_name TEXT,
                 owner_email TEXT,
-                description TEXT
+                description TEXT,
+                saved_local_folder_path TEXT
             );
             CREATE TABLE IF NOT EXISTS album_assets (
                 album_id TEXT NOT NULL,
@@ -639,6 +670,38 @@ impl Database {
                 payload_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS local_saved_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_id TEXT NOT NULL,
+                album_id TEXT,
+                local_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                last_known_mtime_ms INTEGER,
+                last_known_size_bytes INTEGER,
+                last_scanned_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                UNIQUE(asset_id, local_path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_local_saved_assets_asset_id
+                ON local_saved_assets(asset_id);
+            CREATE INDEX IF NOT EXISTS idx_local_saved_assets_local_path
+                ON local_saved_assets(local_path);
+            CREATE TABLE IF NOT EXISTS local_saved_asset_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_id TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                change_kind TEXT NOT NULL,
+                details_json TEXT NOT NULL,
+                detected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                resolved_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_local_saved_asset_changes_asset_id
+                ON local_saved_asset_changes(asset_id);
+            CREATE INDEX IF NOT EXISTS idx_local_saved_asset_changes_unresolved
+                ON local_saved_asset_changes(resolved_at, detected_at DESC);
             ",
         )
         .map_err(|err| err.to_string())?;
@@ -730,6 +793,29 @@ impl Database {
                 let alter_sql = format!("ALTER TABLE assets ADD COLUMN {} {}", col_name, col_type);
                 let _ = conn.execute(&alter_sql, []);
             }
+        }
+
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(albums)")
+            .map_err(|err| err.to_string())?;
+        let mut album_columns = Vec::new();
+        stmt.query_map([], |row| {
+            let col_name: String = row.get(1)?;
+            album_columns.push(col_name);
+            Ok(())
+        })
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+
+        drop(stmt);
+
+        if !album_columns.contains(&"saved_local_folder_path".to_string()) {
+            let _ = conn.execute(
+                "ALTER TABLE albums ADD COLUMN saved_local_folder_path TEXT",
+                [],
+            );
         }
 
         // Initialize default settings if not exist
@@ -978,6 +1064,345 @@ impl Database {
             row.get::<_, i64>(0)
         })
         .map_err(|err| err.to_string())
+    }
+
+    pub fn upsert_local_saved_asset(
+        &self,
+        asset_id: &str,
+        album_id: Option<&str>,
+        local_path: &str,
+        file_name: &str,
+        source_kind: &str,
+        last_known_mtime_ms: Option<i64>,
+        last_known_size_bytes: Option<i64>,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "
+            INSERT INTO local_saved_assets (
+                asset_id, album_id, local_path, file_name, source_kind,
+                last_known_mtime_ms, last_known_size_bytes, last_scanned_at, created_at, updated_at
+            )
+            VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            )
+            ON CONFLICT(asset_id, local_path) DO UPDATE SET
+                album_id = excluded.album_id,
+                file_name = excluded.file_name,
+                source_kind = excluded.source_kind,
+                last_known_mtime_ms = excluded.last_known_mtime_ms,
+                last_known_size_bytes = excluded.last_known_size_bytes,
+                last_scanned_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            ",
+            params![
+                asset_id,
+                album_id,
+                local_path,
+                file_name,
+                source_kind,
+                last_known_mtime_ms,
+                last_known_size_bytes,
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn list_local_saved_assets(&self) -> Result<Vec<LocalSavedAsset>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT id, asset_id, album_id, local_path, file_name, source_kind,
+                       last_known_mtime_ms, last_known_size_bytes, last_scanned_at,
+                       created_at, updated_at
+                FROM local_saved_assets
+                ORDER BY id ASC
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(LocalSavedAsset {
+                    id: row.get(0)?,
+                    asset_id: row.get(1)?,
+                    album_id: row.get(2)?,
+                    local_path: row.get(3)?,
+                    file_name: row.get(4)?,
+                    source_kind: row.get(5)?,
+                    last_known_mtime_ms: row.get(6)?,
+                    last_known_size_bytes: row.get(7)?,
+                    last_scanned_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            })
+            .map_err(|err| err.to_string())?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn list_local_saved_asset_paths_for_asset(
+        &self,
+        asset_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare("SELECT local_path FROM local_saved_assets WHERE asset_id = ?1")
+            .map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map(params![asset_id], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn list_local_saved_asset_paths_for_album(
+        &self,
+        album_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT local_path FROM local_saved_assets WHERE album_id = ?1 ORDER BY id ASC",
+            )
+            .map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map(params![album_id], |row| row.get::<_, String>(0))
+            .map_err(|err| err.to_string())?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn delete_local_saved_assets_for_asset(&self, asset_id: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "DELETE FROM local_saved_assets WHERE asset_id = ?1",
+            params![asset_id],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    pub fn delete_local_saved_assets_for_album(&self, album_id: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "DELETE FROM local_saved_assets WHERE album_id = ?1",
+            params![album_id],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    pub fn delete_unresolved_local_saved_asset_changes_for_album(
+        &self,
+        album_id: &str,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "
+            DELETE FROM local_saved_asset_changes
+            WHERE resolved_at IS NULL
+              AND EXISTS (
+                SELECT 1
+                FROM local_saved_assets lsa
+                WHERE lsa.album_id = ?1
+                  AND lsa.asset_id = local_saved_asset_changes.asset_id
+                  AND lsa.local_path = local_saved_asset_changes.local_path
+              )
+            ",
+            params![album_id],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    pub fn upsert_unresolved_local_saved_asset_change(
+        &self,
+        asset_id: &str,
+        local_path: &str,
+        file_name: &str,
+        change_kind: &str,
+        details_json: &str,
+    ) -> Result<(), String> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+        tx.execute(
+            "
+            DELETE FROM local_saved_asset_changes
+            WHERE asset_id = ?1
+              AND local_path = ?2
+              AND change_kind = ?3
+              AND resolved_at IS NULL
+            ",
+            params![asset_id, local_path, change_kind],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.execute(
+            "
+            INSERT INTO local_saved_asset_changes (
+                asset_id, local_path, file_name, change_kind, details_json, detected_at, resolved_at
+            )
+            VALUES (
+                ?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL
+            )
+            ",
+            params![asset_id, local_path, file_name, change_kind, details_json],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())
+    }
+
+    pub fn resolve_unresolved_local_saved_asset_change(
+        &self,
+        asset_id: &str,
+        local_path: &str,
+        change_kind: &str,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "
+            UPDATE local_saved_asset_changes
+            SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE asset_id = ?1
+              AND local_path = ?2
+              AND change_kind = ?3
+              AND resolved_at IS NULL
+            ",
+            params![asset_id, local_path, change_kind],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    pub fn list_unresolved_local_saved_asset_changes(
+        &self,
+    ) -> Result<Vec<LocalSavedAssetChange>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT id, asset_id, local_path, file_name, change_kind, details_json, detected_at, resolved_at
+                FROM local_saved_asset_changes
+                WHERE resolved_at IS NULL
+                ORDER BY detected_at DESC, id DESC
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(LocalSavedAssetChange {
+                    id: row.get(0)?,
+                    asset_id: row.get(1)?,
+                    local_path: row.get(2)?,
+                    file_name: row.get(3)?,
+                    change_kind: row.get(4)?,
+                    details_json: row.get(5)?,
+                    detected_at: row.get(6)?,
+                    resolved_at: row.get(7)?,
+                })
+            })
+            .map_err(|err| err.to_string())?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn get_local_saved_asset_change_by_id(
+        &self,
+        change_id: i64,
+    ) -> Result<Option<LocalSavedAssetChange>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT id, asset_id, local_path, file_name, change_kind, details_json, detected_at, resolved_at
+                FROM local_saved_asset_changes
+                WHERE id = ?1
+                ",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let row = stmt.query_row(params![change_id], |row| {
+            Ok(LocalSavedAssetChange {
+                id: row.get(0)?,
+                asset_id: row.get(1)?,
+                local_path: row.get(2)?,
+                file_name: row.get(3)?,
+                change_kind: row.get(4)?,
+                details_json: row.get(5)?,
+                detected_at: row.get(6)?,
+                resolved_at: row.get(7)?,
+            })
+        });
+
+        match row {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    pub fn resolve_local_saved_asset_changes_by_ids(&self, ids: &[i64]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self.open()?;
+        let placeholders = (1..=ids.len())
+            .map(|index| format!("?{}", index))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "
+            UPDATE local_saved_asset_changes
+            SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE id IN ({}) AND resolved_at IS NULL
+            ",
+            placeholders
+        );
+        conn.execute(&sql, params_from_iter(ids.iter()))
+            .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
+
+    pub fn update_local_saved_asset_snapshot(
+        &self,
+        asset_id: &str,
+        local_path: &str,
+        last_known_mtime_ms: Option<i64>,
+        last_known_size_bytes: Option<i64>,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "
+            UPDATE local_saved_assets
+            SET last_known_mtime_ms = ?1,
+                last_known_size_bytes = ?2,
+                last_scanned_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE asset_id = ?3 AND local_path = ?4
+            ",
+            params![
+                last_known_mtime_ms,
+                last_known_size_bytes,
+                asset_id,
+                local_path,
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
     }
 
     fn open(&self) -> Result<Connection, String> {
@@ -1822,9 +2247,10 @@ impl Database {
                 INSERT INTO albums (
                     id, album_name, album_thumbnail_asset_id, owner_id, shared,
                     created_at, updated_at, start_date, end_date, asset_count,
-                    owner_name, owner_email, description
+                    owner_name, owner_email, description, saved_local_folder_path
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                        (SELECT saved_local_folder_path FROM albums WHERE id = ?1))
                 ON CONFLICT(id) DO UPDATE SET
                     album_name = excluded.album_name,
                     album_thumbnail_asset_id = excluded.album_thumbnail_asset_id,
@@ -1837,7 +2263,8 @@ impl Database {
                     asset_count = excluded.asset_count,
                     owner_name = excluded.owner_name,
                     owner_email = excluded.owner_email,
-                    description = excluded.description
+                    description = excluded.description,
+                    saved_local_folder_path = COALESCE(albums.saved_local_folder_path, excluded.saved_local_folder_path)
                 ",
                 params![
                     album.id,
@@ -1868,7 +2295,7 @@ impl Database {
                 "
                 SELECT id, album_name, album_thumbnail_asset_id, owner_id, shared,
                        created_at, updated_at, start_date, end_date, asset_count,
-                       owner_name, owner_email, description
+                      owner_name, owner_email, description, saved_local_folder_path
                 FROM albums
                 ORDER BY COALESCE(start_date, created_at, updated_at) DESC
                 ",
@@ -1891,6 +2318,7 @@ impl Database {
                     owner_name: row.get(10)?,
                     owner_email: row.get(11)?,
                     description: row.get(12)?,
+                    saved_local_folder_path: row.get(13)?,
                 })
             })
             .map_err(|err| err.to_string())?;
@@ -1901,6 +2329,20 @@ impl Database {
         }
 
         Ok(items)
+    }
+
+    pub fn update_album_saved_local_folder_path(
+        &self,
+        album_id: &str,
+        folder_path: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE albums SET saved_local_folder_path = ?2 WHERE id = ?1",
+            params![album_id, folder_path],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
     }
 
     pub fn has_album(&self, album_id: &str) -> Result<bool, String> {

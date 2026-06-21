@@ -12,10 +12,12 @@ import type {
   GridLayoutResponse,
   TimelineLayoutResponse,
   MemorySummary,
+  SavedLocalFileChange,
   TimelineMonths,
   Settings,
   CacheStats,
   AssetCacheDetails,
+  ApplySavedLocalFileChangesResult,
   LocalCopyResult,
   AssetFilter,
   AssetFilterCriteria,
@@ -610,6 +612,10 @@ export async function saveAlbumLocally(
   return { folderPath };
 }
 
+export async function deleteLocalAlbum(albumId: string): Promise<void> {
+  return invoke<void>("delete_local_album", { albumId });
+}
+
 export async function fetchUniqueOriginalPaths(): Promise<string[]> {
   return getCachedUniqueOriginalPaths();
 }
@@ -731,6 +737,27 @@ export async function refreshAlbumAssets(albumId: string): Promise<void> {
 /** Refresh only the cached album list metadata (local-first). */
 export async function refreshAlbumList(): Promise<number> {
   return invoke<number>("refresh_album_list");
+}
+
+export async function scanSavedLocalFiles(): Promise<number> {
+  return invoke<number>("scan_saved_local_files");
+}
+
+export async function getSavedLocalFileChanges(): Promise<
+  SavedLocalFileChange[]
+> {
+  return invoke<SavedLocalFileChange[]>("get_saved_local_file_changes");
+}
+
+export async function applySavedLocalFileChanges(
+  changeIds: number[],
+): Promise<ApplySavedLocalFileChangesResult> {
+  return invoke<ApplySavedLocalFileChangesResult>(
+    "apply_saved_local_file_changes",
+    {
+      input: { changeIds },
+    },
+  );
 }
 
 export async function calculateGridLayout(

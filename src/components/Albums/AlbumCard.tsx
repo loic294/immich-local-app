@@ -8,6 +8,7 @@ interface AlbumCardProps {
   dateLabel: string;
   onClick?: () => void;
 }
+import { useI18n } from "../../i18n";
 
 export function AlbumCard({
   album,
@@ -15,7 +16,9 @@ export function AlbumCard({
   dateLabel,
   onClick,
 }: AlbumCardProps) {
+  const { t } = useI18n();
   const [cover, setCover] = useState<string | null>(null);
+  const isSavedLocally = Boolean(album.savedLocalFolderPath?.trim());
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +67,14 @@ export function AlbumCard({
             No cover
           </div>
         )}
+
+        {isSavedLocally ? (
+          <div className="absolute top-2 left-2">
+            <span className="badge badge-primary badge-sm">
+              {t("albums.savedLocally")}
+            </span>
+          </div>
+        ) : null}
       </figure>
 
       <div className="card-body gap-1 p-3">
