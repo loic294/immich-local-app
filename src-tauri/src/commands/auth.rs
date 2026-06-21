@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::fs;
 
 use crate::AppState;
 
@@ -210,11 +211,35 @@ pub async fn check_server_connection(state: tauri::State<'_, AppState>) -> Resul
 
 #[tauri::command]
 pub async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    log::info!("[auth:logout] clearing session, local cache, and local database state");
+
+    state.immich.clear_session().await;
+
     state
         .db
-        .clear_auth_credentials()
-        .map_err(|err| format!("failed to clear credentials: {err}"))?;
-    state.immich.clear_session().await;
+        .clear_local_library_cache()
+        .map_err(|err| format!("failed to clear local database cache: {err}"))?;
+
+    clear_media_cache_dirs().map_err(|err| format!("failed to clear media cache: {err}"))?;
+
+    log::info!("[auth:logout] local sign-out cleanup complete");
+    Ok(())
+}
+
+fn clear_media_cache_dirs() -> Result<(), String> {
+    let home = crate::util::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())?;
+    let cache_root = home.join(".config").join("immich-local-app");
+
+    for dir_name in ["thumbnails", "videos"] {
+        let cache_dir = cache_root.join(dir_name);
+        if cache_dir.exists() {
+            fs::remove_dir_all(&cache_dir)
+                .map_err(|err| format!("failed to remove {} cache dir: {err}", dir_name))?;
+        }
+        fs::create_dir_all(&cache_dir)
+            .map_err(|err| format!("failed to recreate {} cache dir: {err}", dir_name))?;
+    }
+
     Ok(())
 }
 

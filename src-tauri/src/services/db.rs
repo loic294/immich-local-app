@@ -829,6 +829,40 @@ impl Database {
         Ok(())
     }
 
+    /// Clear all locally cached library data for sign-out while preserving
+    /// user preferences/settings. This removes cached assets, albums, people,
+    /// sync state, pending offline mutations, and auth/user identity keys.
+    pub fn clear_local_library_cache(&self) -> Result<(), String> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+
+        tx.execute("DELETE FROM asset_people", [])
+            .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM album_assets", [])
+            .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM pending_mutations", [])
+            .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM people", [])
+            .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM albums", [])
+            .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM assets", [])
+            .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM sync_state", [])
+            .map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM settings WHERE key IN ('server_url', 'api_key', 'oauth_token', 'user_id', 'user_name')",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+
+        // Reset AUTOINCREMENT for pending mutation ids.
+        tx.execute("DELETE FROM sqlite_sequence WHERE name = 'pending_mutations'", [])
+            .map_err(|err| err.to_string())?;
+
+        tx.commit().map_err(|err| err.to_string())
+    }
+
     pub fn save_oauth_token(&self, server_url: &str, access_token: &str) -> Result<(), String> {
         let conn = self.open()?;
         conn.execute(
