@@ -83,7 +83,7 @@ export function Header({
 
   return (
     <header className="navbar border-b border-base-300 bg-base-100 px-3 sm:px-4">
-      <div className="navbar-start">
+      <div className="navbar-start gap-4">
         <label
           className="input input-bordered flex w-full min-w-[16rem] items-center gap-2 rounded-full sm:min-w-[20rem] lg:min-w-md"
           htmlFor="asset-search"
@@ -100,16 +100,10 @@ export function Header({
             }}
           />
         </label>
-      </div>
-
-      <div className="navbar-end gap-2">
-        {showSortButton && sortPreference && onSortChange && (
-          <SortButton preference={sortPreference} onChange={onSortChange} />
-        )}
         {showFilterButton && (
           <button
             className={`btn btn-sm ${
-              filterActive || filterOpen ? "btn-primary" : "btn-ghost"
+              filterActive || filterOpen ? "btn-primary" : "btn-outline"
             }`}
             type="button"
             onClick={onToggleFilter}
@@ -120,6 +114,12 @@ export function Header({
             <span>{t("header.filter")}</span>
           </button>
         )}
+        {showSortButton && sortPreference && onSortChange && (
+          <SortButton preference={sortPreference} onChange={onSortChange} />
+        )}
+      </div>
+
+      <div className="navbar-end gap-2">
         <details className="dropdown dropdown-end">
           <summary
             className="btn btn-ghost btn-circle list-none"
@@ -137,7 +137,7 @@ export function Header({
               </div>
             ) : (
               <div className="avatar placeholder">
-                <div className="w-8 rounded-full bg-primary text-primary-content text-xs font-bold">
+                <div className="w-8 rounded-full bg-primary text-primary-content text-xs font-bold flex justify-center items-center">
                   {initials}
                 </div>
               </div>

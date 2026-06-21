@@ -32,7 +32,7 @@ export function SortButton({ preference, onChange }: SortButtonProps) {
   return (
     <details className="dropdown dropdown-end">
       <summary
-        className={`btn btn-sm list-none ${active ? "btn-primary" : "btn-ghost"}`}
+        className={`btn btn-sm list-none ${active ? "btn-primary" : "btn-outline"}`}
         aria-label={t("filters.sortAria")}
       >
         <Icon size={14} className="shrink-0" />
