@@ -126,7 +126,10 @@ export function LocalSavedFileChangesModal({
 
         <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
           {applyErrors.length > 0 ? (
-            <div role="alert" className="alert alert-error alert-soft mb-3 text-sm">
+            <div
+              role="alert"
+              className="alert alert-error alert-soft mb-3 text-sm"
+            >
               <div className="space-y-1">
                 <p className="font-semibold">
                   Some changes could not be applied on the server.

@@ -547,7 +547,10 @@ export function PhotoGrid({
           ? override.visibility
           : asset.visibility;
 
-      if (nextIsArchived || (nextVisibility ?? "").toLowerCase() === "archive") {
+      if (
+        nextIsArchived ||
+        (nextVisibility ?? "").toLowerCase() === "archive"
+      ) {
         hiddenIds.push(asset.id);
       }
     }
