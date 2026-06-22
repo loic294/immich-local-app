@@ -53,9 +53,7 @@ export function setupFileLogging(): void {
   // Capture otherwise-unhandled frontend failures in the log file too.
   window.addEventListener("error", (event) => {
     const detail =
-      event.error instanceof Error
-        ? stringifyArg(event.error)
-        : event.message;
+      event.error instanceof Error ? stringifyArg(event.error) : event.message;
     void error(`[window.onerror] ${detail}`).catch(() => {});
   });
   window.addEventListener("unhandledrejection", (event) => {
