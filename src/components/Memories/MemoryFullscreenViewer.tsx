@@ -37,7 +37,10 @@ export function MemoryFullscreenViewer({
     let cancelled = false;
     async function load() {
       try {
-        const value = await getAssetThumbnail(currentAsset.id);
+        const value = await getAssetThumbnail(
+          currentAsset.id,
+          currentMemory?.accountId,
+        );
         if (!cancelled) {
           setActiveSrc(value);
         }
@@ -70,7 +73,7 @@ export function MemoryFullscreenViewer({
     let cancelled = false;
     async function load() {
       try {
-        const value = await getAssetThumbnail(cover.id);
+        const value = await getAssetThumbnail(cover.id, previousMemory.accountId);
         if (!cancelled) {
           setPreviousSrc(value);
         }
@@ -103,7 +106,7 @@ export function MemoryFullscreenViewer({
     let cancelled = false;
     async function load() {
       try {
-        const value = await getAssetThumbnail(cover.id);
+        const value = await getAssetThumbnail(cover.id, nextMemory.accountId);
         if (!cancelled) {
           setUpNextSrc(value);
         }

@@ -84,6 +84,8 @@ export type MemorySummary = {
   memoryAt: string | null;
   year: number | null;
   assets: AssetSummary[];
+  /** Locally-generated id of the account this memory was fetched from. */
+  accountId: string;
 };
 
 export type TimelineMonths = {

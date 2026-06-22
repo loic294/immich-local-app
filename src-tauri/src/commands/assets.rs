@@ -619,10 +619,16 @@ pub async fn get_cached_calendar_full_grid_layout(
 #[tauri::command]
 pub async fn get_asset_thumbnail(
     asset_id: String,
+    account_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     let started_at = Instant::now();
-    let (_account_id, client) = state.account_and_client_for_asset(&asset_id);
+    // Prefer an explicit account override (e.g. memory assets that may not be
+    // cached locally yet); otherwise resolve the owning account from the cache.
+    let client = match account_id.as_deref() {
+        Some(id) if !id.is_empty() => state.client_for(Some(id)),
+        _ => state.account_and_client_for_asset(&asset_id).1,
+    };
     let result = client
         .get_asset_thumbnail_data_url(&asset_id)
         .await

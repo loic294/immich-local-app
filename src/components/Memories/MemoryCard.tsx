@@ -4,6 +4,7 @@ import { getAssetThumbnail } from "../../api/tauri";
 
 interface MemoryCardProps {
   assetId: string;
+  accountId?: string;
   label: string;
   name: string;
   isActive: boolean;
@@ -12,6 +13,7 @@ interface MemoryCardProps {
 
 export function MemoryCard({
   assetId,
+  accountId,
   label,
   name,
   isActive,
@@ -24,7 +26,7 @@ export function MemoryCard({
 
     async function load() {
       try {
-        const value = await getAssetThumbnail(assetId);
+        const value = await getAssetThumbnail(assetId, accountId);
         if (!cancelled) {
           setSrc(value);
         }
@@ -39,7 +41,7 @@ export function MemoryCard({
     return () => {
       cancelled = true;
     };
-  }, [assetId]);
+  }, [assetId, accountId]);
 
   return (
     <button

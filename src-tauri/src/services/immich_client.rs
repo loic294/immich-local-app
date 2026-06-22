@@ -117,6 +117,10 @@ pub struct MemorySummary {
     pub year: Option<i32>,
     #[serde(default)]
     pub assets: Vec<AssetSummary>,
+    /// Locally-generated id of the account this memory was fetched from. Set by
+    /// the command layer after fetching; the server payload never provides it.
+    #[serde(default)]
+    pub account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

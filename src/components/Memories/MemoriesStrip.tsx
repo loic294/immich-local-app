@@ -22,6 +22,7 @@ export function MemoriesStrip({
         <MemoryCard
           key={memory.id}
           assetId={memory.coverAssetId}
+          accountId={memory.accountId}
           label={memory.label}
           name={memory.name}
           isActive={memory.id === activeMemoryId}

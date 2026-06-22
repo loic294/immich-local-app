@@ -370,7 +370,10 @@ export async function getCachedFolderFullGridLayout(
   });
 }
 
-export async function getAssetThumbnail(assetId: string): Promise<string> {
+export async function getAssetThumbnail(
+  assetId: string,
+  accountId?: string | null,
+): Promise<string> {
   // Check cache first
   const cached = thumbnailCache.get(assetId);
   if (cached) {
@@ -399,6 +402,7 @@ export async function getAssetThumbnail(assetId: string): Promise<string> {
   thumbnailCacheMisses++;
   const promise = invoke<string>("get_asset_thumbnail", {
     assetId,
+    accountId: accountId ?? null,
   });
 
   // Store the promise to deduplicate concurrent requests

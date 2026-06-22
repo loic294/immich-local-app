@@ -6,6 +6,8 @@ export type MemoryItem = {
   label: string;
   name: string;
   assets: AssetSummary[];
+  /** Account this memory belongs to, for routing thumbnail loads. */
+  accountId: string;
 };
 
 export function toMemoryItem(memory: MemorySummary): MemoryItem | null {
@@ -25,6 +27,7 @@ export function toMemoryItem(memory: MemorySummary): MemoryItem | null {
     label,
     name: cover.originalFileName,
     assets: memory.assets,
+    accountId: memory.accountId,
   };
 }
 
