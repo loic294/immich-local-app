@@ -19,7 +19,9 @@ export type UseSyncStatusReturn = {
   progress: number; // 0-100
   error: string | null;
   startSync: () => Promise<void>;
-  forceFullSync: () => Promise<void>;  cancelSync: () => Promise<void>;  checkForNewAssets: () => Promise<boolean>; // Quick sync. Returns true if new assets found
+  forceFullSync: () => Promise<void>;
+  cancelSync: () => Promise<void>;
+  checkForNewAssets: () => Promise<boolean>; // Quick sync. Returns true if new assets found
 };
 
 const CHECK_STALE_TIMEOUT = 2 * 60 * 1000; // 2 minutes
