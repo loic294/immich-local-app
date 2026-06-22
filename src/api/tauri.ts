@@ -46,6 +46,20 @@ export type OAuthUrlResponse = {
   authorizationUrl: string;
 };
 
+/** A locally-registered Immich account. The auth token is never sent to the
+ *  frontend (it is stripped server-side). */
+export type Account = {
+  id: string;
+  serverUrl: string;
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  authType: "api_key" | "oauth" | "password";
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 // Thumbnail cache: asset ID -> data URL
 const thumbnailCache = new Map<string, string>();
 
@@ -124,6 +138,68 @@ export async function getPendingMutationCount(): Promise<number> {
 
 export async function logoutFromServer(): Promise<void> {
   return invoke<void>("logout");
+}
+
+// ---------------------------------------------------------------------------
+// Multi-account management
+// ---------------------------------------------------------------------------
+
+/** List every locally-registered account (primary first). */
+export async function listAccounts(): Promise<Account[]> {
+  return invoke<Account[]>("list_accounts");
+}
+
+/** Change which account is primary. */
+export async function setPrimaryAccount(accountId: string): Promise<void> {
+  return invoke<void>("set_primary_account", { accountId });
+}
+
+/** Remove an account. Resolves with the id of the new primary if it changed. */
+export async function removeAccount(accountId: string): Promise<string | null> {
+  return invoke<string | null>("remove_account", { accountId });
+}
+
+/** Add a secondary account using an API key. */
+export async function addAccountWithKey(
+  serverUrl: string,
+  apiKey: string,
+): Promise<Account> {
+  return invoke<Account>("add_account_with_key", { serverUrl, apiKey });
+}
+
+/** Add a secondary account using email + password. */
+export async function addAccountWithPassword(
+  serverUrl: string,
+  email: string,
+  password: string,
+): Promise<Account> {
+  return invoke<Account>("add_account_with_password", {
+    serverUrl,
+    email,
+    password,
+  });
+}
+
+/** Begin an add-account OAuth flow; returns the authorization URL to open. */
+export async function addAccountOAuthUrl(
+  serverUrl: string,
+  redirectUri?: string,
+): Promise<OAuthUrlResponse> {
+  return invoke<OAuthUrlResponse>("add_account_oauth_url", {
+    serverUrl,
+    redirectUri,
+  });
+}
+
+/** Complete an add-account OAuth flow started by addAccountOAuthUrl. */
+export async function addAccountCompleteOAuth(
+  serverUrl: string,
+  callbackUrl: string,
+): Promise<Account> {
+  return invoke<Account>("add_account_complete_oauth", {
+    serverUrl,
+    callbackUrl,
+  });
 }
 
 export async function clearWebviewBrowsingData(): Promise<void> {

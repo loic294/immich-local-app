@@ -152,21 +152,61 @@ pub async fn create_album_with_assets(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AlbumSummary, String> {
-    let created = state
-        .immich
+    // New albums are created using the PRIMARY account.
+    let primary = state
+        .db
+        .get_primary_account()
+        .map_err(|err| format!("read primary account failed: {err}"))?
+        .ok_or_else(|| "no primary account configured".to_string())?;
+    let primary_client = state.client_for(Some(&primary.id));
+
+    let created = primary_client
         .create_album_with_assets(&album_name, &asset_ids)
         .await
         .map_err(|err| format!("create album failed: {err}"))?;
 
-    let albums = state
-        .immich
+    // Add every OTHER account that lives on the SAME server as an album editor so
+    // the album is collaboratively editable across accounts. Accounts on a
+    // different server cannot be added and are skipped (logged).
+    let all_accounts = state
+        .db
+        .list_accounts()
+        .map_err(|err| format!("list accounts failed: {err}"))?;
+    for account in all_accounts {
+        if account.id == primary.id {
+            continue;
+        }
+        if account.server_url != primary.server_url {
+            log::warn!(
+                "[albums] skipping editor add for account {} on different server ({} != {})",
+                account.id, account.server_url, primary.server_url
+            );
+            continue;
+        }
+        match primary_client
+            .add_user_to_album(&created.id, &account.user_id, "editor")
+            .await
+        {
+            Ok(_) => log::info!(
+                "[albums] added account {} (user {}) as editor to album {}",
+                account.id, account.user_id, created.id
+            ),
+            Err(err) => log::warn!(
+                "[albums] failed to add account {} (user {}) as editor to album {}: {}",
+                account.id, account.user_id, created.id, err
+            ),
+        }
+    }
+
+    // Refresh and cache the primary account's album list.
+    let albums = primary_client
         .get_albums()
         .await
         .map_err(|err| format!("refresh album list failed: {err}"))?;
 
     state
         .db
-        .upsert_albums(&albums)
+        .upsert_albums(&primary.id, &albums)
         .map_err(|err| format!("album cache write failed: {err}"))?;
 
     Ok(created)
@@ -178,21 +218,22 @@ pub async fn add_assets_to_album(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .immich
+    // Route to the account that owns the album.
+    let (account_id, client) = state.account_and_client_for_album(&album_id);
+
+    client
         .add_assets_to_album(&album_id, &asset_ids)
         .await
         .map_err(|err| format!("add assets to album failed: {err}"))?;
 
-    let albums = state
-        .immich
+    let albums = client
         .get_albums()
         .await
         .map_err(|err| format!("refresh album list failed: {err}"))?;
 
     state
         .db
-        .upsert_albums(&albums)
+        .upsert_albums(&account_id, &albums)
         .map_err(|err| format!("album cache write failed: {err}"))?;
 
     Ok(())
@@ -203,8 +244,13 @@ pub async fn create_share_link_for_assets(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    state
-        .immich
+    // Share links are scoped to a single server; route via the first asset's
+    // owning account.
+    let client = match asset_ids.first() {
+        Some(first) => state.account_and_client_for_asset(first).1,
+        None => state.immich.clone(),
+    };
+    client
         .create_share_link_for_assets(&asset_ids)
         .await
         .map_err(|err| format!("create share link failed: {err}"))
@@ -215,8 +261,8 @@ pub async fn can_manage_album_sharing(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
-    state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    client
         .can_manage_album_sharing(&album_id)
         .await
         .map_err(|err| format!("can manage album sharing failed: {err}"))
@@ -227,8 +273,8 @@ pub async fn get_or_create_album_share_link(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    client
         .get_or_create_album_share_link(&album_id)
         .await
         .map_err(|err| format!("get or create album share link failed: {err}"))
@@ -239,8 +285,8 @@ pub async fn get_album_share_link(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    client
         .get_album_share_link(&album_id)
         .await
         .map_err(|err| format!("get album share link failed: {err}"))
@@ -251,8 +297,8 @@ pub async fn get_album_share_users(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<AlbumShareUser>, String> {
-    state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    client
         .get_album_share_users(&album_id)
         .await
         .map_err(|err| format!("get album share users failed: {err}"))
@@ -276,8 +322,8 @@ pub async fn add_user_to_album(
     role: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    client
         .add_user_to_album(&album_id, &user_id, &role)
         .await
         .map_err(|err| format!("add user to album failed: {err}"))
@@ -289,8 +335,8 @@ pub async fn remove_user_from_album(
     user_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    client
         .remove_user_from_album(&album_id, &user_id)
         .await
         .map_err(|err| format!("remove user from album failed: {err}"))
@@ -379,9 +425,9 @@ pub async fn save_album_locally(
     fs::create_dir_all(&destination)
         .map_err(|err| format!("[album-save-locally] failed to create folder: {}", err))?;
 
-    // Get all assets in the album
-    let assets = state
-        .immich
+    // Get all assets in the album from the album's owning account.
+    let (_account_id, album_client) = state.account_and_client_for_album(&album_id);
+    let assets = album_client
         .get_album_assets(&album_id)
         .await
         .map_err(|err| format!("[album-save-locally] failed to get album assets: {}", err))?;

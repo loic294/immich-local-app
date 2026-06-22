@@ -36,6 +36,8 @@ pub struct AssetFilterCriteria {
     pub camera: Option<String>,
     /// Person id to match via the `asset_people` junction table.
     pub person_id: Option<String>,
+    /// Account id to scope the result set to a single account's assets.
+    pub account_id: Option<String>,
 }
 
 impl AssetFilterCriteria {
@@ -48,6 +50,7 @@ impl AssetFilterCriteria {
             && self.media_type.as_deref().map(str::trim).unwrap_or("").is_empty()
             && self.camera.as_deref().map(str::trim).unwrap_or("").is_empty()
             && self.person_id.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && self.account_id.as_deref().map(str::trim).unwrap_or("").is_empty()
     }
 }
 
@@ -413,6 +416,22 @@ fn criteria_filter(
         }
     }
 
+    if let Some(account_id) = criteria.account_id.as_deref().map(str::trim) {
+        if !account_id.is_empty() {
+            // `account_id` exists on several tables (assets, album_assets), so in
+            // JOIN contexts it must be qualified with the assets table alias
+            // derived from `id_column` (e.g. "a.id" -> "a.") to avoid an
+            // ambiguous-column SQL error.
+            let prefix = id_column
+                .rsplit_once('.')
+                .map(|(alias, _)| format!("{alias}."))
+                .unwrap_or_default();
+            conditions.push(format!("{prefix}account_id = ?{}", next_index));
+            params.push(Box::new(account_id.to_string()));
+            next_index += 1;
+        }
+    }
+
     let _ = next_index;
 
     if conditions.is_empty() {
@@ -492,6 +511,7 @@ pub struct SyncState {
 pub struct PendingMutation {
     pub id: i64,
     pub asset_id: String,
+    pub account_id: String,
     pub kind: String,
     pub payload_json: String,
     pub created_at: String,
@@ -549,6 +569,12 @@ pub struct AssetSummaryExtended {
     pub tags: Option<String>,
     pub exif_info_json: Option<String>,
     pub is_my_photo: bool,
+    /// Locally-generated id of the account this asset was synced from.
+    #[serde(default)]
+    pub account_id: String,
+    /// Display name (or email) of the owning account, for the info panel.
+    #[serde(default)]
+    pub account_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -567,6 +593,43 @@ pub struct CachedAlbumSummary {
     pub owner_email: Option<String>,
     pub description: Option<String>,
     pub saved_local_folder_path: Option<String>,
+    /// Locally-generated id of the account this album was synced from.
+    #[serde(default)]
+    pub account_id: String,
+}
+
+/// A locally-registered Immich account. The app supports multiple accounts
+/// (potentially on different servers) signed in simultaneously; one is marked
+/// as the primary account. The locally-generated `id` is used to scope every
+/// cached row to its owning account because server-side ids (assets, albums)
+/// can collide across different servers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Account {
+    /// Locally-generated UUID (collision-safe across servers).
+    pub id: String,
+    pub server_url: String,
+    /// The Immich user id on `server_url`.
+    pub user_id: String,
+    pub user_name: Option<String>,
+    pub user_email: Option<String>,
+    /// One of: "api_key", "oauth", "password".
+    pub auth_type: String,
+    /// Secret credential (API key or session token). Never serialized to the
+    /// frontend.
+    #[serde(skip_serializing)]
+    pub token: String,
+    pub is_primary: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Account {
+    /// True when this account authenticates via the Immich session cookie
+    /// (OAuth / password sessions) rather than the `x-api-key` header.
+    pub fn uses_cookie_auth(&self) -> bool {
+        self.auth_type != "api_key"
+    }
 }
 
 pub struct Database {
@@ -592,6 +655,7 @@ impl Database {
             "
             CREATE TABLE IF NOT EXISTS assets (
                 id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL DEFAULT '',
                 original_file_name TEXT NOT NULL,
                 description TEXT,
                 original_path TEXT,
@@ -617,6 +681,7 @@ impl Database {
             );
             CREATE TABLE IF NOT EXISTS albums (
                 id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL DEFAULT '',
                 album_name TEXT NOT NULL,
                 album_thumbnail_asset_id TEXT,
                 owner_id TEXT NOT NULL,
@@ -634,10 +699,12 @@ impl Database {
             CREATE TABLE IF NOT EXISTS album_assets (
                 album_id TEXT NOT NULL,
                 asset_id TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (album_id, asset_id)
             );
             CREATE TABLE IF NOT EXISTS people (
                 id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL DEFAULT '',
                 name TEXT,
                 is_hidden BOOLEAN DEFAULT 0,
                 thumbnail_path TEXT,
@@ -646,6 +713,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS asset_people (
                 asset_id TEXT NOT NULL,
                 person_id TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (asset_id, person_id)
             );
             CREATE TABLE IF NOT EXISTS sync_state (
@@ -663,9 +731,22 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                server_url TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                user_name TEXT,
+                user_email TEXT,
+                auth_type TEXT NOT NULL,
+                token TEXT NOT NULL,
+                is_primary BOOLEAN NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS pending_mutations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 asset_id TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
                 kind TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -818,6 +899,37 @@ impl Database {
             );
         }
 
+        // Multi-account: ensure every library table carries an `account_id`
+        // scoping column so cached rows can be attributed to the account they
+        // were synced from. Existing rows are backfilled to the primary account
+        // below (after the legacy-account migration runs).
+        for table in [
+            "assets",
+            "albums",
+            "album_assets",
+            "people",
+            "asset_people",
+            "pending_mutations",
+        ] {
+            self.ensure_account_id_column(&conn, table);
+        }
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_assets_account_id ON assets(account_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_albums_account_id ON albums(account_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_album_assets_account_id ON album_assets(account_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_people_account_id ON people(account_id)",
+            [],
+        );
+
         // Initialize default settings if not exist
         let conn = self.open()?;
         conn.execute(
@@ -847,8 +959,86 @@ impl Database {
         )
         .map_err(|err| err.to_string())?;
 
+        // Promote any legacy single-account credentials into the accounts table.
+        if let Err(err) = self.migrate_legacy_account_if_needed() {
+            log::warn!("[accounts] legacy migration failed: {}", err);
+        }
+
+        // Attribute any pre-multi-account cached rows (account_id = '') to the
+        // primary account so an existing library is preserved without forcing a
+        // full re-sync on upgrade.
+        if let Err(err) = self.backfill_account_id_to_primary() {
+            log::warn!("[accounts] account_id backfill failed: {}", err);
+        }
+
         Ok(())
     }
+
+    /// Add an `account_id TEXT NOT NULL DEFAULT ''` column to `table` if it does
+    /// not already exist. Used to migrate pre-multi-account databases.
+    fn ensure_account_id_column(&self, conn: &Connection, table: &str) {
+        let has_column = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .ok()
+            .and_then(|mut stmt| {
+                let mut found = false;
+                let _ = stmt.query_map([], |row| {
+                    let col_name: String = row.get(1)?;
+                    if col_name == "account_id" {
+                        found = true;
+                    }
+                    Ok(())
+                });
+                Some(found)
+            })
+            .unwrap_or(false);
+
+        if !has_column {
+            let sql =
+                format!("ALTER TABLE {table} ADD COLUMN account_id TEXT NOT NULL DEFAULT ''");
+            if let Err(err) = conn.execute(&sql, []) {
+                log::warn!("[accounts] failed to add account_id to {table}: {err}");
+            } else {
+                log::info!("[accounts] added account_id column to {table}");
+            }
+        }
+    }
+
+    /// Backfill cached library rows that have no account attribution
+    /// (`account_id = ''`) to the primary account. No-op when there are no such
+    /// rows or no primary account exists yet.
+    fn backfill_account_id_to_primary(&self) -> Result<(), String> {
+        let Some(primary) = self.get_primary_account()? else {
+            return Ok(());
+        };
+
+        let conn = self.open()?;
+        let mut total = 0usize;
+        for table in [
+            "assets",
+            "albums",
+            "album_assets",
+            "people",
+            "asset_people",
+            "pending_mutations",
+        ] {
+            let updated = conn
+                .execute(
+                    &format!("UPDATE {table} SET account_id = ?1 WHERE account_id = ''"),
+                    params![primary.id],
+                )
+                .map_err(|err| err.to_string())?;
+            total += updated;
+        }
+        if total > 0 {
+            log::info!(
+                "[accounts] backfilled {total} cached rows to primary account id={}",
+                primary.id
+            );
+        }
+        Ok(())
+    }
+
 
     pub fn save_auth_credentials(&self, server_url: &str, api_key: &str) -> Result<(), String> {
         let conn = self.open()?;
@@ -1007,19 +1197,281 @@ impl Database {
         Ok(user_id.map(|id| (id, user_name)))
     }
 
+    // ----- Multi-account registry ------------------------------------------
+
+    fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
+        Ok(Account {
+            id: row.get(0)?,
+            server_url: row.get(1)?,
+            user_id: row.get(2)?,
+            user_name: row.get(3)?,
+            user_email: row.get(4)?,
+            auth_type: row.get(5)?,
+            token: row.get(6)?,
+            is_primary: row.get::<_, i64>(7)? != 0,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+        })
+    }
+
+    const ACCOUNT_COLUMNS: &'static str =
+        "id, server_url, user_id, user_name, user_email, auth_type, token, is_primary, created_at, updated_at";
+
+    /// Insert (or update, when the same `(server_url, user_id)` already exists)
+    /// an account and return the persisted record. The first account created is
+    /// automatically marked primary.
+    pub fn upsert_account(
+        &self,
+        server_url: &str,
+        user_id: &str,
+        user_name: Option<&str>,
+        user_email: Option<&str>,
+        auth_type: &str,
+        token: &str,
+    ) -> Result<Account, String> {
+        let normalized_url = server_url.trim_end_matches('/').to_string();
+
+        if let Some(existing) = self.find_account_by_user(&normalized_url, user_id)? {
+            // Refresh credentials/identity for an already-registered account.
+            let conn = self.open()?;
+            conn.execute(
+                "UPDATE accounts SET user_name = ?2, user_email = ?3, auth_type = ?4, token = ?5, \
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
+                params![existing.id, user_name, user_email, auth_type, token],
+            )
+            .map_err(|err| err.to_string())?;
+            return self
+                .get_account(&existing.id)?
+                .ok_or_else(|| "account vanished after update".to_string());
+        }
+
+        let is_primary = self.count_accounts()? == 0;
+        let id = uuid::Uuid::new_v4().to_string();
+        let conn = self.open()?;
+        conn.execute(
+            "INSERT INTO accounts (id, server_url, user_id, user_name, user_email, auth_type, token, is_primary, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+            params![
+                id,
+                normalized_url,
+                user_id,
+                user_name,
+                user_email,
+                auth_type,
+                token,
+                if is_primary { 1 } else { 0 }
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+
+        log::info!(
+            "[accounts] registered account id={} user_id={} primary={}",
+            id,
+            user_id,
+            is_primary
+        );
+
+        self.get_account(&id)?
+            .ok_or_else(|| "account vanished after insert".to_string())
+    }
+
+    /// Update only the stored secret token for an account (e.g. after an OAuth
+    /// session is refreshed on restore).
+    pub fn update_account_token(&self, id: &str, token: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE accounts SET token = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
+            params![id, token],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    pub fn list_accounts(&self) -> Result<Vec<Account>, String> {
+        let conn = self.open()?;
+        let sql = format!(
+            "SELECT {} FROM accounts ORDER BY is_primary DESC, created_at ASC",
+            Self::ACCOUNT_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map([], Self::row_to_account)
+            .map_err(|err| err.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn get_account(&self, id: &str) -> Result<Option<Account>, String> {
+        let conn = self.open()?;
+        let sql = format!("SELECT {} FROM accounts WHERE id = ?1", Self::ACCOUNT_COLUMNS);
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        stmt.query_row(params![id], Self::row_to_account)
+            .map(Some)
+            .or_else(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other.to_string()),
+            })
+    }
+
+    pub fn find_account_by_user(
+        &self,
+        server_url: &str,
+        user_id: &str,
+    ) -> Result<Option<Account>, String> {
+        let normalized_url = server_url.trim_end_matches('/');
+        let conn = self.open()?;
+        let sql = format!(
+            "SELECT {} FROM accounts WHERE server_url = ?1 AND user_id = ?2",
+            Self::ACCOUNT_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        stmt.query_row(params![normalized_url, user_id], Self::row_to_account)
+            .map(Some)
+            .or_else(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other.to_string()),
+            })
+    }
+
+    pub fn get_primary_account(&self) -> Result<Option<Account>, String> {
+        let conn = self.open()?;
+        let sql = format!(
+            "SELECT {} FROM accounts WHERE is_primary = 1 LIMIT 1",
+            Self::ACCOUNT_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        stmt.query_row([], Self::row_to_account)
+            .map(Some)
+            .or_else(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other.to_string()),
+            })
+    }
+
+    pub fn count_accounts(&self) -> Result<i64, String> {
+        let conn = self.open()?;
+        conn.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get::<_, i64>(0))
+            .map_err(|err| err.to_string())
+    }
+
+    /// Mark `id` as the only primary account.
+    pub fn set_primary_account(&self, id: &str) -> Result<(), String> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+        let affected = tx
+            .execute(
+                "UPDATE accounts SET is_primary = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|err| err.to_string())?;
+        if affected == 0 {
+            return Err(format!("account not found: {}", id));
+        }
+        tx.execute(
+            "UPDATE accounts SET is_primary = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id <> ?1",
+            params![id],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())?;
+        log::info!("[accounts] primary account set to id={}", id);
+        Ok(())
+    }
+
+    /// Remove an account and all of its locally cached library data. If the
+    /// removed account was primary, the oldest remaining account is promoted.
+    /// Returns the id of the new primary account (if any remain).
+    pub fn remove_account(&self, id: &str) -> Result<Option<String>, String> {
+        let was_primary = self
+            .get_account(id)?
+            .map(|account| account.is_primary)
+            .unwrap_or(false);
+
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+        // Drop all of this account's cached library rows, then the account row.
+        for table in [
+            "assets",
+            "albums",
+            "album_assets",
+            "people",
+            "asset_people",
+            "pending_mutations",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE account_id = ?1"),
+                params![id],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+        tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])
+            .map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())?;
+
+        let mut new_primary = None;
+        if was_primary {
+            if let Some(next) = self.list_accounts()?.into_iter().next() {
+                self.set_primary_account(&next.id)?;
+                new_primary = Some(next.id);
+            }
+        }
+        log::info!(
+            "[accounts] removed account id={} was_primary={} new_primary={:?}",
+            id,
+            was_primary,
+            new_primary
+        );
+        Ok(new_primary)
+    }
+
+    /// Remove every registered account (used on full sign-out).
+    pub fn clear_all_accounts(&self) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute("DELETE FROM accounts", [])
+            .map_err(|err| err.to_string())?;
+        log::info!("[accounts] cleared all accounts");
+        Ok(())
+    }
+
+    /// One-time migration: if no accounts are registered yet but legacy
+    /// single-account credentials exist in `settings`, promote them to a
+    /// primary account so existing users are not logged out on upgrade.
+    pub fn migrate_legacy_account_if_needed(&self) -> Result<(), String> {
+        if self.count_accounts()? > 0 {
+            return Ok(());
+        }
+        let Some((server_url, token, is_oauth)) = self.get_auth_credentials()? else {
+            return Ok(());
+        };
+        let Some((user_id, user_name)) = self.get_user_info()? else {
+            return Ok(());
+        };
+        let auth_type = if is_oauth { "oauth" } else { "api_key" };
+        self.upsert_account(
+            &server_url,
+            &user_id,
+            user_name.as_deref(),
+            None,
+            auth_type,
+            &token,
+        )?;
+        log::info!("[accounts] migrated legacy single-account credentials to primary account");
+        Ok(())
+    }
+
     /// Enqueue an asset mutation that could not be sent to the server (because
     /// it was offline) so it can be replayed once connectivity is restored.
     pub fn enqueue_mutation(
         &self,
+        account_id: &str,
         asset_id: &str,
         kind: &str,
         payload_json: &str,
     ) -> Result<(), String> {
         let conn = self.open()?;
         conn.execute(
-            "INSERT INTO pending_mutations (asset_id, kind, payload_json, created_at)
-             VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
-            params![asset_id, kind, payload_json],
+            "INSERT INTO pending_mutations (asset_id, account_id, kind, payload_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+            params![asset_id, account_id, kind, payload_json],
         )
         .map_err(|err| err.to_string())?;
         Ok(())
@@ -1030,7 +1482,7 @@ impl Database {
         let conn = self.open()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, asset_id, kind, payload_json, created_at
+                "SELECT id, asset_id, account_id, kind, payload_json, created_at
                  FROM pending_mutations ORDER BY id ASC",
             )
             .map_err(|err| err.to_string())?;
@@ -1039,9 +1491,10 @@ impl Database {
                 Ok(PendingMutation {
                     id: row.get(0)?,
                     asset_id: row.get(1)?,
-                    kind: row.get(2)?,
-                    payload_json: row.get(3)?,
-                    created_at: row.get(4)?,
+                    account_id: row.get(2)?,
+                    kind: row.get(3)?,
+                    payload_json: row.get(4)?,
+                    created_at: row.get(5)?,
                 })
             })
             .map_err(|err| err.to_string())?;
@@ -1409,7 +1862,7 @@ impl Database {
         Connection::open(&self.db_path).map_err(|err| err.to_string())
     }
 
-    pub fn upsert_assets(&self, assets: &[AssetSummary]) -> Result<(), String> {
+    pub fn upsert_assets(&self, account_id: &str, assets: &[AssetSummary]) -> Result<(), String> {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|err| err.to_string())?;
 
@@ -1417,11 +1870,12 @@ impl Database {
             tx.execute(
                 "
                 INSERT INTO assets (
-                    id, original_file_name, original_path, file_created_at, checksum, updated_at,
+                    id, account_id, original_file_name, original_path, file_created_at, checksum, updated_at,
                     asset_type, duration, is_favorite, is_archived, visibility, rating, width, height, thumbhash
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s', 'now'), ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                 ON CONFLICT(id) DO UPDATE SET
+                    account_id = excluded.account_id,
                     original_file_name = excluded.original_file_name,
                     original_path = excluded.original_path,
                     file_created_at = excluded.file_created_at,
@@ -1439,6 +1893,7 @@ impl Database {
                 ",
                 params![
                     asset.id,
+                    account_id,
                     asset.original_file_name,
                     asset.original_path,
                     asset.file_created_at,
@@ -1521,6 +1976,7 @@ impl Database {
 
     pub fn get_asset_ids_in_created_at_window(
         &self,
+        account_id: &str,
         window_start: &str,
         window_end: &str,
     ) -> Result<Vec<String>, String> {
@@ -1530,15 +1986,19 @@ impl Database {
                 "
                 SELECT id
                 FROM assets
-                WHERE file_created_at IS NOT NULL
-                  AND julianday(file_created_at) >= julianday(?1)
-                  AND julianday(file_created_at) <= julianday(?2)
+                WHERE account_id = ?1
+                  AND file_created_at IS NOT NULL
+                  AND julianday(file_created_at) >= julianday(?2)
+                  AND julianday(file_created_at) <= julianday(?3)
                 ",
             )
             .map_err(|err| err.to_string())?;
 
         let rows = stmt
-            .query_map(params![window_start, window_end], |row| row.get::<_, String>(0))
+            .query_map(
+                params![account_id, window_start, window_end],
+                |row| row.get::<_, String>(0),
+            )
             .map_err(|err| err.to_string())?;
 
         let mut ids = Vec::new();
@@ -1587,6 +2047,7 @@ impl Database {
 
     pub fn upsert_assets_with_metadata(
         &self,
+        account_id: &str,
         assets: &[AssetSummaryExtended],
     ) -> Result<(), String> {
         let mut conn = self.open()?;
@@ -1596,12 +2057,13 @@ impl Database {
             tx.execute(
                 "
                 INSERT INTO assets (
-                    id, original_file_name, description, original_path, file_created_at, checksum, updated_at,
+                    id, account_id, original_file_name, description, original_path, file_created_at, checksum, updated_at,
                     asset_type, duration, is_favorite, is_archived, visibility, rating,
                     width, height, thumbhash, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now'), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
                 ON CONFLICT(id) DO UPDATE SET
+                    account_id = excluded.account_id,
                     original_file_name = excluded.original_file_name,
                     description = excluded.description,
                     original_path = excluded.original_path,
@@ -1627,6 +2089,7 @@ impl Database {
                 ",
                 params![
                     asset.id,
+                    account_id,
                     asset.original_file_name,
                     asset.description,
                     asset.original_path,
@@ -2061,7 +2524,10 @@ impl Database {
                     file_extension,
                     people,
                     tags,
-                    exif_info_json
+                    exif_info_json,
+                    account_id,
+                    (SELECT COALESCE(NULLIF(user_name, ''), user_email, user_id)
+                       FROM accounts WHERE accounts.id = assets.account_id) AS account_name
                 FROM assets
                 WHERE id = ?1
                 LIMIT 1
@@ -2236,6 +2702,7 @@ impl Database {
 
     pub fn upsert_albums(
         &self,
+        account_id: &str,
         albums: &[crate::services::immich_client::AlbumSummary],
     ) -> Result<(), String> {
         let mut conn = self.open()?;
@@ -2245,13 +2712,14 @@ impl Database {
             tx.execute(
                 "
                 INSERT INTO albums (
-                    id, album_name, album_thumbnail_asset_id, owner_id, shared,
+                    id, account_id, album_name, album_thumbnail_asset_id, owner_id, shared,
                     created_at, updated_at, start_date, end_date, asset_count,
                     owner_name, owner_email, description, saved_local_folder_path
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                         (SELECT saved_local_folder_path FROM albums WHERE id = ?1))
                 ON CONFLICT(id) DO UPDATE SET
+                    account_id = excluded.account_id,
                     album_name = excluded.album_name,
                     album_thumbnail_asset_id = excluded.album_thumbnail_asset_id,
                     owner_id = excluded.owner_id,
@@ -2268,6 +2736,7 @@ impl Database {
                 ",
                 params![
                     album.id,
+                    account_id,
                     album.album_name,
                     album.album_thumbnail_asset_id,
                     album.owner_id,
@@ -2295,7 +2764,7 @@ impl Database {
                 "
                 SELECT id, album_name, album_thumbnail_asset_id, owner_id, shared,
                        created_at, updated_at, start_date, end_date, asset_count,
-                      owner_name, owner_email, description, saved_local_folder_path
+                      owner_name, owner_email, description, saved_local_folder_path, account_id
                 FROM albums
                 ORDER BY COALESCE(start_date, created_at, updated_at) DESC
                 ",
@@ -2319,6 +2788,7 @@ impl Database {
                     owner_email: row.get(11)?,
                     description: row.get(12)?,
                     saved_local_folder_path: row.get(13)?,
+                    account_id: row.get::<_, Option<String>>(14)?.unwrap_or_default(),
                 })
             })
             .map_err(|err| err.to_string())?;
@@ -2358,7 +2828,61 @@ impl Database {
         Ok(exists != 0)
     }
 
-    pub fn replace_album_assets(&self, album_id: &str, asset_ids: &[String]) -> Result<(), String> {
+    /// Resolve which account a cached asset belongs to, for routing per-asset
+    /// network operations to the correct server session. Returns `None` when the
+    /// asset is unknown or has no account attribution.
+    pub fn get_asset_account_id(&self, asset_id: &str) -> Result<Option<String>, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT account_id FROM assets WHERE id = ?1",
+            params![asset_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map(|value| value.filter(|id| !id.is_empty()))
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other.to_string()),
+        })
+    }
+
+    /// Resolve which account a cached album belongs to, for routing album
+    /// operations (share, edit) to the owning account's server session.
+    pub fn get_album_account_id(&self, album_id: &str) -> Result<Option<String>, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT account_id FROM albums WHERE id = ?1",
+            params![album_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map(|value| value.filter(|id| !id.is_empty()))
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other.to_string()),
+        })
+    }
+
+    /// Resolve which account a person belongs to, for routing face-thumbnail
+    /// loads to the owning account's server session.
+    pub fn get_person_account_id(&self, person_id: &str) -> Result<Option<String>, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT account_id FROM people WHERE id = ?1",
+            params![person_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map(|value| value.filter(|id| !id.is_empty()))
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other.to_string()),
+        })
+    }
+
+    pub fn replace_album_assets(
+        &self,
+        account_id: &str,
+        album_id: &str,
+        asset_ids: &[String],
+    ) -> Result<(), String> {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|err| err.to_string())?;
 
@@ -2370,8 +2894,8 @@ impl Database {
 
         for asset_id in asset_ids {
             tx.execute(
-                "INSERT INTO album_assets (album_id, asset_id) VALUES (?1, ?2)",
-                params![album_id, asset_id],
+                "INSERT INTO album_assets (album_id, asset_id, account_id) VALUES (?1, ?2, ?3)",
+                params![album_id, asset_id, account_id],
             )
             .map_err(|err| err.to_string())?;
         }
@@ -2381,6 +2905,7 @@ impl Database {
 
     pub fn upsert_people(
         &self,
+        account_id: &str,
         people: &[crate::services::immich_client::PersonSummary],
     ) -> Result<(), String> {
         let mut conn = self.open()?;
@@ -2390,9 +2915,10 @@ impl Database {
         for person in people {
             tx.execute(
                 "
-                INSERT INTO people (id, name, is_hidden, thumbnail_path, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5)
+                INSERT INTO people (id, account_id, name, is_hidden, thumbnail_path, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ON CONFLICT(id) DO UPDATE SET
+                    account_id = excluded.account_id,
                     name = excluded.name,
                     is_hidden = excluded.is_hidden,
                     thumbnail_path = excluded.thumbnail_path,
@@ -2400,6 +2926,7 @@ impl Database {
                 ",
                 params![
                     person.id,
+                    account_id,
                     person.name,
                     person.is_hidden as i32,
                     person.thumbnail_path,
@@ -2414,6 +2941,7 @@ impl Database {
 
     pub fn replace_asset_people(
         &self,
+        account_id: &str,
         asset_people: &[(String, Vec<String>)],
     ) -> Result<(), String> {
         let mut conn = self.open()?;
@@ -2428,8 +2956,8 @@ impl Database {
 
             for person_id in person_ids {
                 tx.execute(
-                    "INSERT OR IGNORE INTO asset_people (asset_id, person_id) VALUES (?1, ?2)",
-                    params![asset_id, person_id],
+                    "INSERT OR IGNORE INTO asset_people (asset_id, person_id, account_id) VALUES (?1, ?2, ?3)",
+                    params![asset_id, person_id, account_id],
                 )
                 .map_err(|err| err.to_string())?;
             }
@@ -3350,6 +3878,8 @@ fn map_asset_summary_extended(
         tags: row.get(20)?,
         exif_info_json: row.get(21)?,
         is_my_photo: false,
+        account_id: row.get::<_, Option<String>>(22)?.unwrap_or_default(),
+        account_name: row.get(23)?,
     })
 }
 

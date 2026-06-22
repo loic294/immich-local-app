@@ -22,8 +22,10 @@ use commands::assets::{
     update_asset_description, update_asset_favorite, update_asset_rating, update_asset_visibility,
 };
 use commands::auth::{
-    authenticate, authenticate_with_password, check_server_connection, complete_oauth_flow,
-    get_oauth_authorization_url, get_profile_image, logout, restore_session,
+    add_account_complete_oauth, add_account_oauth_url, add_account_with_key,
+    add_account_with_password, authenticate, authenticate_with_password, check_server_connection,
+    complete_oauth_flow, get_oauth_authorization_url, get_profile_image, list_accounts, logout,
+    remove_account, restore_session, set_primary_account,
 };
 use commands::folders::get_cached_folder_full_grid_layout;
 use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
@@ -39,6 +41,7 @@ use commands::sync::{
     scan_saved_local_files, start_asset_sync,
 };
 use services::db::Database;
+use services::account_manager::AccountManager;
 use services::immich_client::ImmichClient;
 use std::sync::Arc;
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -46,12 +49,95 @@ use tauri_plugin_deep_link::DeepLinkExt;
 pub struct AppState {
     pub db: Arc<Database>,
     pub immich: Arc<ImmichClient>,
+    pub accounts: Arc<AccountManager>,
+}
+
+impl AppState {
+    /// Resolve the [`ImmichClient`] for a specific account, falling back to the
+    /// primary account's client when no account id is given or the requested
+    /// account is not registered.
+    pub fn client_for(&self, account_id: Option<&str>) -> Arc<ImmichClient> {
+        match account_id {
+            Some(id) => self
+                .accounts
+                .client(id)
+                .unwrap_or_else(|| self.immich.clone()),
+            None => self.immich.clone(),
+        }
+    }
+
+    /// Resolve the locally-generated primary account id, consulting the
+    /// in-memory registry first and falling back to the persisted accounts
+    /// table. Returns an empty string when no account exists yet.
+    pub fn primary_account_id(&self) -> String {
+        self.accounts
+            .primary_id()
+            .or_else(|| {
+                self.db
+                    .get_primary_account()
+                    .ok()
+                    .flatten()
+                    .map(|account| account.id)
+            })
+            .unwrap_or_default()
+    }
+
+    /// Resolve which account a cached asset belongs to plus the matching client,
+    /// for routing per-asset network operations to the correct server session.
+    /// Falls back to the primary account when the asset has no attribution.
+    pub fn account_and_client_for_asset(&self, asset_id: &str) -> (String, Arc<ImmichClient>) {
+        let account_id = self
+            .db
+            .get_asset_account_id(asset_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.primary_account_id());
+        let client = self
+            .accounts
+            .client(&account_id)
+            .unwrap_or_else(|| self.immich.clone());
+        (account_id, client)
+    }
+
+    /// Resolve which account a cached album belongs to plus the matching client,
+    /// for routing per-album network operations to the correct server session.
+    /// Falls back to the primary account when the album has no attribution.
+    pub fn account_and_client_for_album(&self, album_id: &str) -> (String, Arc<ImmichClient>) {
+        let account_id = self
+            .db
+            .get_album_account_id(album_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.primary_account_id());
+        let client = self
+            .accounts
+            .client(&account_id)
+            .unwrap_or_else(|| self.immich.clone());
+        (account_id, client)
+    }
+
+    /// All `(account_id, client)` pairs that should participate in a sync. Falls
+    /// back to the primary account bound to the shared client when the registry
+    /// has not been populated yet (e.g. immediately after a fresh login).
+    pub fn sync_accounts(&self) -> Vec<(String, Arc<ImmichClient>)> {
+        let registered = self.accounts.all();
+        if !registered.is_empty() {
+            return registered;
+        }
+        let primary_id = self.primary_account_id();
+        if primary_id.is_empty() {
+            Vec::new()
+        } else {
+            vec![(primary_id, self.immich.clone())]
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn main() {
     let db = Arc::new(Database::new().expect("failed to initialize sqlite"));
     let immich = Arc::new(ImmichClient::new());
+    let accounts = Arc::new(AccountManager::new());
 
     tauri::Builder::default()
         .plugin(
@@ -93,7 +179,7 @@ pub fn main() {
 
             Ok(())
         })
-        .manage(AppState { db, immich })
+        .manage(AppState { db, immich, accounts })
         .invoke_handler(tauri::generate_handler![
             authenticate,
             authenticate_with_password,
@@ -103,6 +189,13 @@ pub fn main() {
             get_profile_image,
             get_oauth_authorization_url,
             complete_oauth_flow,
+            list_accounts,
+            set_primary_account,
+            remove_account,
+            add_account_with_key,
+            add_account_with_password,
+            add_account_oauth_url,
+            add_account_complete_oauth,
             fetch_assets,
             get_cached_assets,
             get_all_cached_assets,

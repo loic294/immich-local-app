@@ -26,6 +26,7 @@ import { DaisyCalendarPicker } from "../components/Settings/DaisyCalendarPicker"
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { useAppUpdate } from "../hooks/useAppUpdate";
 import { useInvalidateSettings } from "../hooks/useSettings";
+import { useAccounts } from "../hooks/useAccounts";
 import { useI18n, type AppLocale } from "../i18n";
 
 interface SettingsPageProps {
@@ -35,6 +36,8 @@ interface SettingsPageProps {
 
 export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const { locale, setLocale, t } = useI18n();
+  const accounts = useAccounts();
+  const [accountBusy, setAccountBusy] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [cachePath, setCachePath] = useState<string | null>(null);
@@ -898,6 +901,66 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             <p className="text-sm text-base-content/70 mb-4">
               {t("settings.accountDescription")}
             </p>
+
+            {accounts.accounts.length > 0 ? (
+              <div className="mb-4">
+                <p className="mb-2 text-sm font-semibold text-base-content">
+                  {t("account.accountsTitle")}
+                </p>
+                <ul className="space-y-2">
+                  {accounts.accounts.map((account) => {
+                    const label =
+                      account.userName || account.userEmail || account.userId;
+                    return (
+                      <li
+                        key={account.id}
+                        className="flex items-center gap-3 rounded-box border border-base-300 bg-base-200 px-3 py-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="m-0 truncate text-sm font-medium text-base-content">
+                            {label}
+                          </p>
+                          <p className="m-0 truncate text-xs text-base-content/50">
+                            {account.serverUrl}
+                          </p>
+                        </div>
+                        {account.isPrimary ? (
+                          <span className="badge badge-primary gap-1">
+                            <Check size={12} />
+                            {t("account.primaryBadge")}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline"
+                            disabled={accountBusy}
+                            onClick={async () => {
+                              setAccountBusy(true);
+                              try {
+                                await accounts.setPrimary(account.id);
+                                window.location.reload();
+                              } catch (err) {
+                                console.error(
+                                  "[accounts] set primary failed",
+                                  err,
+                                );
+                                setAccountBusy(false);
+                              }
+                            }}
+                          >
+                            {t("account.makePrimary")}
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="mt-2 text-xs text-base-content/60">
+                  {t("account.restartHint")}
+                </p>
+              </div>
+            ) : null}
+
             <button
               type="button"
               onClick={onLogout}

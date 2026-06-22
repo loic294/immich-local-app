@@ -1,4 +1,6 @@
+use crate::services::db::Database;
 use crate::services::db::SyncState;
+use crate::services::immich_client::ImmichClient;
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -6,6 +8,7 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Instant, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -97,52 +100,92 @@ async fn start_asset_sync_internal(
         force_full_sync
     );
 
-    // Local-first: never hard-fail a sync attempt when the server is simply
-    // unreachable. Surface a recognizable offline marker so the UI can show an
-    // offline state instead of a scary error, and leave the cache untouched.
-    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
-        if !state.immich.ping(&server_url).await {
-            log::warn!("[sync] server unreachable — skipping sync (offline)");
-            return Err("offline: server unreachable".to_string());
+    // Local-first multi-account: gather every account that should participate in
+    // the sync. Skip accounts whose server is unreachable rather than failing the
+    // whole sync; only report offline when no account is reachable at all.
+    let all_accounts = state.sync_accounts();
+    if all_accounts.is_empty() {
+        log::warn!("[sync] no accounts available — nothing to sync");
+        return Err("offline: no account available".to_string());
+    }
+
+    let mut reachable: Vec<(String, Arc<ImmichClient>)> = Vec::new();
+    let mut total_assets = 0i32;
+    for (account_id, client) in all_accounts {
+        let server_url = state
+            .db
+            .get_account(&account_id)
+            .ok()
+            .flatten()
+            .map(|account| account.server_url);
+        let online = match &server_url {
+            Some(url) => client.ping(url).await,
+            None => false,
+        };
+        if !online {
+            log::warn!("[sync] account {} unreachable — skipping (offline)", account_id);
+            continue;
+        }
+        match client.get_asset_statistics().await {
+            Ok(stats) => {
+                log::warn!(
+                    "[sync] account {} reachable, {} assets",
+                    account_id, stats.total
+                );
+                total_assets += stats.total;
+                reachable.push((account_id, client));
+            }
+            Err(err) => {
+                log::warn!("[sync] failed to get statistics for account {}: {}", account_id, err);
+            }
         }
     }
 
-    // Get total asset count from Immich
-    let statistics = state.immich.get_asset_statistics().await.map_err(|err| {
-        log::warn!("Failed to get asset statistics: {}", err);
-        format!("Failed to get asset statistics: {}", err)
-    })?;
+    if reachable.is_empty() {
+        log::warn!("[sync] no reachable accounts — offline");
+        return Err("offline: server unreachable".to_string());
+    }
 
-    log::warn!("Got statistics, total assets: {}", statistics.total);
+    log::warn!(
+        "[sync] {} reachable account(s), {} total assets",
+        reachable.len(),
+        total_assets
+    );
 
     let current_state = state.db.get_sync_state().map_err(|err| {
         log::warn!("Failed to get sync state: {}", err);
         format!("Failed to get sync state: {}", err)
     })?;
 
-    let is_partial_sync = !force_full_sync
+    // Resume is only safe for the single-account fast path, where the aggregate
+    // processed counter maps cleanly onto one account's page stream. With
+    // multiple accounts we always run a fresh (idempotent) full pass.
+    let single_account = reachable.len() == 1;
+    let is_partial_sync = single_account
+        && !force_full_sync
         && current_state.processed_assets > 0
-        && current_state.processed_assets < statistics.total;
+        && current_state.processed_assets < total_assets;
 
     log::warn!(
-        "[sync] start_asset_sync_internal: force_full_sync={} resuming_partial={} (cached processed={} server_total={})",
+        "[sync] start_asset_sync_internal: force_full_sync={} single_account={} resuming_partial={} (cached processed={} server_total={})",
         force_full_sync,
+        single_account,
         is_partial_sync,
         current_state.processed_assets,
-        statistics.total
+        total_assets
     );
 
     // Initialize or resume sync state in database
     let sync_state = if is_partial_sync {
         state
             .db
-            .resume_sync_state(statistics.total)
+            .resume_sync_state(total_assets)
             .map_err(|err| {
                 log::warn!("Failed to resume sync state: {}", err);
                 format!("Failed to resume sync state: {}", err)
             })?
     } else {
-        state.db.init_sync_state(statistics.total).map_err(|err| {
+        state.db.init_sync_state(total_assets).map_err(|err| {
             log::warn!("Failed to initialize sync state: {}", err);
             format!("Failed to initialize sync state: {}", err)
         })?
@@ -160,14 +203,19 @@ async fn start_asset_sync_internal(
         0
     };
 
-    // Spawn background task to fetch and save assets
+    // Spawn background task to fetch and save assets across all accounts.
     let db = state.db.clone();
-    let immich = state.immich.clone();
 
     tauri::async_runtime::spawn(async move {
         log::warn!("Starting background sync task from page {}", start_page);
-        if let Err(e) =
-            sync_all_assets_background(immich, db, start_page, sync_state.processed_assets).await
+        if let Err(e) = sync_all_assets_background(
+            reachable,
+            db,
+            start_page,
+            sync_state.processed_assets,
+            single_account,
+        )
+        .await
         {
             log::warn!("Background sync task failed: {}", e);
         }
@@ -177,102 +225,110 @@ async fn start_asset_sync_internal(
 }
 
 async fn sync_all_assets_background(
-    immich: std::sync::Arc<crate::services::immich_client::ImmichClient>,
-    db: std::sync::Arc<crate::services::db::Database>,
+    accounts: Vec<(String, Arc<ImmichClient>)>,
+    db: Arc<Database>,
     start_page: u32,
     initial_processed_count: i32,
+    allow_resume: bool,
 ) -> Result<(), String> {
-    // On a fresh full sync (start_page == 0) we refresh the people list and the
-    // album caches up front. On a RESUMED sync (start_page > 0) those already
-    // completed during the original run — they run before any asset page is
-    // processed, so a non-zero start_page proves they finished — and only the
-    // asset page loop was interrupted. Skipping them lets a resumed sync jump
-    // straight back to the page where it stopped instead of redoing all that
-    // work (which would otherwise look like a full restart).
-    let is_resume = start_page > 0;
-    if is_resume {
-        log::warn!(
-            "[sync] resuming interrupted full sync at page {} ({} assets already processed) — skipping people/album refresh",
-            start_page,
-            initial_processed_count
-        );
-    } else {
-        match immich.get_all_people().await {
-            Ok(people) => {
-                if let Err(err) = db.upsert_people(&people) {
-                    log::warn!("Failed to cache people list: {}", err);
-                }
-            }
-            Err(err) => log::warn!("Failed to fetch people list: {}", err),
-        }
-
-        if let Err(err) = refresh_album_cache(immich.clone(), db.clone()).await {
-            log::warn!("Failed to refresh album cache: {}", err);
-        }
-    }
-
-    let mut page = start_page;
     let page_size = 100u32;
     let mut processed_count = initial_processed_count;
 
-    loop {
-        log::warn!("Fetching page {} of assets", page);
+    for (account_id, immich) in &accounts {
+        // Resume (skipping the up-front people/album refresh) only applies to the
+        // single-account fast path. For every other account we always start at
+        // page 0 and refresh its people/album caches first.
+        let account_start_page = if allow_resume { start_page } else { 0 };
+        let is_resume = account_start_page > 0;
 
-        // Fetch a page of assets
-        let result = immich
-            .get_all_assets_paginated(page, page_size)
-            .await
-            .map_err(|err| {
-                log::warn!("Failed to fetch assets: {}", err);
-                format!("Failed to fetch assets: {}", err)
-            })?;
+        if is_resume {
+            log::warn!(
+                "[sync] account {} resuming interrupted full sync at page {} ({} assets already processed) — skipping people/album refresh",
+                account_id,
+                account_start_page,
+                initial_processed_count
+            );
+        } else {
+            match immich.get_all_people().await {
+                Ok(people) => {
+                    if let Err(err) = db.upsert_people(account_id, &people) {
+                        log::warn!("[sync] failed to cache people for account {}: {}", account_id, err);
+                    }
+                }
+                Err(err) => log::warn!("[sync] failed to fetch people for account {}: {}", account_id, err),
+            }
 
-        if result.items.is_empty() {
-            log::warn!("No more assets to fetch");
-            break;
+            if let Err(err) = refresh_album_cache(account_id, immich.clone(), db.clone()).await {
+                log::warn!("[sync] failed to refresh album cache for account {}: {}", account_id, err);
+            }
         }
 
-        log::warn!("Got {} assets in page {}", result.items.len(), page);
+        let mut page = account_start_page;
 
-        // Hydrate each asset with full metadata from asset detail endpoint.
-        let enriched_assets = enrich_assets_with_full_metadata(immich.clone(), result.items).await;
-        let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = enriched_assets
-            .iter()
-            .map(|value| value.asset.clone())
-            .collect();
-        let asset_people_links: Vec<(String, Vec<String>)> = enriched_assets
-            .iter()
-            .map(|value| (value.asset.id.clone(), value.person_ids.clone()))
-            .collect();
+        loop {
+            log::warn!("[sync] account {} fetching page {} of assets", account_id, page);
 
-        // Save assets to database
-        db.upsert_assets_with_metadata(&extended_assets)
-            .map_err(|err| {
-                log::warn!("Failed to save assets: {}", err);
-                format!("Failed to save assets: {}", err)
+            let result = immich
+                .get_all_assets_paginated(page, page_size)
+                .await
+                .map_err(|err| {
+                    log::warn!("[sync] failed to fetch assets for account {}: {}", account_id, err);
+                    format!("Failed to fetch assets: {}", err)
+                })?;
+
+            if result.items.is_empty() {
+                log::warn!("[sync] account {} no more assets to fetch", account_id);
+                break;
+            }
+
+            log::warn!(
+                "[sync] account {} got {} assets in page {}",
+                account_id,
+                result.items.len(),
+                page
+            );
+
+            // Hydrate each asset with full metadata from asset detail endpoint.
+            let enriched_assets =
+                enrich_assets_with_full_metadata(immich.clone(), result.items).await;
+            let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = enriched_assets
+                .iter()
+                .map(|value| value.asset.clone())
+                .collect();
+            let asset_people_links: Vec<(String, Vec<String>)> = enriched_assets
+                .iter()
+                .map(|value| (value.asset.id.clone(), value.person_ids.clone()))
+                .collect();
+
+            // Save assets to database, tagged with the owning account.
+            db.upsert_assets_with_metadata(account_id, &extended_assets)
+                .map_err(|err| {
+                    log::warn!("[sync] failed to save assets for account {}: {}", account_id, err);
+                    format!("Failed to save assets: {}", err)
+                })?;
+
+            db.replace_asset_people(account_id, &asset_people_links)
+                .map_err(|err| {
+                    log::warn!("[sync] failed to save asset-people links for account {}: {}", account_id, err);
+                    format!("Failed to save asset-people links: {}", err)
+                })?;
+
+            processed_count += extended_assets.len() as i32;
+            log::warn!("[sync] processed {} total assets", processed_count);
+
+            // Update aggregate progress in database
+            db.update_sync_progress(processed_count).map_err(|err| {
+                log::warn!("Failed to update sync progress: {}", err);
+                format!("Failed to update sync progress: {}", err)
             })?;
 
-        db.replace_asset_people(&asset_people_links)
-            .map_err(|err| {
-                log::warn!("Failed to save asset-people links: {}", err);
-                format!("Failed to save asset-people links: {}", err)
-            })?;
+            if !result.has_next_page {
+                log::warn!("[sync] account {} no more pages to fetch", account_id);
+                break;
+            }
 
-        processed_count += extended_assets.len() as i32;
-        log::warn!("Processed {} total assets", processed_count);
-
-        // Update progress in database
-        db.update_sync_progress(processed_count).map_err(|err| {
-            log::warn!("Failed to update sync progress: {}", err);
-            format!("Failed to update sync progress: {}", err)
-        })?;
-
-        if !result.has_next_page {
-            log::warn!("No more pages to fetch");
-            break;
+            page += 1;
         }
-
-        page += 1;
     }
 
     // Mark sync as complete
@@ -287,19 +343,22 @@ async fn sync_all_assets_background(
 }
 
 async fn refresh_album_cache(
-    immich: std::sync::Arc<crate::services::immich_client::ImmichClient>,
-    db: std::sync::Arc<crate::services::db::Database>,
+    account_id: &str,
+    immich: Arc<ImmichClient>,
+    db: Arc<Database>,
 ) -> Result<(), String> {
     let albums = immich
         .get_albums()
         .await
         .map_err(|err| format!("fetch albums failed: {}", err))?;
 
-    db.upsert_albums(&albums)
+    db.upsert_albums(account_id, &albums)
         .map_err(|err| format!("cache album list failed: {}", err))?;
 
     for album in &albums {
-        if let Err(err) = refresh_single_album(immich.clone(), db.clone(), &album.id).await {
+        if let Err(err) =
+            refresh_single_album(account_id, immich.clone(), db.clone(), &album.id).await
+        {
             log::warn!("Failed to refresh album {}: {}", album.id, err);
         }
     }
@@ -311,8 +370,9 @@ async fn refresh_album_cache(
 /// the server. Used both by the full album-cache refresh and by the on-demand
 /// lazy refresh triggered when the user opens an album.
 async fn refresh_single_album(
-    immich: std::sync::Arc<crate::services::immich_client::ImmichClient>,
-    db: std::sync::Arc<crate::services::db::Database>,
+    account_id: &str,
+    immich: Arc<ImmichClient>,
+    db: Arc<Database>,
     album_id: &str,
 ) -> Result<(), String> {
     let assets = immich
@@ -347,11 +407,11 @@ async fn refresh_single_album(
         .collect();
 
     // Store enriched assets in database
-    db.upsert_assets_with_metadata(&extended_assets)
+    db.upsert_assets_with_metadata(account_id, &extended_assets)
         .map_err(|err| format!("cache album assets failed: {}", err))?;
 
     // Store people-asset links
-    if let Err(err) = db.replace_asset_people(&asset_people_links) {
+    if let Err(err) = db.replace_asset_people(account_id, &asset_people_links) {
         log::warn!(
             "Failed to cache asset-people links for album {}: {}",
             album_id, err
@@ -363,7 +423,7 @@ async fn refresh_single_album(
         .iter()
         .map(|asset| asset.id.clone())
         .collect::<Vec<_>>();
-    if let Err(err) = db.replace_album_assets(album_id, &asset_ids) {
+    if let Err(err) = db.replace_album_assets(account_id, album_id, &asset_ids) {
         log::warn!(
             "Failed to cache album asset links for album {}: {}",
             album_id, err
@@ -391,8 +451,29 @@ pub async fn refresh_album_assets(
 ) -> Result<(), String> {
     log::warn!("[sync.refresh_album_assets] album_id={} start", album_id);
 
-    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
-        if !state.immich.ping(&server_url).await {
+    // Route to the account that owns this album so we use the right session.
+    let account_id = state
+        .db
+        .get_album_account_id(&album_id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| state.primary_account_id());
+    let client = state
+        .accounts
+        .client(&account_id)
+        .unwrap_or_else(|| state.immich.clone());
+
+    if let Some(account) = state.db.get_account(&account_id).ok().flatten() {
+        if !client.ping(&account.server_url).await {
+            log::warn!(
+                "[sync.refresh_album_assets] server unreachable — skipping (offline) album_id={} account={}",
+                album_id,
+                account_id
+            );
+            return Err("offline: server unreachable".to_string());
+        }
+    } else if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
+        if !client.ping(&server_url).await {
             log::warn!(
                 "[sync.refresh_album_assets] server unreachable — skipping (offline) album_id={}",
                 album_id
@@ -401,7 +482,7 @@ pub async fn refresh_album_assets(
         }
     }
 
-    refresh_single_album(state.immich.clone(), state.db.clone(), &album_id).await?;
+    refresh_single_album(&account_id, client, state.db.clone(), &album_id).await?;
 
     log::warn!("[sync.refresh_album_assets] album_id={} done", album_id);
     Ok(())
@@ -414,31 +495,62 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
     let started_at = Instant::now();
     log::warn!("[sync.refresh_album_list] start");
 
-    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
-        if !state.immich.ping(&server_url).await {
-            log::warn!("[sync.refresh_album_list] server unreachable — skipping (offline)");
-            return Err("offline: server unreachable".to_string());
-        }
+    let accounts = state.sync_accounts();
+    if accounts.is_empty() {
+        return Err("offline: no account available".to_string());
     }
 
-    let albums = state
-        .immich
-        .get_albums()
-        .await
-        .map_err(|err| format!("fetch albums failed: {err}"))?;
+    let mut total = 0u32;
+    let mut any_online = false;
+    for (account_id, client) in accounts {
+        let server_url = state
+            .db
+            .get_account(&account_id)
+            .ok()
+            .flatten()
+            .map(|account| account.server_url);
+        let online = match &server_url {
+            Some(url) => client.ping(url).await,
+            None => false,
+        };
+        if !online {
+            log::warn!(
+                "[sync.refresh_album_list] account {} unreachable — skipping (offline)",
+                account_id
+            );
+            continue;
+        }
+        any_online = true;
 
-    state
-        .db
-        .upsert_albums(&albums)
-        .map_err(|err| format!("cache album list failed: {err}"))?;
+        let albums = match client.get_albums().await {
+            Ok(albums) => albums,
+            Err(err) => {
+                log::warn!(
+                    "[sync.refresh_album_list] fetch albums failed for account {}: {}",
+                    account_id, err
+                );
+                continue;
+            }
+        };
+
+        state
+            .db
+            .upsert_albums(&account_id, &albums)
+            .map_err(|err| format!("cache album list failed: {err}"))?;
+        total += albums.len() as u32;
+    }
+
+    if !any_online {
+        return Err("offline: server unreachable".to_string());
+    }
 
     log::warn!(
         "[sync.refresh_album_list] complete album_count={} duration_ms={}",
-        albums.len(),
+        total,
         started_at.elapsed().as_millis()
     );
 
-    Ok(albums.len() as u32)
+    Ok(total)
 }
 
 #[tauri::command]
@@ -537,6 +649,9 @@ pub async fn apply_saved_local_file_changes(
             continue;
         }
 
+        // Route mutations to the account that owns this asset.
+        let (account_id, client) = state.account_and_client_for_asset(&change.asset_id);
+
         match change.change_kind.as_str() {
             "deleted" => {
                 // Archive in local cache immediately.
@@ -550,8 +665,7 @@ pub async fn apply_saved_local_file_changes(
                 }
 
                 // Try server update; if unreachable enqueue mutation.
-                match state
-                    .immich
+                match client
                     .update_asset_visibility(&change.asset_id, "archive")
                     .await
                 {
@@ -560,7 +674,7 @@ pub async fn apply_saved_local_file_changes(
                         let server_reachable = if let Ok(Some((server_url, _token, _is_oauth))) =
                             state.db.get_auth_credentials()
                         {
-                            state.immich.ping(&server_url).await
+                            client.ping(&server_url).await
                         } else {
                             false
                         };
@@ -592,7 +706,7 @@ pub async fn apply_saved_local_file_changes(
                         );
                         if let Err(queue_err) = state
                             .db
-                            .enqueue_mutation(&change.asset_id, "visibility", &payload_json)
+                            .enqueue_mutation(&account_id, &change.asset_id, "visibility", &payload_json)
                         {
                             failed_count += 1;
                             errors.push(format!(
@@ -697,8 +811,7 @@ pub async fn apply_saved_local_file_changes(
                     continue;
                 }
 
-                match state
-                    .immich
+                match client
                     .update_asset_description(&change.asset_id, Some(next_description.as_str()))
                     .await
                 {
@@ -707,7 +820,7 @@ pub async fn apply_saved_local_file_changes(
                         let server_reachable = if let Ok(Some((server_url, _token, _is_oauth))) =
                             state.db.get_auth_credentials()
                         {
-                            state.immich.ping(&server_url).await
+                            client.ping(&server_url).await
                         } else {
                             false
                         };
@@ -740,7 +853,7 @@ pub async fn apply_saved_local_file_changes(
                         );
                         if let Err(queue_err) = state
                             .db
-                            .enqueue_mutation(&change.asset_id, "description", &payload_json)
+                            .enqueue_mutation(&account_id, &change.asset_id, "description", &payload_json)
                         {
                             failed_count += 1;
                             errors.push(format!(
@@ -787,45 +900,106 @@ pub async fn check_for_new_assets(
     let check_started_at = Instant::now();
     log::warn!("[sync.check_for_new_assets] start (quick sync)");
 
-    // Local-first: never hard-fail when the server is simply unreachable. Surface
-    // a recognizable offline marker so the UI keeps showing cached content.
-    if let Ok(Some((server_url, _token, _is_oauth))) = state.db.get_auth_credentials() {
-        if !state.immich.ping(&server_url).await {
-            log::warn!("[sync.check_for_new_assets] server unreachable — skipping (offline)");
-            return Err("offline: server unreachable".to_string());
-        }
+    // Local-first multi-account: gather every account and scan each one's newest
+    // assets. Skip unreachable accounts rather than failing the whole check; only
+    // report offline when no account is reachable at all.
+    let accounts = state.sync_accounts();
+    if accounts.is_empty() {
+        log::warn!("[sync.check_for_new_assets] no accounts available (offline)");
+        return Err("offline: no account available".to_string());
     }
 
     // Mark check as in progress
     state.db.start_check()?;
     log::warn!("[sync.check_for_new_assets] status set to checking");
 
-    // Get current statistics from Immich
-    let statistics = state.immich.get_asset_statistics().await.map_err(|_| {
-        // Mark check as failed
+    let mut any_online = false;
+    let mut total_statistics = 0i32;
+    let mut total_fetched_items: usize = 0;
+    let mut total_written_items: usize = 0;
+    let mut total_new_items: usize = 0;
+
+    for (account_id, immich) in accounts {
+        let server_url = state
+            .db
+            .get_account(&account_id)
+            .ok()
+            .flatten()
+            .map(|account| account.server_url);
+        let online = match &server_url {
+            Some(url) => immich.ping(url).await,
+            None => false,
+        };
+        if !online {
+            log::warn!(
+                "[sync.check_for_new_assets] account {} unreachable — skipping (offline)",
+                account_id
+            );
+            continue;
+        }
+        any_online = true;
+
+        let statistics = match immich.get_asset_statistics().await {
+            Ok(stats) => stats,
+            Err(err) => {
+                log::warn!(
+                    "[sync.check_for_new_assets] failed to get statistics for account {}: {}",
+                    account_id, err
+                );
+                continue;
+            }
+        };
+        total_statistics += statistics.total;
+
+        log::warn!(
+            "[sync.check_for_new_assets] account {} server statistics total={} photos={:?} videos={:?}",
+            account_id, statistics.total, statistics.photos, statistics.videos
+        );
+
+        match quick_sync_one_account(&account_id, immich, state.db.clone()).await {
+            Ok((fetched, written, new)) => {
+                total_fetched_items += fetched;
+                total_written_items += written;
+                total_new_items += new;
+            }
+            Err(err) => {
+                log::warn!(
+                    "[sync.check_for_new_assets] quick sync failed for account {}: {}",
+                    account_id, err
+                );
+                let _ = state.db.fail_check();
+                return Err(err);
+            }
+        }
+    }
+
+    if !any_online {
+        log::warn!("[sync.check_for_new_assets] no reachable accounts (offline)");
         let _ = state.db.fail_check();
-        "Failed to get asset statistics".to_string()
-    })?;
+        return Err("offline: server unreachable".to_string());
+    }
 
+    // Complete the check using the aggregate server-side asset count.
+    let updated_state = state.db.complete_check(total_statistics)?;
     log::warn!(
-        "[sync.check_for_new_assets] server statistics total={} photos={:?} videos={:?}",
-        statistics.total, statistics.photos, statistics.videos
+        "[sync.check_for_new_assets] complete fetched_items={} written_items={} new_items={} duration_ms={}",
+        total_fetched_items,
+        total_written_items,
+        total_new_items,
+        check_started_at.elapsed().as_millis()
     );
+    Ok(SyncStatusResponse::from(updated_state))
+}
 
-    // Get current sync state
-    let current_state = state.db.get_sync_state().map_err(|err| {
-        let _ = state.db.fail_check();
-        format!("Failed to get sync state: {}", err)
-    })?;
-
-    log::warn!(
-        "[sync.check_for_new_assets] current sync state total_assets={} processed_assets={} is_syncing={} check_status={}",
-        current_state.total_assets,
-        current_state.processed_assets,
-        current_state.is_syncing,
-        current_state.check_status
-    );
-
+/// Quick-sync a single account: scan its newest assets, upsert new/recently
+/// edited ones, and prune stale assets within the recent overlap window. Returns
+/// `(fetched, written, new)` counters. The caller owns the global check status
+/// (`start_check`/`complete_check`/`fail_check`).
+async fn quick_sync_one_account(
+    account_id: &str,
+    immich: Arc<ImmichClient>,
+    db: Arc<Database>,
+) -> Result<(usize, usize, usize), String> {
     // Quick sync is intentionally cheap: it only scans the newest assets (which
     // the metadata search returns first) and stops as soon as it reaches a page
     // made entirely of assets we already cache. It does NOT re-enrich the whole
@@ -839,17 +1013,19 @@ pub async fn check_for_new_assets(
     // Refresh the people list once (single cheap request) so faces on any newly
     // discovered assets resolve correctly.
     let people_started_at = Instant::now();
-    if let Ok(people) = state.immich.get_all_people().await {
+    if let Ok(people) = immich.get_all_people().await {
         let people_count = people.len();
-        let _ = state.db.upsert_people(&people);
+        let _ = db.upsert_people(account_id, &people);
         log::warn!(
-            "[sync.check_for_new_assets] refreshed people count={} duration_ms={}",
+            "[sync.check_for_new_assets] account {} refreshed people count={} duration_ms={}",
+            account_id,
             people_count,
             people_started_at.elapsed().as_millis()
         );
     } else {
         log::warn!(
-            "[sync.check_for_new_assets] people refresh failed duration_ms={}",
+            "[sync.check_for_new_assets] account {} people refresh failed duration_ms={}",
+            account_id,
             people_started_at.elapsed().as_millis()
         );
     }
@@ -867,18 +1043,14 @@ pub async fn check_for_new_assets(
     loop {
         let page_started_at = Instant::now();
         log::warn!(
-            "[sync.check_for_new_assets] fetching page={} page_size={}",
-            page, page_size
+            "[sync.check_for_new_assets] account {} fetching page={} page_size={}",
+            account_id, page, page_size
         );
 
-        let result = state
-            .immich
+        let result = immich
             .get_all_assets_paginated(page, page_size)
             .await
-            .map_err(|err| {
-                let _ = state.db.fail_check();
-                format!("Failed to fetch assets: {}", err)
-            })?;
+            .map_err(|err| format!("Failed to fetch assets: {}", err))?;
 
         let item_count = result.items.len();
         total_fetched_items += item_count;
@@ -954,8 +1126,7 @@ pub async fn check_for_new_assets(
         // newest assets come first, a page with zero new ids means we have
         // reached already-known territory and can stop early.
         let page_ids: Vec<String> = result.items.iter().map(|asset| asset.id.clone()).collect();
-        let new_on_page = state
-            .db
+        let new_on_page = db
             .count_new_asset_ids(&page_ids)
             .unwrap_or(page_ids.len());
         total_new_items += new_on_page;
@@ -967,8 +1138,7 @@ pub async fn check_for_new_assets(
         // genuinely new OR fall inside the recent overlap window (so recent
         // edits to already-cached assets are still picked up). Already-cached
         // assets outside the window are left untouched.
-        let existing_ids = state
-            .db
+        let existing_ids = db
             .get_existing_asset_ids(&page_ids)
             .unwrap_or_default();
 
@@ -993,7 +1163,7 @@ pub async fn check_for_new_assets(
         // Hydrate the new / recently-edited assets with full metadata and upsert.
         let enrich_started_at = Instant::now();
         let enriched_assets =
-            enrich_assets_with_full_metadata(state.immich.clone(), assets_to_enrich).await;
+            enrich_assets_with_full_metadata(immich.clone(), assets_to_enrich).await;
         log::warn!(
             "[sync.check_for_new_assets] enriched page={} enriched_count={} skipped_cached={} new_on_page={} duration_ms={}",
             page,
@@ -1012,23 +1182,13 @@ pub async fn check_for_new_assets(
             .map(|value| (value.asset.id.clone(), value.person_ids.clone()))
             .collect();
 
-        // Save assets to database
+        // Save assets to database, tagged with the owning account.
         let write_started_at = Instant::now();
-        state
-            .db
-            .upsert_assets_with_metadata(&extended_assets)
-            .map_err(|err| {
-                let _ = state.db.fail_check();
-                format!("Failed to save assets: {}", err)
-            })?;
+        db.upsert_assets_with_metadata(account_id, &extended_assets)
+            .map_err(|err| format!("Failed to save assets: {}", err))?;
 
-        state
-            .db
-            .replace_asset_people(&asset_people_links)
-            .map_err(|err| {
-                let _ = state.db.fail_check();
-                format!("Failed to save asset-people links: {}", err)
-            })?;
+        db.replace_asset_people(account_id, &asset_people_links)
+            .map_err(|err| format!("Failed to save asset-people links: {}", err))?;
 
         total_written_items += extended_assets.len();
         log::warn!(
@@ -1076,14 +1236,13 @@ pub async fn check_for_new_assets(
     if let (Some(window_start), Some(window_end)) = (overlap_window_start, overlap_window_end) {
         if overlap_window_reached {
             let prune_started_at = Instant::now();
-            let local_ids = state
-                .db
+            let local_ids = db
                 .get_asset_ids_in_created_at_window(
+                    account_id,
                     &window_start.to_rfc3339(),
                     &window_end.to_rfc3339(),
                 )
                 .map_err(|err| {
-                    let _ = state.db.fail_check();
                     format!("Failed to list local assets for quick-sync prune: {}", err)
                 })?;
 
@@ -1098,11 +1257,9 @@ pub async fn check_for_new_assets(
                     prune_started_at.elapsed().as_millis()
                 );
             } else {
-                let deleted_count = state
-                    .db
+                let deleted_count = db
                     .delete_assets_and_links_by_ids(&stale_ids)
                     .map_err(|err| {
-                        let _ = state.db.fail_check();
                         format!("Failed to prune deleted assets during quick sync: {}", err)
                     })?;
 
@@ -1120,16 +1277,7 @@ pub async fn check_for_new_assets(
         }
     }
 
-    // Complete the check
-    let updated_state = state.db.complete_check(statistics.total)?;
-    log::warn!(
-        "[sync.check_for_new_assets] complete fetched_items={} written_items={} new_items={} duration_ms={}",
-        total_fetched_items,
-        total_written_items,
-        total_new_items,
-        check_started_at.elapsed().as_millis()
-    );
-    Ok(SyncStatusResponse::from(updated_state))
+    Ok((total_fetched_items, total_written_items, total_new_items))
 }
 
 async fn enrich_assets_with_full_metadata(
@@ -1229,6 +1377,8 @@ fn to_enriched_asset_record(
             tags: metadata.as_ref().and_then(|m| m.tags.clone()),
             exif_info_json: metadata.as_ref().and_then(|m| m.exif_info_json.clone()),
             is_my_photo: false,
+            account_id: String::new(),
+            account_name: None,
         },
         person_ids: metadata
             .as_ref()

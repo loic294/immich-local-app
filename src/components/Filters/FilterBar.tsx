@@ -1,12 +1,14 @@
 import { X } from "lucide-react";
 import type { AssetFilterCriteria, ViewScope } from "../../types";
 import { useCameras, usePeople } from "../../hooks/useScopedFilterOptions";
+import { useAccounts } from "../../hooks/useAccounts";
 import { RatingFilter } from "./RatingFilter";
 import { FavoriteFilter } from "./FavoriteFilter";
 import { MyPhotosFilter } from "./MyPhotosFilter";
 import { TypeFilter } from "./TypeFilter";
 import { CameraFilter } from "./CameraFilter";
 import { PeopleFilter } from "./PeopleFilter";
+import { AccountFilter } from "./AccountFilter";
 import { useI18n } from "../../i18n";
 
 interface FilterBarProps {
@@ -36,6 +38,7 @@ export function FilterBar({
   const { t } = useI18n();
   const camerasQuery = useCameras(scope, open);
   const peopleQuery = usePeople(scope, open);
+  const { accounts } = useAccounts();
 
   if (!open) {
     return null;
@@ -77,6 +80,14 @@ export function FilterBar({
         isLoading={peopleQuery.isLoading}
         onChange={(personId) => onChange({ personId })}
       />
+
+      {accounts.length > 1 && (
+        <AccountFilter
+          value={criteria.accountId}
+          accounts={accounts}
+          onChange={(accountId) => onChange({ accountId })}
+        />
+      )}
 
       {isActive && (
         <button

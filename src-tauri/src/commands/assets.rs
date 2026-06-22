@@ -16,6 +16,17 @@ async fn server_reachable(state: &tauri::State<'_, AppState>) -> bool {
     }
 }
 
+/// Probe whether a specific account's Immich server is currently reachable,
+/// using that account's own client/session. Falls back to the primary probe
+/// when the account is unknown (e.g. legacy single-account caches).
+async fn account_reachable(state: &tauri::State<'_, AppState>, account_id: &str) -> bool {
+    let client = state.client_for(Some(account_id));
+    match state.db.get_account(account_id) {
+        Ok(Some(account)) => client.ping(&account.server_url).await,
+        _ => server_reachable(state).await,
+    }
+}
+
 fn is_visible_in_grid(asset: &AssetSummary) -> bool {
     if asset.is_archived {
         return false;
@@ -171,6 +182,8 @@ pub struct CachedAssetDetails {
     pub tags: Option<String>,
     pub exif_info_json: Option<String>,
     pub is_my_photo: bool,
+    pub account_id: String,
+    pub account_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,22 +207,35 @@ pub async fn fetch_assets(
     search: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
-    let result = state
-        .immich
-        .get_assets(page, page_size, search.as_deref())
-        .await
-        .map_err(|err| format!("fetch assets failed: {err}"))?;
+    // Aggregate across every account so the timeline mixes all accounts' photos.
+    let accounts = state.sync_accounts();
+    let mut items = Vec::new();
+    let mut has_next_page = false;
 
-    state
-        .db
-        .upsert_assets(&result.items)
-        .map_err(|err| format!("cache write failed: {err}"))?;
+    for (account_id, client) in accounts {
+        match client.get_assets(page, page_size, search.as_deref()).await {
+            Ok(result) => {
+                state
+                    .db
+                    .upsert_assets(&account_id, &result.items)
+                    .map_err(|err| format!("cache write failed: {err}"))?;
+                has_next_page = has_next_page || result.has_next_page;
+                items.extend(result.items);
+            }
+            Err(err) => {
+                log::warn!(
+                    "[assets.fetch_assets] fetch failed for account {}: {}",
+                    account_id, err
+                );
+            }
+        }
+    }
 
     Ok(AssetPage {
         page,
         page_size,
-        items: result.items,
-        has_next_page: result.has_next_page,
+        items,
+        has_next_page,
     })
 }
 
@@ -219,21 +245,32 @@ pub async fn fetch_assets_by_month(
     month: u32,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
-    let result = state
-        .immich
-        .get_assets_by_month(year, month)
-        .await
-        .map_err(|err| format!("fetch assets by month failed: {err}"))?;
+    // Aggregate across every account so the calendar mixes all accounts' photos.
+    let accounts = state.sync_accounts();
+    let mut items = Vec::new();
 
-    state
-        .db
-        .upsert_assets(&result)
-        .map_err(|err| format!("cache write failed: {err}"))?;
+    for (account_id, client) in accounts {
+        match client.get_assets_by_month(year, month).await {
+            Ok(result) => {
+                state
+                    .db
+                    .upsert_assets(&account_id, &result)
+                    .map_err(|err| format!("cache write failed: {err}"))?;
+                items.extend(result);
+            }
+            Err(err) => {
+                log::warn!(
+                    "[assets.fetch_assets_by_month] fetch failed for account {}: {}",
+                    account_id, err
+                );
+            }
+        }
+    }
 
     Ok(AssetPage {
         page: 0,
-        page_size: result.len() as u32,
-        items: result,
+        page_size: items.len() as u32,
+        items,
         has_next_page: false,
     })
 }
@@ -585,8 +622,8 @@ pub async fn get_asset_thumbnail(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     let started_at = Instant::now();
-    let result = state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_asset(&asset_id);
+    let result = client
         .get_asset_thumbnail_data_url(&asset_id)
         .await
         .map_err(|err| format!("thumbnail load failed: {err}"))?;
@@ -656,8 +693,15 @@ pub async fn get_person_thumbnail(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     let started_at = Instant::now();
-    let result = state
-        .immich
+    // Route the face-thumbnail load to the account that owns this person so
+    // secondary-account faces load from the correct server session.
+    let account_id = state
+        .db
+        .get_person_account_id(&person_id)
+        .ok()
+        .flatten();
+    let client = state.client_for(account_id.as_deref());
+    let result = client
         .get_person_thumbnail_data_url(&person_id)
         .await
         .map_err(|err| format!("person thumbnail load failed: {err}"))?;
@@ -678,8 +722,8 @@ pub async fn get_asset_playback(
     asset_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    state
-        .immich
+    let (_account_id, client) = state.account_and_client_for_asset(&asset_id);
+    client
         .get_asset_playback_file_path(&asset_id)
         .await
         .map_err(|err| format!("video playback load failed: {err}"))
@@ -690,9 +734,9 @@ pub async fn refresh_asset(
     asset_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    // Fetch the latest asset metadata from the server
-    let asset = state
-        .immich
+    // Fetch the latest asset metadata from the owning account's server.
+    let (account_id, client) = state.account_and_client_for_asset(&asset_id);
+    let asset = client
         .get_asset(&asset_id)
         .await
         .map_err(|err| format!("refresh asset failed: {err}"))?;
@@ -700,7 +744,7 @@ pub async fn refresh_asset(
     // Update the cache with the latest metadata
     state
         .db
-        .upsert_assets(&[asset.clone()])
+        .upsert_assets(&account_id, &[asset.clone()])
         .map_err(|err| format!("failed to cache refreshed asset: {err}"))?;
 
     Ok(asset)
@@ -735,6 +779,8 @@ pub async fn get_cached_asset_details(
         tags: asset.tags,
         exif_info_json: asset.exif_info_json,
         is_my_photo: asset.is_my_photo,
+        account_id: asset.account_id,
+        account_name: asset.account_name,
     }))
 }
 
@@ -743,8 +789,8 @@ pub async fn update_asset_description(
     payload: UpdateAssetDescriptionPayload,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    match state
-        .immich
+    let (account_id, client) = state.account_and_client_for_asset(&payload.asset_id);
+    match client
         .update_asset_description(&payload.asset_id, payload.description.as_deref())
         .await
     {
@@ -758,12 +804,12 @@ pub async fn update_asset_description(
         Err(err) => {
             // Distinguish an unreachable server (queue + apply locally) from a
             // genuine server-side rejection (surface the error).
-            if server_reachable(&state).await {
+            if account_reachable(&state, &account_id).await {
                 return Err(format!("description update failed: {err}"));
             }
             log::warn!(
-                "[assets.update_asset_description] offline — queuing mutation asset_id={} err={}",
-                payload.asset_id, err
+                "[assets.update_asset_description] offline — queuing mutation asset_id={} account={} err={}",
+                payload.asset_id, account_id, err
             );
             state
                 .db
@@ -772,7 +818,7 @@ pub async fn update_asset_description(
             let body = serde_json::json!({ "description": payload.description });
             state
                 .db
-                .enqueue_mutation(&payload.asset_id, "description", &body.to_string())
+                .enqueue_mutation(&account_id, &payload.asset_id, "description", &body.to_string())
                 .map_err(|e| format!("failed to queue description update: {e}"))?;
             Ok(())
         }
@@ -801,21 +847,22 @@ pub async fn update_asset_favorite(
     is_favorite: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    match state.immich.update_asset_favorite(&asset_id, is_favorite).await {
+    let (account_id, client) = state.account_and_client_for_asset(&asset_id);
+    match client.update_asset_favorite(&asset_id, is_favorite).await {
         Ok(updated_asset) => {
             state
                 .db
-                .upsert_assets(&[updated_asset.clone()])
+                .upsert_assets(&account_id, &[updated_asset.clone()])
                 .map_err(|err| format!("failed to cache updated asset: {err}"))?;
             Ok(updated_asset)
         }
         Err(err) => {
-            if server_reachable(&state).await {
+            if account_reachable(&state, &account_id).await {
                 return Err(format!("favorite update failed: {err}"));
             }
             log::warn!(
-                "[assets.update_asset_favorite] offline — queuing mutation asset_id={} err={}",
-                asset_id, err
+                "[assets.update_asset_favorite] offline — queuing mutation asset_id={} account={} err={}",
+                asset_id, account_id, err
             );
             state
                 .db
@@ -824,7 +871,7 @@ pub async fn update_asset_favorite(
             let body = serde_json::json!({ "isFavorite": is_favorite });
             state
                 .db
-                .enqueue_mutation(&asset_id, "favorite", &body.to_string())
+                .enqueue_mutation(&account_id, &asset_id, "favorite", &body.to_string())
                 .map_err(|e| format!("failed to queue favorite update: {e}"))?;
             state
                 .db
@@ -840,25 +887,25 @@ pub async fn update_asset_visibility(
     payload: UpdateAssetVisibilityPayload,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    match state
-        .immich
+    let (account_id, client) = state.account_and_client_for_asset(&payload.asset_id);
+    match client
         .update_asset_visibility(&payload.asset_id, &payload.visibility)
         .await
     {
         Ok(updated_asset) => {
             state
                 .db
-                .upsert_assets(&[updated_asset.clone()])
+                .upsert_assets(&account_id, &[updated_asset.clone()])
                 .map_err(|err| format!("failed to cache updated asset: {err}"))?;
             Ok(updated_asset)
         }
         Err(err) => {
-            if server_reachable(&state).await {
+            if account_reachable(&state, &account_id).await {
                 return Err(format!("visibility update failed: {err}"));
             }
             log::warn!(
-                "[assets.update_asset_visibility] offline — queuing mutation asset_id={} err={}",
-                payload.asset_id, err
+                "[assets.update_asset_visibility] offline — queuing mutation asset_id={} account={} err={}",
+                payload.asset_id, account_id, err
             );
             state
                 .db
@@ -867,7 +914,7 @@ pub async fn update_asset_visibility(
             let body = serde_json::json!({ "visibility": payload.visibility });
             state
                 .db
-                .enqueue_mutation(&payload.asset_id, "visibility", &body.to_string())
+                .enqueue_mutation(&account_id, &payload.asset_id, "visibility", &body.to_string())
                 .map_err(|e| format!("failed to queue visibility update: {e}"))?;
             state
                 .db
@@ -884,21 +931,22 @@ pub async fn update_asset_rating(
     rating: Option<i32>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    match state.immich.update_asset_rating(&asset_id, rating).await {
+    let (account_id, client) = state.account_and_client_for_asset(&asset_id);
+    match client.update_asset_rating(&asset_id, rating).await {
         Ok(updated_asset) => {
             state
                 .db
-                .upsert_assets(&[updated_asset.clone()])
+                .upsert_assets(&account_id, &[updated_asset.clone()])
                 .map_err(|err| format!("failed to cache updated asset: {err}"))?;
             Ok(updated_asset)
         }
         Err(err) => {
-            if server_reachable(&state).await {
+            if account_reachable(&state, &account_id).await {
                 return Err(format!("rating update failed: {err}"));
             }
             log::warn!(
-                "[assets.update_asset_rating] offline — queuing mutation asset_id={} err={}",
-                asset_id, err
+                "[assets.update_asset_rating] offline — queuing mutation asset_id={} account={} err={}",
+                asset_id, account_id, err
             );
             state
                 .db
@@ -907,7 +955,7 @@ pub async fn update_asset_rating(
             let body = serde_json::json!({ "rating": rating });
             state
                 .db
-                .enqueue_mutation(&asset_id, "rating", &body.to_string())
+                .enqueue_mutation(&account_id, &asset_id, "rating", &body.to_string())
                 .map_err(|e| format!("failed to queue rating update: {e}"))?;
             state
                 .db
@@ -954,14 +1002,16 @@ pub async fn flush_pending_mutations(
         let payload: serde_json::Value = serde_json::from_str(&mutation.payload_json)
             .map_err(|err| format!("invalid queued payload: {err}"))?;
 
+        // Replay each mutation against the account that originally owned it.
+        let client = state.client_for(Some(&mutation.account_id));
+
         let result = match mutation.kind.as_str() {
             "favorite" => {
                 let is_favorite = payload
                     .get("isFavorite")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
-                state
-                    .immich
+                client
                     .update_asset_favorite(&mutation.asset_id, is_favorite)
                     .await
                     .map(Some)
@@ -972,8 +1022,7 @@ pub async fn flush_pending_mutations(
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("timeline")
                     .to_string();
-                state
-                    .immich
+                client
                     .update_asset_visibility(&mutation.asset_id, &visibility)
                     .await
                     .map(Some)
@@ -982,16 +1031,14 @@ pub async fn flush_pending_mutations(
                 let rating = payload
                     .get("rating")
                     .and_then(|v| v.as_i64().map(|n| n as i32));
-                state
-                    .immich
+                client
                     .update_asset_rating(&mutation.asset_id, rating)
                     .await
                     .map(Some)
             }
             "description" => {
                 let description = payload.get("description").and_then(serde_json::Value::as_str);
-                state
-                    .immich
+                client
                     .update_asset_description(&mutation.asset_id, description)
                     .await
                     .map(Some)
@@ -1010,7 +1057,7 @@ pub async fn flush_pending_mutations(
         match result {
             Ok(updated) => {
                 if let Some(asset) = updated {
-                    if let Err(err) = state.db.upsert_assets(&[asset]) {
+                    if let Err(err) = state.db.upsert_assets(&mutation.account_id, &[asset]) {
                         log::warn!(
                             "[assets.flush_pending_mutations] cache write failed asset_id={} err={}",
                             mutation.asset_id, err
@@ -1024,7 +1071,7 @@ pub async fn flush_pending_mutations(
             }
             Err(err) => {
                 // If the server is unreachable again, stop and keep the queue.
-                if !server_reachable(&state).await {
+                if !account_reachable(&state, &mutation.account_id).await {
                     log::warn!(
                         "[assets.flush_pending_mutations] server unreachable — pausing replay: {}",
                         err

@@ -232,8 +232,8 @@ pub async fn copy_assets_to_local_folder_internal(
             "[local-copy] attempting server original download asset_id={}",
             details.id
         );
-        match state
-            .immich
+        let (_account_id, client) = state.account_and_client_for_asset(&details.id);
+        match client
             .get_asset_original_file_path(&details.id, &details.original_file_name)
             .await
         {
@@ -461,8 +461,8 @@ pub async fn copy_assets_to_clipboard(
 
     for asset_id in asset_ids {
         log::info!("[clipboard] resolving thumbnail path for asset_id={}", asset_id);
-        let thumbnail_path = state
-            .immich
+        let (_account_id, client) = state.account_and_client_for_asset(&asset_id);
+        let thumbnail_path = client
             .get_asset_thumbnail_file_path(&asset_id)
             .await
             .map_err(|err| {
@@ -473,7 +473,7 @@ pub async fn copy_assets_to_clipboard(
                 format!("failed to load thumbnail for {asset_id}: {err}")
             })?;
 
-        let asset = state.immich.get_asset(&asset_id).await.map_err(|err| {
+        let asset = client.get_asset(&asset_id).await.map_err(|err| {
             log::info!(
                 "[clipboard] failed to resolve asset details for asset_id={}: {}",
                 asset_id, err
@@ -620,8 +620,14 @@ async fn cached_path_if_exists(
     cache_kind: CacheKind,
 ) -> Result<Option<String>, String> {
     match cache_kind {
-        CacheKind::Thumbnail => state.immich.get_cached_thumbnail_path(asset_id).await,
-        CacheKind::Video => state.immich.get_cached_video_path(asset_id).await,
+        CacheKind::Thumbnail => {
+            let (_account_id, client) = state.account_and_client_for_asset(asset_id);
+            client.get_cached_thumbnail_path(asset_id).await
+        }
+        CacheKind::Video => {
+            let (_account_id, client) = state.account_and_client_for_asset(asset_id);
+            client.get_cached_video_path(asset_id).await
+        }
     }
 }
 

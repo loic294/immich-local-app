@@ -1,9 +1,12 @@
-import { Funnel, LogOut, Search, Upload } from "lucide-react";
+import { Funnel, LogOut, Plus, Search, Star, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { getProfileImage } from "../../api/tauri";
 import { SortButton } from "../Filters/SortButton";
 import type { SortPreference } from "../../types";
 import { useI18n } from "../../i18n";
+import { useAccounts } from "../../hooks/useAccounts";
+import { AddAccountModal } from "../Auth/AddAccountModal";
 
 interface HeaderProps {
   searchInput: string;
@@ -44,6 +47,36 @@ export function Header({
 }: HeaderProps) {
   const { t } = useI18n();
   const [profileImage, setProfileImage] = useState<string | null>(null);
+  const accounts = useAccounts();
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [accountBusy, setAccountBusy] = useState(false);
+
+  const handleMakePrimary = async (accountId: string) => {
+    setAccountBusy(true);
+    try {
+      await accounts.setPrimary(accountId);
+      // state.immich is bound to the primary at startup, so a reload is needed
+      // for the change to fully take effect across the data layer.
+      window.location.reload();
+    } catch (err) {
+      console.error("[accounts] make primary failed", err);
+      setAccountBusy(false);
+    }
+  };
+
+  const handleRemoveAccount = async (accountId: string) => {
+    if (!window.confirm(t("account.removeConfirm"))) {
+      return;
+    }
+    setAccountBusy(true);
+    try {
+      await accounts.remove(accountId);
+      window.location.reload();
+    } catch (err) {
+      console.error("[accounts] remove account failed", err);
+      setAccountBusy(false);
+    }
+  };
 
   const initials = useMemo(() => {
     const value = userName.trim();
@@ -150,6 +183,92 @@ export function Header({
             <p className="m-0 truncate text-xs text-base-content/60">
               {serverUrl}
             </p>
+
+            {accounts.accounts.length > 0 ? (
+              <>
+                <div className="divider my-2 text-xs text-base-content/50">
+                  {t("account.accountsTitle")}
+                </div>
+                <ul className="max-h-64 space-y-1 overflow-y-auto">
+                  {accounts.accounts.map((account) => {
+                    const label =
+                      account.userName || account.userEmail || account.userId;
+                    const seed = (
+                      account.userName ||
+                      account.userEmail ||
+                      "U"
+                    ).trim();
+                    const accountInitials =
+                      seed.slice(0, 2).toUpperCase() || "U";
+                    return (
+                      <li
+                        key={account.id}
+                        className="flex items-center gap-2 rounded-box px-1 py-1"
+                      >
+                        <div className="avatar placeholder shrink-0">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-content">
+                            {accountInitials}
+                          </div>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="m-0 flex items-center gap-1 truncate text-sm font-medium text-base-content">
+                            {label}
+                            {account.isPrimary ? (
+                              <span className="badge badge-primary badge-xs gap-1">
+                                <Star size={9} />
+                                {t("account.primaryBadge")}
+                              </span>
+                            ) : null}
+                          </p>
+                          <p className="m-0 truncate text-xs text-base-content/50">
+                            {account.serverUrl}
+                          </p>
+                        </div>
+                        {!account.isPrimary ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs btn-circle"
+                              title={t("account.makePrimary")}
+                              aria-label={t("account.makePrimary")}
+                              disabled={accountBusy}
+                              onClick={() => {
+                                void handleMakePrimary(account.id);
+                              }}
+                            >
+                              <Star size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs btn-circle text-error"
+                              title={t("account.removeAccount")}
+                              aria-label={t("account.removeAccount")}
+                              disabled={accountBusy}
+                              onClick={() => {
+                                void handleRemoveAccount(account.id);
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            ) : null}
+
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost mt-2 w-full justify-start"
+              disabled={accountBusy}
+              onClick={() => setShowAddAccount(true)}
+            >
+              <Plus size={14} className="shrink-0" />
+              <span>{t("account.addAccount")}</span>
+            </button>
+
             <div className="divider my-2" />
             <button
               type="button"
@@ -162,6 +281,20 @@ export function Header({
           </div>
         </details>
       </div>
+
+      {showAddAccount ? (
+        <AddAccountModal
+          accounts={accounts}
+          onClose={() => setShowAddAccount(false)}
+          onAdded={() => {
+            // A freshly added account starts empty locally; pull its recent
+            // library so its photos appear without requiring a manual sync.
+            void invoke("check_for_new_assets").catch((err) =>
+              console.error("[accounts] post-add quick sync failed", err),
+            );
+          }}
+        />
+      ) : null}
     </header>
   );
 }

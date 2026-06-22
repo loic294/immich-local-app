@@ -164,6 +164,14 @@ export function FullscreenInfoPanel({
           label={t("photoGrid.labelFileLocation")}
           value={locationValue}
         />
+
+        {details?.accountName ? (
+          <InfoRow
+            label={t("photoGrid.labelOwner")}
+            value={details.accountName}
+            unknownText={t("photoGrid.unknownValue")}
+          />
+        ) : null}
       </div>
 
       <div className="mt-3 space-y-2 rounded-sm bg-zinc-900 p-4">

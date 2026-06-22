@@ -192,6 +192,7 @@ export type AssetFilterCriteria = {
   mediaType: MediaTypeFilter | null;
   camera: string | null;
   personId: string | null;
+  accountId: string | null;
 };
 
 export const DEFAULT_FILTER_CRITERIA: AssetFilterCriteria = {
@@ -202,6 +203,7 @@ export const DEFAULT_FILTER_CRITERIA: AssetFilterCriteria = {
   mediaType: null,
   camera: null,
   personId: null,
+  accountId: null,
 };
 
 /** The dimension by which assets are sorted. */
@@ -229,7 +231,8 @@ export function isFilterActive(criteria: AssetFilterCriteria): boolean {
     criteria.myPhotosOnly === true ||
     criteria.mediaType != null ||
     (criteria.camera != null && criteria.camera !== "") ||
-    (criteria.personId != null && criteria.personId !== "")
+    (criteria.personId != null && criteria.personId !== "") ||
+    (criteria.accountId != null && criteria.accountId !== "")
   );
 }
 
@@ -286,6 +289,10 @@ export type AssetCacheDetails = {
   tags: string | null;
   exifInfoJson: string | null;
   isMyPhoto: boolean;
+  /** Locally-generated id of the account this asset was synced from. */
+  accountId: string;
+  /** Display name (or email) of the owning account, for the info panel. */
+  accountName: string | null;
 };
 
 export type SavedLocalFileChange = {
