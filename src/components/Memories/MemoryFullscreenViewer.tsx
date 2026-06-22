@@ -73,7 +73,10 @@ export function MemoryFullscreenViewer({
     let cancelled = false;
     async function load() {
       try {
-        const value = await getAssetThumbnail(cover.id, previousMemory.accountId);
+        const value = await getAssetThumbnail(
+          cover.id,
+          previousMemory.accountId,
+        );
         if (!cancelled) {
           setPreviousSrc(value);
         }
