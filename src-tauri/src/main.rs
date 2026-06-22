@@ -43,9 +43,73 @@ use commands::sync::{
 use services::db::Database;
 use services::account_manager::AccountManager;
 use services::immich_client::ImmichClient;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri_plugin_deep_link::DeepLinkExt;
+
+/// Directory inside the user's "Cache Location" where application log files are
+/// written in production builds. Mirrors the cache root used for thumbnails,
+/// videos, etc. so all on-disk app data lives under one place.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn cache_logs_dir() -> Option<PathBuf> {
+    crate::util::home_dir().map(|home| {
+        home.join(".config")
+            .join("immich-local-app")
+            .join("logs")
+    })
+}
+
+/// Build the logging plugin.
+///
+/// In production builds, both Rust (`log::*`) and frontend (`console.*`, routed
+/// through `@tauri-apps/plugin-log`) records are written to rotating files in
+/// the user's Cache Location (`<cache>/logs`). In debug builds we keep the
+/// developer-friendly Stdout + default app log dir targets instead.
+fn build_log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    let builder = tauri_plugin_log::Builder::new().level(log::LevelFilter::Info);
+
+    #[cfg(debug_assertions)]
+    let builder = builder
+        .target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::Stdout,
+        ))
+        .target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::LogDir {
+                file_name: Some("immich-local-app".to_string()),
+            },
+        ));
+
+    #[cfg(not(debug_assertions))]
+    let builder = {
+        let target = match cache_logs_dir() {
+            Some(dir) => {
+                // Best-effort: ensure the directory exists so the first write
+                // doesn't fail silently. The plugin also creates it, but this
+                // logs an early, actionable error if the path is unusable.
+                if let Err(err) = std::fs::create_dir_all(&dir) {
+                    eprintln!(
+                        "[logging] failed to create cache logs dir {}: {}",
+                        dir.display(),
+                        err
+                    );
+                }
+                tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                    path: dir,
+                    file_name: Some("immich-local-app".to_string()),
+                })
+            }
+            // Fall back to the platform default log dir if the home directory
+            // cannot be resolved, so production logging never silently breaks.
+            None => tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                file_name: Some("immich-local-app".to_string()),
+            }),
+        };
+        builder.target(target)
+    };
+
+    builder.build()
+}
 
 pub struct AppState {
     pub db: Arc<Database>,
@@ -146,19 +210,7 @@ pub fn main() {
     let sync_cancel = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .level(log::LevelFilter::Info)
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("immich-local-app".to_string()),
-                    },
-                ))
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::Stdout,
-                ))
-                .build(),
-        )
+        .plugin(build_log_plugin())
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
