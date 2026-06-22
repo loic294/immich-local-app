@@ -36,13 +36,14 @@ use commands::shell::{
     open_folder_in_file_explorer, open_url,
 };
 use commands::sync::{
-    apply_saved_local_file_changes, check_for_new_assets, force_full_asset_sync,
+    apply_saved_local_file_changes, cancel_asset_sync, check_for_new_assets, force_full_asset_sync,
     get_saved_local_file_changes, get_sync_status, refresh_album_assets, refresh_album_list,
     scan_saved_local_files, start_asset_sync,
 };
 use services::db::Database;
 use services::account_manager::AccountManager;
 use services::immich_client::ImmichClient;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -50,6 +51,10 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub immich: Arc<ImmichClient>,
     pub accounts: Arc<AccountManager>,
+    /// Cooperative cancellation flag for the background asset sync task. Set to
+    /// `true` by `cancel_asset_sync` and checked at each page boundary in the
+    /// sync loop; reset to `false` whenever a new sync starts.
+    pub sync_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -138,6 +143,7 @@ pub fn main() {
     let db = Arc::new(Database::new().expect("failed to initialize sqlite"));
     let immich = Arc::new(ImmichClient::new());
     let accounts = Arc::new(AccountManager::new());
+    let sync_cancel = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()
         .plugin(
@@ -179,7 +185,12 @@ pub fn main() {
 
             Ok(())
         })
-        .manage(AppState { db, immich, accounts })
+        .manage(AppState {
+            db,
+            immich,
+            accounts,
+            sync_cancel,
+        })
         .invoke_handler(tauri::generate_handler![
             authenticate,
             authenticate_with_password,
@@ -252,6 +263,7 @@ pub fn main() {
             get_sync_status,
             start_asset_sync,
             force_full_asset_sync,
+            cancel_asset_sync,
             check_for_new_assets,
             refresh_album_assets,
             refresh_album_list,

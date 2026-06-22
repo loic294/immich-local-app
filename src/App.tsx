@@ -42,6 +42,7 @@ export function App() {
   const [isApplyingLocalFileChanges, setIsApplyingLocalFileChanges] =
     useState(false);
   const hasTriggeredResume = useRef(false);
+  const hasAutoStartedSync = useRef(false);
   const hasQuickCheckedOnBoot = useRef(false);
   const hasSyncedAlbumListOnBoot = useRef(false);
   const hasScannedLocalFilesOnBoot = useRef(false);
@@ -157,9 +158,12 @@ export function App() {
       isOnline === true &&
       syncStatus &&
       !syncStatus.lastSyncCompletedAt &&
-      !syncStatus.isSyncing
+      !syncStatus.isSyncing &&
+      !hasAutoStartedSync.current
     ) {
-      // First sync - start it automatically
+      // First sync - start it automatically (only once per launch, so an
+      // explicit cancel isn't immediately overridden).
+      hasAutoStartedSync.current = true;
       void startSync();
     }
   }, [
@@ -196,6 +200,7 @@ export function App() {
     if (!session) {
       hasSyncedAlbumListOnBoot.current = false;
       hasScannedLocalFilesOnBoot.current = false;
+      hasAutoStartedSync.current = false;
       lastLocalFileScanAtRef.current = 0;
       setLocalFileChanges([]);
       setLocalFileApplyErrors([]);

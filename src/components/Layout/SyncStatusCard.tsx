@@ -1,4 +1,4 @@
-import { Check, RefreshCw } from "lucide-react";
+import { Check, RefreshCw, X } from "lucide-react";
 import { useSyncStatus } from "../../hooks/useSyncStatus";
 import { useI18n } from "../../i18n";
 
@@ -11,6 +11,7 @@ export function SyncStatusCard() {
     progress,
     error,
     checkForNewAssets,
+    cancelSync,
   } = useSyncStatus();
 
   const isBusy = isSyncing || isChecking;
@@ -97,6 +98,16 @@ export function SyncStatusCard() {
           {isChecking && t("syncCard.checkingShort")}
           {!isSyncing && !isChecking && t("syncCard.checkForNew")}
         </button>
+
+        {isSyncing && (
+          <button
+            className="btn btn-sm btn-outline btn-error w-full gap-2"
+            onClick={() => void cancelSync()}
+          >
+            <X size={14} />
+            {t("syncCard.cancel")}
+          </button>
+        )}
 
         {error && (
           <div className="alert alert-error alert-sm">

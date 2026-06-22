@@ -7,6 +7,7 @@ import {
   RefreshCcw,
   Check,
   Download,
+  X,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -52,10 +53,12 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [isSavingMyPhotosRules, setIsSavingMyPhotosRules] = useState(false);
   const [isForcingFullSync, setIsForcingFullSync] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
+  const [isCancellingSync, setIsCancellingSync] = useState(false);
   const [isSyncingAlbumsList, setIsSyncingAlbumsList] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const {
     forceFullSync,
+    cancelSync,
     checkForNewAssets,
     syncStatus,
     isSyncing,
@@ -299,6 +302,17 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     }
   };
 
+  const handleCancelSync = async () => {
+    try {
+      setIsCancellingSync(true);
+      await cancelSync();
+    } catch (error) {
+      console.error("Failed to cancel sync:", error);
+    } finally {
+      setIsCancellingSync(false);
+    }
+  };
+
   const handleQuickSync = async () => {
     try {
       setIsQuickSyncing(true);
@@ -497,6 +511,22 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                   !isSyncing &&
                   t("settings.forceFullSyncCta")}
               </button>
+
+              {isSyncing && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleCancelSync();
+                  }}
+                  disabled={isCancellingSync}
+                  className="btn btn-outline btn-error gap-2"
+                >
+                  <X size={16} />
+                  {isCancellingSync
+                    ? t("settings.cancellingSyncCta")
+                    : t("settings.cancelSyncCta")}
+                </button>
+              )}
             </div>
 
             {error && (

@@ -8,6 +8,7 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, UNIX_EPOCH};
 use tokio::sync::Semaphore;
@@ -89,6 +90,24 @@ pub async fn force_full_asset_sync(
 ) -> Result<SyncStatusResponse, String> {
     log::warn!("force_full_asset_sync invoked");
     start_asset_sync_internal(state, true).await
+}
+
+/// Request cancellation of the in-progress background asset sync. Sets the
+/// cooperative cancel flag (checked at each page boundary in the sync loop) and
+/// immediately clears `is_syncing` so the UI stops showing progress. Progress
+/// already persisted to the database is preserved so the sync can be resumed
+/// later via `start_asset_sync`.
+#[tauri::command]
+pub async fn cancel_asset_sync(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<SyncStatusResponse, String> {
+    log::warn!("[sync] cancel_asset_sync invoked — requesting sync cancellation");
+    state.sync_cancel.store(true, Ordering::SeqCst);
+    let sync_state = state.db.cancel_sync().map_err(|err| {
+        log::warn!("[sync] failed to mark sync as cancelled: {}", err);
+        format!("Failed to cancel sync: {}", err)
+    })?;
+    Ok(SyncStatusResponse::from(sync_state))
 }
 
 async fn start_asset_sync_internal(
@@ -205,6 +224,10 @@ async fn start_asset_sync_internal(
 
     // Spawn background task to fetch and save assets across all accounts.
     let db = state.db.clone();
+    // Reset the cancellation flag for this run and hand a clone to the task so
+    // it can stop cooperatively at the next page boundary.
+    let cancel = state.sync_cancel.clone();
+    cancel.store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn(async move {
         log::warn!("Starting background sync task from page {}", start_page);
@@ -214,6 +237,7 @@ async fn start_asset_sync_internal(
             start_page,
             sync_state.processed_assets,
             single_account,
+            cancel,
         )
         .await
         {
@@ -230,6 +254,7 @@ async fn sync_all_assets_background(
     start_page: u32,
     initial_processed_count: i32,
     allow_resume: bool,
+    cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let page_size = 100u32;
     let mut processed_count = initial_processed_count;
@@ -266,6 +291,21 @@ async fn sync_all_assets_background(
         let mut page = account_start_page;
 
         loop {
+            // Cooperative cancellation: stop at the page boundary so the last
+            // persisted progress stays on a clean page edge for resuming later.
+            if cancel.load(Ordering::SeqCst) {
+                log::warn!(
+                    "[sync] cancellation requested — stopping sync for account {} at page {} ({} assets processed)",
+                    account_id,
+                    page,
+                    processed_count
+                );
+                if let Err(err) = db.cancel_sync() {
+                    log::warn!("[sync] failed to record sync cancellation: {}", err);
+                }
+                return Ok(());
+            }
+
             log::warn!("[sync] account {} fetching page {} of assets", account_id, page);
 
             let result = immich
@@ -329,6 +369,16 @@ async fn sync_all_assets_background(
 
             page += 1;
         }
+    }
+
+    // If cancellation landed during the final page, don't mark the sync as
+    // complete — leave it resumable instead.
+    if cancel.load(Ordering::SeqCst) {
+        log::warn!("[sync] cancellation requested before completion — leaving sync resumable");
+        if let Err(err) = db.cancel_sync() {
+            log::warn!("[sync] failed to record sync cancellation: {}", err);
+        }
+        return Ok(());
     }
 
     // Mark sync as complete

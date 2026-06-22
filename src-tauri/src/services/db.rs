@@ -3775,6 +3775,27 @@ impl Database {
         self.get_sync_state()
     }
 
+    /// Mark an in-progress sync as stopped without marking it complete. Clears
+    /// `is_syncing` so the UI stops showing progress, but intentionally leaves
+    /// `processed_assets` and `last_sync_completed_at` untouched so the sync can
+    /// be resumed later from the last persisted page boundary.
+    pub fn cancel_sync(&self) -> Result<SyncState, String> {
+        let conn = self.open()?;
+        let now = chrono::Local::now().to_rfc3339();
+
+        conn.execute(
+            "
+            UPDATE sync_state 
+            SET is_syncing = 0, updated_at = ?1
+            WHERE id = 'default'
+            ",
+            params![now],
+        )
+        .map_err(|err| err.to_string())?;
+
+        self.get_sync_state()
+    }
+
     pub fn start_check(&self) -> Result<SyncState, String> {
         let conn = self.open()?;
         let now = chrono::Local::now().to_rfc3339();

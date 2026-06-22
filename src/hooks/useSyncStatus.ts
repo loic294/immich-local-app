@@ -19,8 +19,7 @@ export type UseSyncStatusReturn = {
   progress: number; // 0-100
   error: string | null;
   startSync: () => Promise<void>;
-  forceFullSync: () => Promise<void>;
-  checkForNewAssets: () => Promise<boolean>; // Quick sync. Returns true if new assets found
+  forceFullSync: () => Promise<void>;  cancelSync: () => Promise<void>;  checkForNewAssets: () => Promise<boolean>; // Quick sync. Returns true if new assets found
 };
 
 const CHECK_STALE_TIMEOUT = 2 * 60 * 1000; // 2 minutes
@@ -116,6 +115,28 @@ export function useSyncStatus(): UseSyncStatusReturn {
         message = String((err as any).message);
       }
       console.error("Force full sync error:", err);
+      setError(message);
+    }
+  }, [fetchSyncStatus]);
+
+  // Cancel an in-progress full sync. Progress already persisted is kept so the
+  // sync can be resumed later.
+  const cancelSync = useCallback(async () => {
+    try {
+      setError(null);
+      console.info("[useSyncStatus] invoking cancel_asset_sync");
+      await invoke<SyncStatus>("cancel_asset_sync");
+      await fetchSyncStatus();
+    } catch (err) {
+      let message = "Unknown error cancelling sync";
+      if (err instanceof Error) {
+        message = err.message;
+      } else if (typeof err === "string") {
+        message = err;
+      } else if (typeof err === "object" && err !== null && "message" in err) {
+        message = String((err as any).message);
+      }
+      console.error("Cancel sync error:", err);
       setError(message);
     }
   }, [fetchSyncStatus]);
@@ -220,6 +241,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
     error,
     startSync,
     forceFullSync,
+    cancelSync,
     checkForNewAssets,
   };
 }

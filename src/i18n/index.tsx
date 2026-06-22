@@ -69,6 +69,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       startFullSyncCta: "Starting Full Sync...",
       syncingCta: "Syncing...",
       forceFullSyncCta: "Force Full Sync",
+      cancelSyncCta: "Cancel Sync",
+      cancellingSyncCta: "Cancelling...",
       syncAlbumsListCta: "Sync Albums List",
       syncAlbumsListRunning: "Syncing Albums List...",
       syncAlbumsListHelp:
@@ -182,6 +184,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       syncing: "Syncing...",
       checkingShort: "Checking...",
       checkForNew: "Check for New Photos",
+      cancel: "Cancel",
+      cancelling: "Cancelling...",
     },
     updateNotifier: {
       downloading: "Downloading update...",
@@ -428,6 +432,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       startFullSyncCta: "Demarrage de la synchro complete...",
       syncingCta: "Synchronisation...",
       forceFullSyncCta: "Forcer la synchronisation complete",
+      cancelSyncCta: "Annuler la synchronisation",
+      cancellingSyncCta: "Annulation...",
       syncAlbumsListCta: "Synchroniser la liste des albums",
       syncAlbumsListRunning: "Synchronisation de la liste des albums...",
       syncAlbumsListHelp:
@@ -546,6 +552,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       syncing: "Synchronisation...",
       checkingShort: "Vérification...",
       checkForNew: "Synchroniser",
+      cancel: "Annuler",
+      cancelling: "Annulation...",
     },
     updateNotifier: {
       downloading: "Téléchargement de la mise à jour...",
