@@ -7,7 +7,13 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json,css,html,md}": "prettier --write"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.51.1",
@@ -33,6 +39,9 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "daisyui": "^5.5.19",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.8",
+    "prettier": "^3.8.4",
     "tailwindcss": "^4.2.2",
     "typescript": "^5.5.4",
     "vite": "^5.4.0"
