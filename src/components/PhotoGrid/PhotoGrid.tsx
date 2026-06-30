@@ -1,35 +1,16 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import {
-  ArrowLeft,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  CirclePlay,
-  Film,
-  Heart,
-  Calendar,
-  Info,
-  ZoomIn,
-} from "lucide-react";
-import { thumbHashToRGBA } from "thumbhash";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { FullscreenMetadataBar } from "./FullscreenMetadataBar";
-import { FullscreenThumbnailStrip } from "./FullscreenThumbnailStrip";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Calendar } from "lucide-react";
+import { AssetThumbnail } from "./AssetThumbnail";
 import { DatePickerModal } from "./DatePickerModal";
+import { PhotoGridFullscreenOverlay } from "./PhotoGridFullscreenOverlay";
 import { VerticalTimeline } from "./VerticalTimeline";
-import { FullscreenInfoPanel } from "./FullscreenInfoPanel";
-import { CanvasImageViewer } from "./CanvasImageViewer";
-import { ZoomControl } from "./ZoomControl";
-import { SelectionActions } from "../Layout/SelectionActions";
 import type {
   AssetCacheDetails,
   GridLayoutSection,
-  GridLayoutResponse,
   AssetSummary,
   AssetVisibility,
   Settings,
   TimelineLayoutDay,
-  TimelineLayoutMonth,
   TimelineLayoutResponse,
 } from "../../types";
 import {
@@ -45,55 +26,21 @@ import {
   updateAssetVisibility,
 } from "../../api/tauri";
 import { useI18n } from "../../i18n";
-
-import { isThumbnailCached } from "../../api/tauri";
-type PhotoGridProps = {
-  assets: AssetSummary[];
-  hideArchivedAssets?: boolean;
-  isFetching: boolean;
-  isFetchingPrevious?: boolean;
-  hasNextPage: boolean;
-  hasPreviousPage?: boolean;
-  onLoadMore: () => Promise<void> | void;
-  onLoadPrevious?: () => Promise<void> | void;
-  availableDates?: string[];
-  onJumpToDate?: (dateKey: string) => Promise<void> | void;
-  loadFullLayout?: (containerWidth: number) => Promise<GridLayoutResponse>;
-  loadTimelineLayout?: (containerWidth: number) => Promise<TimelineLayoutResponse>;
-  maxHeight?: number;
-  onSelectedCountChange?: (count: number) => void;
-  onSelectedIdsChange?: (ids: string[]) => void;
-  selectionCommand?: {
-    type: "clear" | "select-all";
-    nonce: number;
-  } | null;
-};
-
-type VirtualEntry =
-  | {
-      type: "header";
-      key: string;
-      sectionKey: string;
-      label: string;
-      top: number;
-      height: number;
-    }
-  | {
-      type: "row";
-      key: string;
-      sectionKey: string;
-      top: number;
-      height: number;
-      items: { id: string; width: number; thumbhash: string | null }[];
-    };
-
-type ScrollRestoreAnchor = {
-  direction: "prepend" | "append";
-  assetId: string;
-  offsetWithinRow: number;
-  capturedScrollTop: number;
-  capturedAt: number;
-};
+import type {
+  JumpMetrics,
+  PhotoGridProps,
+  ScrollRestoreAnchor,
+  VirtualEntry,
+} from "./PhotoGrid.types";
+import {
+  getAssetAspectRatio,
+  isVideoAsset,
+  preloadImage,
+  thumbhashToDataUrl,
+  toPlayableSrc,
+} from "./photoGridUtils";
+import { usePhotoGridSelection } from "./usePhotoGridSelection";
+import { usePhotoGridVirtualLayout } from "./usePhotoGridVirtualLayout";
 
 export function PhotoGrid({
   assets,
@@ -161,19 +108,12 @@ export function PhotoGrid({
   const latestRenderScrollTopRef = useRef(0);
   const pendingScrollRestoreRef = useRef<ScrollRestoreAnchor | null>(null);
   const pendingRestoreAttemptsRef = useRef(0);
-  const jumpMetricsRef = useRef<{
-    jumpId: string;
-    dateKey: string;
-    startedAtMs: number;
-  } | null>(null);
+  const jumpMetricsRef = useRef<JumpMetrics | null>(null);
   const fullsizeStillLoadingAssetIdRef = useRef<string | null>(null);
   const [layoutReadyAssetCount, setLayoutReadyAssetCount] = useState(0);
   const [fullGridSections, setFullGridSections] = useState<GridLayoutSection[]>([]);
   const isUsingFullLayout = fullGridSections.length > 0;
   const [timelineLayout, setTimelineLayout] = useState<TimelineLayoutResponse | null>(null);
-  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(() => new Set());
-  const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<number | null>(null);
-  const handledSelectionCommandRef = useRef(0);
 
   const requestFullscreenLoadMore = () => {
     if (pendingJumpDateKey) {
@@ -503,113 +443,12 @@ export function PhotoGrid({
     () => new Map(displayAssets.map((asset) => [asset.id, asset])),
     [displayAssets],
   );
-  const assetIndexById = useMemo(
-    () => new Map(displayAssets.map((asset, index) => [asset.id, index] as const)),
-    [displayAssets],
-  );
-
-  useEffect(() => {
-    setSelectedAssetIds((current) => {
-      if (current.size === 0) {
-        return current;
-      }
-
-      const next = new Set<string>();
-      for (const id of current) {
-        if (assetIndexById.has(id)) {
-          next.add(id);
-        }
-      }
-
-      if (next.size === current.size) {
-        return current;
-      }
-
-      return next;
-    });
-  }, [assetIndexById]);
-
-  useEffect(() => {
-    onSelectedCountChange?.(selectedAssetIds.size);
-  }, [onSelectedCountChange, selectedAssetIds]);
-
-  useEffect(() => {
-    onSelectedIdsChange?.(Array.from(selectedAssetIds));
-  }, [onSelectedIdsChange, selectedAssetIds]);
-
-  useEffect(() => {
-    if (!selectionCommand) {
-      return;
-    }
-
-    if (selectionCommand.nonce === handledSelectionCommandRef.current) {
-      return;
-    }
-
-    handledSelectionCommandRef.current = selectionCommand.nonce;
-
-    if (selectionCommand.type === "clear") {
-      setSelectedAssetIds(new Set());
-      setSelectionAnchorIndex(null);
-      return;
-    }
-
-    if (selectionCommand.type === "select-all") {
-      const next = new Set(displayAssets.map((asset) => asset.id));
-      setSelectedAssetIds(next);
-      setSelectionAnchorIndex(displayAssets.length > 0 ? 0 : null);
-    }
-  }, [displayAssets, selectionCommand]);
-
-  const applySelection = (
-    assetId: string,
-    index: number,
-    modifiers: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
-  ) => {
-    const isToggle = modifiers.metaKey || modifiers.ctrlKey;
-
-    if (modifiers.shiftKey) {
-      const anchor = selectionAnchorIndex !== null ? selectionAnchorIndex : index;
-      const start = Math.min(anchor, index);
-      const end = Math.max(anchor, index);
-      const rangeIds = displayAssets.slice(start, end + 1).map((asset) => asset.id);
-
-      setSelectedAssetIds((current) => {
-        const next = isToggle ? new Set(current) : new Set<string>();
-        for (const id of rangeIds) {
-          next.add(id);
-        }
-        return next;
-      });
-      setSelectionAnchorIndex(index);
-      return;
-    }
-
-    if (isToggle) {
-      setSelectedAssetIds((current) => {
-        const next = new Set(current);
-        if (next.has(assetId)) {
-          next.delete(assetId);
-        } else {
-          next.add(assetId);
-        }
-        return next;
-      });
-      setSelectionAnchorIndex(index);
-      return;
-    }
-
-    setSelectedAssetIds((current) => {
-      const next = new Set(current);
-      if (next.has(assetId)) {
-        next.delete(assetId);
-      } else {
-        next.add(assetId);
-      }
-      return next;
-    });
-    setSelectionAnchorIndex(index);
-  };
+  const { selectedAssetIds, assetIndexById, applySelection } = usePhotoGridSelection({
+    displayAssets,
+    selectionCommand,
+    onSelectedCountChange,
+    onSelectedIdsChange,
+  });
 
   const availableDates = useMemo(
     () =>
@@ -618,71 +457,22 @@ export function PhotoGrid({
     [availableDatesProp, fullGridSections, gridSections],
   );
 
-  const { virtualEntries, totalContentHeight, loadedTimelineMonths } = useMemo(() => {
-    const entries: VirtualEntry[] = [];
-    const nextSectionTopMap = new Map<string, number>();
-    const monthMap = new Map<string, TimelineLayoutMonth>();
-
-    const headerHeight = 52;
-    const rowGap = 4;
-    const sectionGap = 10;
-    let cursor = 0;
-
-    // Use the pre-computed full layout when available so positions are stable
-    const sectionsForLayout = fullGridSections.length > 0 ? fullGridSections : gridSections;
-
-    for (const section of sectionsForLayout) {
-      nextSectionTopMap.set(section.key, cursor);
-      entries.push({
-        type: "header",
-        key: `header-${section.key}`,
-        sectionKey: section.key,
-        label: section.label,
-        top: cursor,
-        height: headerHeight,
-      });
-      cursor += headerHeight;
-
-      section.rows.forEach((row, rowIndex) => {
-        entries.push({
-          type: "row",
-          key: `${section.key}-${rowIndex}`,
-          sectionKey: section.key,
-          top: cursor,
-          height: row.height,
-          items: row.items,
-        });
-        cursor += row.height + rowGap;
-      });
-
-      cursor += sectionGap;
-
-      const dayInfo = parseDayKey(section.key);
-      if (dayInfo) {
-        const monthKey = `${dayInfo.year}-${String(dayInfo.month).padStart(2, "0")}`;
-        const month = monthMap.get(monthKey);
-
-        if (month) {
-          month.rowCount += section.rows.length;
-        } else {
-          monthMap.set(monthKey, {
-            monthKey,
-            jumpDateKey: section.key,
-            year: dayInfo.year,
-            month: dayInfo.month,
-            rowCount: section.rows.length,
-          });
-        }
-      }
-    }
-
-    sectionTopMapRef.current = nextSectionTopMap;
-    return {
-      virtualEntries: entries,
-      totalContentHeight: cursor,
-      loadedTimelineMonths: [...monthMap.values()],
-    };
-  }, [fullGridSections, gridSections]);
+  const {
+    virtualEntries,
+    visibleEntries,
+    totalContentHeight,
+    loadedTimelineMonths,
+    loadedContentTop,
+    loadedContentBottom,
+    sectionTopMap,
+  } = usePhotoGridVirtualLayout({
+    fullGridSections,
+    gridSections,
+    displayAssetIds: displayAssets.map((asset) => asset.id),
+    isUsingFullLayout,
+    viewportHeight,
+    scrollTop,
+  });
 
   useEffect(() => {
     if (!loadTimelineLayout || viewportWidth <= 0) {
@@ -710,61 +500,17 @@ export function PhotoGrid({
     };
   }, [loadTimelineLayout, viewportWidth]);
 
-  const visibleEntries = useMemo(() => {
-    if (virtualEntries.length === 0) {
-      return [];
-    }
-
-    const overscan = Math.max(1000, viewportHeight * 1.5);
-    const start = Math.max(0, scrollTop - overscan);
-    const end = scrollTop + viewportHeight + overscan;
-
-    const startIndex = Math.max(0, findFirstEntryAtOrAfter(virtualEntries, start) - 2);
-    const endIndex = Math.min(
-      virtualEntries.length,
-      findFirstEntryAtOrAfter(virtualEntries, end + 1) + 2,
-    );
-
-    return virtualEntries.slice(startIndex, endIndex).filter((entry) => {
-      const entryBottom = entry.top + entry.height;
-      return entryBottom >= start && entry.top <= end;
-    });
-  }, [virtualEntries, scrollTop, viewportHeight]);
-
   useEffect(() => {
     latestVirtualEntriesRef.current = virtualEntries;
   }, [virtualEntries]);
 
   useEffect(() => {
+    sectionTopMapRef.current = sectionTopMap;
+  }, [sectionTopMap]);
+
+  useEffect(() => {
     latestRenderScrollTopRef.current = scrollTop;
   }, [scrollTop]);
-
-  // Absolute y-positions of the first and last loaded asset rows
-  const { loadedContentTop, loadedContentBottom } = useMemo(() => {
-    if (!isUsingFullLayout || displayAssets.length === 0) {
-      return { loadedContentTop: 0, loadedContentBottom: totalContentHeight };
-    }
-
-    const firstId = displayAssets[0]?.id;
-    const lastId = displayAssets[displayAssets.length - 1]?.id;
-    let top: number | null = null;
-    let bottom: number | null = null;
-
-    for (const entry of virtualEntries) {
-      if (entry.type !== "row") continue;
-      if (top === null && entry.items.some((item) => item.id === firstId)) {
-        top = entry.top;
-      }
-      if (entry.items.some((item) => item.id === lastId)) {
-        bottom = entry.top + entry.height;
-      }
-    }
-
-    return {
-      loadedContentTop: top ?? 0,
-      loadedContentBottom: bottom ?? totalContentHeight,
-    };
-  }, [displayAssets, isUsingFullLayout, totalContentHeight, virtualEntries]);
 
   // Load the full layout for all assets upfront so the virtual canvas is stable
   useEffect(() => {
@@ -1871,258 +1617,48 @@ export function PhotoGrid({
         <p className="shrink-0 mt-2 text-xs text-base-content/60">{t("photoGrid.noMoreAssets")}</p>
       ) : null}
 
-      {activeAsset ? (
-        <div
-          className="group fixed inset-0 z-9999 flex items-center justify-center bg-black p-6"
-          role="dialog"
-          aria-modal="true"
-        >
-          <button
-            type="button"
-            className="btn btn-circle btn-sm btn-ghost absolute left-4 top-4 border border-white/15 bg-zinc-900 text-white"
-            aria-label={t("photoGrid.backAria")}
-            onClick={(event) => {
-              event.stopPropagation();
-              closeLightbox();
-              setIsPlayingLivePhoto(false);
-            }}
-          >
-            <ArrowLeft size={20} />
-          </button>
-
-          <div
-            className="pointer-events-auto absolute top-4 left-1/2 z-40 max-w-[min(70vw,48rem)] -translate-x-1/2 rounded-xl px-4 py-1.5 text-sm font-medium text-white/95 select-text"
-            onClick={(event) => event.stopPropagation()}
-          >
-            {activeAsset.originalFileName}
-          </div>
-
-          <div className="pointer-events-auto absolute right-4 top-4 z-40 flex items-center gap-2">
-            {activeAsset.livePhotoVideoId && isPlayingLivePhoto ? (
-              <button
-                type="button"
-                className="btn btn-circle btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
-                aria-label={t("photoGrid.playLiveAgainAria")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setIsPlayingLivePhoto(false);
-                }}
-              >
-                <CirclePlay size={20} />
-              </button>
-            ) : null}
-
-            {!isVideoAsset(activeAsset) ? (
-              <>
-                <div className="w-px bg-white/10" />
-                <div onClick={(e) => e.stopPropagation()}>
-                  <ZoomControl zoomLevel={zoom} onZoomChange={setZoom} />
-                </div>
-              </>
-            ) : null}
-
-            <div className="h-4 border-l border-white/25" />
-            <SelectionActions
-              selectedAssetIds={[activeAsset.id]}
-              selectedCount={1}
-              variant="preview"
-              modalZIndexClass="z-[10010]"
-              stopPropagation
-              disableCopy={isVideoAsset(activeAsset)}
-            />
-
-            <button
-              type="button"
-              className={`btn btn-sm border border-white/15 ${showInfoPanel ? "bg-white text-black hover:bg-white" : "bg-zinc-900 text-white"}`}
-              aria-label={t("photoGrid.toggleInfoAria")}
-              onClick={(event) => {
-                event.stopPropagation();
-                setShowInfoPanel((current) => !current);
-              }}
-            >
-              <Info size={16} />
-              {t("photoGrid.info")}
-            </button>
-          </div>
-
-          <div
-            className="pointer-events-none flex h-full w-full items-stretch gap-4 pt-16"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-              <button
-                type="button"
-                className="pointer-events-auto btn btn-circle btn-md btn-ghost absolute left-2 top-1/2 z-30 -translate-y-1/2 border border-white/15 bg-zinc-900 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
-                aria-label={t("photoGrid.previousImageAria")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  goPrev();
-                }}
-                disabled={activeIndex === 0}
-              >
-                <ChevronLeft size={28} />
-              </button>
-
-              <button
-                type="button"
-                className="pointer-events-auto btn btn-circle btn-md btn-ghost absolute right-2 top-1/2 z-30 -translate-y-1/2 border border-white/15 bg-zinc-900 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-30"
-                aria-label={t("photoGrid.nextImageAria")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  goNext();
-                }}
-                disabled={activeIndex === displayAssets.length - 1 && !hasNextPage}
-              >
-                <ChevronRight size={28} />
-              </button>
-
-              <div
-                ref={imageContainerRef}
-                className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12"
-              >
-                {isVideoAsset(activeAsset) ? (
-                  activeSrc ? (
-                    <video
-                      className="max-h-full max-w-full object-contain"
-                      src={activeSrc}
-                      controls
-                      autoPlay
-                      playsInline
-                      onError={(event) => {
-                        const video = event.currentTarget;
-                        console.error("[video-fullscreen-error]", {
-                          assetId: activeAsset.id,
-                          src: video.currentSrc,
-                          errorCode: video.error?.code,
-                          errorMessage: video.error?.message,
-                        });
-                      }}
-                    />
-                  ) : (
-                    <div className="flex items-center gap-2 text-sm text-white/80">
-                      <span className="loading loading-spinner loading-sm" />
-                      {t("photoGrid.loadingVideo")}
-                    </div>
-                  )
-                ) : isPlayingLivePhoto && activeAsset.livePhotoVideoId ? (
-                  <div
-                    className="relative flex items-center justify-center overflow-hidden"
-                    style={livePhotoFrameStyle}
-                  >
-                    {activeStillSrc ? (
-                      <img
-                        className="h-full w-full object-contain"
-                        src={activeStillSrc}
-                        alt={activeAsset.originalFileName}
-                      />
-                    ) : null}
-                    {activeSrc ? (
-                      <video
-                        className="absolute inset-0 h-full w-full object-fill"
-                        src={activeSrc}
-                        autoPlay
-                        playsInline
-                        onEnded={() => {
-                          setIsPlayingLivePhoto(false);
-                        }}
-                        onError={(event) => {
-                          const video = event.currentTarget;
-                          console.error("[live-photo-video-error]", {
-                            assetId: activeAsset.livePhotoVideoId,
-                            src: video.currentSrc,
-                            errorCode: video.error?.code,
-                            errorMessage: video.error?.message,
-                          });
-                        }}
-                      />
-                    ) : (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                        <span className="loading loading-spinner loading-sm text-white" />
-                      </div>
-                    )}
-                  </div>
-                ) : activeAsset.livePhotoVideoId ? (
-                  <div className="flex items-center justify-center" style={livePhotoFrameStyle}>
-                    <img
-                      className="max-h-full max-w-full object-contain"
-                      src={activeStillSrc ?? activeSrc ?? ""}
-                      alt={activeAsset.originalFileName}
-                      onClick={() => {
-                        setIsPlayingLivePhoto(true);
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div className="relative flex h-full w-full items-center justify-center">
-                    <CanvasImageViewer
-                      assetId={activeAsset.id}
-                      src={activeFullsizeStillSrc ?? activeStillSrc ?? activeSrc ?? ""}
-                      alt={activeAsset.originalFileName}
-                      zoom={zoom}
-                      onZoomChange={setZoom}
-                      containerWidth={imageContainerWidth}
-                      containerHeight={imageContainerHeight}
-                      onNavigate={(direction) => {
-                        if (direction === "next") {
-                          goNext();
-                        } else {
-                          goPrev();
-                        }
-                      }}
-                    />
-                    {zoom === 100 && (activeStillSrc ?? activeSrc) ? (
-                      <img
-                        className="pointer-events-none absolute inset-0 h-full w-full object-contain"
-                        src={activeStillSrc ?? activeSrc ?? ""}
-                        alt={activeAsset.originalFileName}
-                      />
-                    ) : null}
-                  </div>
-                )}
-              </div>
-
-              <div className="pointer-events-auto mx-auto w-full max-w-5xl">
-                <FullscreenMetadataBar
-                  asset={activeAsset}
-                  isUpdatingFavorite={favoriteUpdateId === activeAsset.id}
-                  isUpdatingArchive={archiveUpdateId === activeAsset.id}
-                  isUpdatingRating={ratingUpdateId === activeAsset.id}
-                  onToggleFavorite={() => {
-                    void handleFavoriteToggle();
-                  }}
-                  onToggleArchive={() => {
-                    void handleArchiveToggle();
-                  }}
-                  onSetRating={(rating) => {
-                    void handleRatingChange(rating);
-                  }}
-                />
-              </div>
-
-              <div className="pointer-events-auto mx-auto w-full max-w-5xl">
-                <FullscreenThumbnailStrip
-                  assets={displayAssets}
-                  activeIndex={activeIndex ?? 0}
-                  onSelect={(index) => {
-                    showAssetAtIndex(index, true);
-                  }}
-                />
-              </div>
-            </div>
-
-            {showInfoPanel ? (
-              <FullscreenInfoPanel
-                asset={activeAsset}
-                details={cachedAssetDetails}
-                isLoading={isLoadingCachedDetails}
-                isUpdatingDescription={descriptionUpdateId === activeAsset.id}
-                onUpdateDescription={(description: string) => {
-                  void handleDescriptionChange(description);
-                }}
-              />
-            ) : null}
-          </div>
-        </div>
+      {activeAsset && activeIndex !== null ? (
+        <PhotoGridFullscreenOverlay
+          activeAsset={activeAsset}
+          activeIndex={activeIndex}
+          displayAssets={displayAssets}
+          hasNextPage={hasNextPage}
+          activeSrc={activeSrc}
+          activeStillSrc={activeStillSrc}
+          activeFullsizeStillSrc={activeFullsizeStillSrc}
+          zoom={zoom}
+          onZoomChange={setZoom}
+          isPlayingLivePhoto={isPlayingLivePhoto}
+          onSetIsPlayingLivePhoto={setIsPlayingLivePhoto}
+          showInfoPanel={showInfoPanel}
+          onToggleInfoPanel={() => setShowInfoPanel((current) => !current)}
+          favoriteUpdateId={favoriteUpdateId}
+          archiveUpdateId={archiveUpdateId}
+          ratingUpdateId={ratingUpdateId}
+          descriptionUpdateId={descriptionUpdateId}
+          cachedAssetDetails={cachedAssetDetails}
+          isLoadingCachedDetails={isLoadingCachedDetails}
+          imageContainerRef={imageContainerRef}
+          imageContainerWidth={imageContainerWidth}
+          imageContainerHeight={imageContainerHeight}
+          livePhotoFrameStyle={livePhotoFrameStyle}
+          onClose={closeLightbox}
+          onGoPrev={goPrev}
+          onGoNext={goNext}
+          onSelectIndex={(index) => showAssetAtIndex(index, true)}
+          onToggleFavorite={() => {
+            void handleFavoriteToggle();
+          }}
+          onToggleArchive={() => {
+            void handleArchiveToggle();
+          }}
+          onSetRating={(rating) => {
+            void handleRatingChange(rating);
+          }}
+          onUpdateDescription={(description) => {
+            void handleDescriptionChange(description);
+          }}
+        />
       ) : null}
 
       <DatePickerModal
@@ -2135,675 +1671,4 @@ export function PhotoGrid({
       />
     </section>
   );
-}
-
-function AssetThumbnail({
-  asset,
-  isSelected,
-  onOpen,
-  onToggleSelection,
-  durationSeconds,
-  onDuration,
-  onDimensions,
-  showDebug,
-  livePhotoAutoplay,
-  suppressFullThumbnail,
-  jumpMetrics,
-}: {
-  asset: AssetSummary;
-  isSelected: boolean;
-  onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
-  onToggleSelection: (event: MouseEvent<HTMLDivElement>) => void;
-  durationSeconds?: number;
-  onDuration: (seconds: number) => void;
-  onDimensions: (width: number, height: number) => void;
-  showDebug: boolean;
-  livePhotoAutoplay: boolean;
-  suppressFullThumbnail: boolean;
-  jumpMetrics: {
-    jumpId: string;
-    dateKey: string;
-    startedAtMs: number;
-  } | null;
-}) {
-  const { t } = useI18n();
-  const [src, setSrc] = useState<string | null>(null);
-  const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  const [livePhotoVideoSrc, setLivePhotoVideoSrc] = useState<string | null>(null);
-  const [videoRetryToken, setVideoRetryToken] = useState(0);
-  const [isVideoLoading, setIsVideoLoading] = useState(false);
-  const [isHovering, setIsHovering] = useState(false);
-  const [isPlayingLivePhoto, setIsPlayingLivePhoto] = useState(false);
-  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
-  const retryTimeoutRef = useRef<number | null>(null);
-  const thumbhashPlaceholderSrc = useMemo(
-    () => thumbhashToDataUrl(asset.thumbhash),
-    [asset.thumbhash],
-  );
-  const isVideo = isVideoAsset(asset);
-  const isLivePhoto = asset.livePhotoVideoId != null;
-  const thumbnailFetchStartedAtRef = useRef<number | null>(null);
-  const fullImageReadyLoggedRef = useRef(false);
-
-  useEffect(() => {
-    fullImageReadyLoggedRef.current = false;
-  }, [asset.id, src]);
-
-  useLayoutEffect(() => {
-    if (suppressFullThumbnail) {
-      return;
-    }
-
-    // Check cache synchronously first to avoid thumbhash flash
-    const cached = isThumbnailCached(asset.id);
-    if (cached) {
-      setSrc(cached);
-      return;
-    }
-
-    let canceled = false;
-
-    async function load() {
-      try {
-        thumbnailFetchStartedAtRef.current = performance.now();
-        const value = await getAssetThumbnail(asset.id);
-        if (!canceled) {
-          setSrc(value);
-          const fetchDurationMs = Math.round(
-            performance.now() - (thumbnailFetchStartedAtRef.current ?? performance.now()),
-          );
-
-          if (fetchDurationMs >= 150 || jumpMetrics) {
-            console.log("[AssetThumbnail] fetch done", {
-              assetId: asset.id,
-              fileName: asset.originalFileName,
-              fetchDurationMs,
-              duringJump: Boolean(jumpMetrics),
-              jumpId: jumpMetrics?.jumpId ?? null,
-              jumpDateKey: jumpMetrics?.dateKey ?? null,
-              jumpElapsedMs: jumpMetrics
-                ? Math.round(performance.now() - jumpMetrics.startedAtMs)
-                : null,
-            });
-          }
-        }
-      } catch (error) {
-        if (!canceled) {
-          setSrc(null);
-          console.warn("[AssetThumbnail] fetch failed", {
-            assetId: asset.id,
-            fileName: asset.originalFileName,
-            duringJump: Boolean(jumpMetrics),
-            jumpId: jumpMetrics?.jumpId ?? null,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-    }
-
-    void load();
-
-    return () => {
-      canceled = true;
-    };
-  }, [asset.id, suppressFullThumbnail]);
-
-  useEffect(() => {
-    if (suppressFullThumbnail || !isVideo || !isHovering || videoSrc || isVideoLoading) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadPlayback() {
-      setIsVideoLoading(true);
-      try {
-        const value = await getAssetPlayback(asset.id);
-        if (!cancelled) {
-          setVideoSrc(toPlayableSrc(value));
-          setVideoRetryToken(0);
-        }
-      } catch {
-        if (!cancelled) {
-          setVideoSrc(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsVideoLoading(false);
-        }
-      }
-    }
-
-    void loadPlayback();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [asset.id, isHovering, isVideo, isVideoLoading, suppressFullThumbnail, videoSrc]);
-
-  // Load live photo video when hovering (if autoplay enabled and not already loaded)
-  useEffect(() => {
-    if (
-      suppressFullThumbnail ||
-      !isLivePhoto ||
-      !isHovering ||
-      livePhotoVideoSrc ||
-      isVideoLoading ||
-      !livePhotoAutoplay
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadLivePhotoPlayback() {
-      setIsVideoLoading(true);
-      try {
-        const value = await getAssetPlayback(asset.livePhotoVideoId!);
-        if (!cancelled) {
-          setLivePhotoVideoSrc(toPlayableSrc(value));
-        }
-      } catch {
-        if (!cancelled) {
-          setLivePhotoVideoSrc(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsVideoLoading(false);
-        }
-      }
-    }
-
-    void loadLivePhotoPlayback();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    asset.id,
-    asset.livePhotoVideoId,
-    isHovering,
-    isLivePhoto,
-    livePhotoVideoSrc,
-    isVideoLoading,
-    livePhotoAutoplay,
-    suppressFullThumbnail,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      if (retryTimeoutRef.current !== null) {
-        window.clearTimeout(retryTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const video = previewVideoRef.current;
-    if (!video) {
-      return;
-    }
-
-    if (isHovering) {
-      // For live photos with autoplay enabled, play the video
-      if (isLivePhoto && livePhotoAutoplay && livePhotoVideoSrc && !isPlayingLivePhoto) {
-        setIsPlayingLivePhoto(true);
-        void video.play().catch(() => {
-          // Ignore autoplay rejection
-        });
-        return;
-      }
-
-      // For regular videos
-      if (isVideo && videoSrc) {
-        void video.play().catch(() => {
-          // Ignore autoplay rejection; user can still click for fullscreen playback.
-        });
-      }
-      return;
-    }
-
-    // Mouse left
-    video.pause();
-    video.currentTime = 0;
-    setIsPlayingLivePhoto(false);
-  }, [
-    isHovering,
-    videoSrc,
-    videoRetryToken,
-    isVideo,
-    isLivePhoto,
-    livePhotoAutoplay,
-    livePhotoVideoSrc,
-    isPlayingLivePhoto,
-  ]);
-
-  if (!src) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-base-300 text-xs text-base-content/60">
-        {thumbhashPlaceholderSrc ? (
-          <img
-            className="h-full w-full object-cover scale-105 blur-lg opacity-90"
-            src={thumbhashPlaceholderSrc}
-            alt=""
-            aria-hidden="true"
-          />
-        ) : (
-          t("photoGrid.loadingPreview")
-        )}
-      </div>
-    );
-  }
-
-  if (suppressFullThumbnail) {
-    return (
-      <button
-        type="button"
-        className="relative block h-full w-full cursor-zoom-in"
-        onClick={onOpen}
-        aria-label={t("photoGrid.openFullscreenAria", {
-          name: asset.originalFileName,
-        })}
-      >
-        {thumbhashPlaceholderSrc ? (
-          <img
-            className="h-full w-full object-cover scale-105 blur-lg opacity-90"
-            src={thumbhashPlaceholderSrc}
-            alt=""
-            aria-hidden="true"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center bg-base-300 text-xs text-base-content/60">
-            {t("photoGrid.loadingPreview")}
-          </div>
-        )}
-      </button>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      className="relative block h-full w-full cursor-zoom-in"
-      onClick={onOpen}
-      onMouseEnter={() => setIsHovering(true)}
-      onMouseLeave={() => {
-        setIsHovering(false);
-        setVideoRetryToken(0);
-        setIsPlayingLivePhoto(false);
-        if (retryTimeoutRef.current !== null) {
-          window.clearTimeout(retryTimeoutRef.current);
-          retryTimeoutRef.current = null;
-        }
-      }}
-      aria-label={t("photoGrid.openFullscreenAria", {
-        name: asset.originalFileName,
-      })}
-    >
-      <div
-        role="button"
-        tabIndex={-1}
-        aria-label={isSelected ? t("photoGrid.deselectPhotoAria") : t("photoGrid.selectPhotoAria")}
-        aria-pressed={isSelected}
-        className={`absolute left-1 top-1 z-20 flex h-5 w-5 cursor-pointer items-center justify-center rounded border text-[10px] transition ${
-          isSelected
-            ? "border-primary bg-primary text-primary-content opacity-100"
-            : "border-white/70 bg-black/45 text-white opacity-0 group-hover:opacity-100"
-        }`}
-        onClick={onToggleSelection}
-      >
-        {isSelected ? <Check size={12} /> : null}
-      </div>
-
-      {isLivePhoto && isHovering && isPlayingLivePhoto && livePhotoVideoSrc ? (
-        <video
-          ref={previewVideoRef}
-          className="h-full w-full object-cover"
-          src={livePhotoVideoSrc}
-          muted
-          autoPlay
-          playsInline
-          preload="metadata"
-          onEnded={() => {
-            setIsPlayingLivePhoto(false);
-          }}
-          onCanPlay={(event) => {
-            if (!isHovering) {
-              return;
-            }
-
-            const video = event.currentTarget;
-            video.muted = true;
-            void video.play().catch(() => {
-              // Autoplay may still be denied on some systems.
-            });
-          }}
-          onError={(event) => {
-            const video = event.currentTarget;
-            console.error("[live-photo-hover-error]", {
-              assetId: asset.livePhotoVideoId,
-              src: video.currentSrc,
-              errorCode: video.error?.code,
-              errorMessage: video.error?.message,
-            });
-          }}
-        />
-      ) : isVideo && isHovering && videoSrc ? (
-        <video
-          ref={previewVideoRef}
-          className="h-full w-full object-cover"
-          src={videoRetryToken > 0 ? `${videoSrc}?r=${videoRetryToken}` : videoSrc}
-          muted
-          loop
-          autoPlay
-          playsInline
-          preload="metadata"
-          onCanPlay={(event) => {
-            if (!isHovering) {
-              return;
-            }
-
-            const video = event.currentTarget;
-            video.muted = true;
-            void video.play().catch(() => {
-              // Autoplay may still be denied on some systems.
-            });
-          }}
-          onLoadedMetadata={(event) => {
-            const video = event.currentTarget;
-            if (video.videoWidth > 0 && video.videoHeight > 0) {
-              onDimensions(video.videoWidth, video.videoHeight);
-            }
-            if (Number.isFinite(video.duration) && video.duration > 0) {
-              onDuration(video.duration);
-            }
-          }}
-          onError={(event) => {
-            const video = event.currentTarget;
-            console.error("[video-hover-error]", {
-              assetId: asset.id,
-              src: video.currentSrc,
-              errorCode: video.error?.code,
-              errorMessage: video.error?.message,
-            });
-
-            if (!isHovering) {
-              return;
-            }
-
-            if (retryTimeoutRef.current !== null) {
-              window.clearTimeout(retryTimeoutRef.current);
-            }
-
-            retryTimeoutRef.current = window.setTimeout(() => {
-              setVideoRetryToken((current) => current + 1);
-            }, 250);
-          }}
-        />
-      ) : (
-        <img
-          className="h-full w-full object-contain transition-transform duration-200 hover:scale-105"
-          src={src}
-          alt={asset.originalFileName}
-          loading="lazy"
-          onLoad={(event) => {
-            const image = event.currentTarget;
-            if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-              onDimensions(image.naturalWidth, image.naturalHeight);
-            }
-
-            if (!fullImageReadyLoggedRef.current) {
-              fullImageReadyLoggedRef.current = true;
-              console.log("[AssetThumbnail] image rendered", {
-                assetId: asset.id,
-                fileName: asset.originalFileName,
-                width: image.naturalWidth,
-                height: image.naturalHeight,
-                duringJump: Boolean(jumpMetrics),
-                jumpId: jumpMetrics?.jumpId ?? null,
-                jumpDateKey: jumpMetrics?.dateKey ?? null,
-                jumpElapsedMs: jumpMetrics
-                  ? Math.round(performance.now() - jumpMetrics.startedAtMs)
-                  : null,
-              });
-            }
-          }}
-          onClick={() => {
-            if (isLivePhoto && !livePhotoAutoplay) {
-              setIsPlayingLivePhoto(true);
-            }
-          }}
-        />
-      )}
-
-      {isVideo ? (
-        <div className="absolute right-1 top-1 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] text-white">
-          <span>{formatVideoDuration(asset.duration, durationSeconds)}</span>
-          <CirclePlay size={12} />
-        </div>
-      ) : null}
-
-      {isLivePhoto ? (
-        <div className="absolute right-1 top-1 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] text-white">
-          <Film size={12} />
-          <span>{t("photoGrid.liveBadge")}</span>
-        </div>
-      ) : null}
-
-      {asset.isFavorite ? (
-        <div className="absolute bottom-1 right-1 z-10 text-error" aria-hidden="true">
-          <Heart size={14} fill="currentColor" />
-        </div>
-      ) : null}
-
-      {isVideo && isHovering && isVideoLoading ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/25">
-          <span className="loading loading-spinner loading-sm text-white" />
-        </div>
-      ) : null}
-
-      {isLivePhoto && isHovering && isVideoLoading && livePhotoAutoplay ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/25">
-          <span className="loading loading-spinner loading-sm text-white" />
-        </div>
-      ) : null}
-
-      {isVideo && showDebug ? (
-        <div className="absolute bottom-1 left-1 max-w-[95%] rounded bg-black/70 px-1.5 py-1 text-[10px] leading-tight text-white">
-          <div>id: {asset.id.slice(0, 8)}</div>
-          <div>type: {asset.type ?? "null"}</div>
-          <div>raw duration: {asset.duration ?? "null"}</div>
-          <div>
-            resolved seconds:{" "}
-            {typeof durationSeconds === "number" ? durationSeconds.toFixed(2) : "null"}
-          </div>
-          <div>has playback src: {videoSrc ? "yes" : "no"}</div>
-        </div>
-      ) : null}
-    </button>
-  );
-}
-
-function findFirstEntryAtOrAfter(entries: VirtualEntry[], top: number): number {
-  let left = 0;
-  let right = entries.length;
-
-  while (left < right) {
-    const mid = Math.floor((left + right) / 2);
-    if (entries[mid].top < top) {
-      left = mid + 1;
-    } else {
-      right = mid;
-    }
-  }
-
-  return left;
-}
-
-function isVideoAsset(asset: AssetSummary): boolean {
-  if ((asset.type ?? "").toUpperCase() === "VIDEO") {
-    return true;
-  }
-
-  const name = asset.originalFileName.toLowerCase();
-  return /(\.mp4|\.mov|\.webm|\.mkv|\.avi|\.m4v)$/.test(name);
-}
-
-function formatVideoDuration(value: string | null, durationSeconds?: number): string {
-  if (
-    typeof durationSeconds === "number" &&
-    Number.isFinite(durationSeconds) &&
-    durationSeconds > 0
-  ) {
-    return formatDurationSeconds(Math.round(durationSeconds));
-  }
-
-  if (!value) {
-    return "0:00";
-  }
-
-  const trimmed = value.trim();
-
-  if (/^\d+(\.\d+)?$/.test(trimmed)) {
-    const numeric = Number.parseFloat(trimmed);
-    return formatDurationSeconds(Math.max(0, Math.round(numeric)));
-  }
-
-  if (/^PT/i.test(trimmed)) {
-    const isoMatch = trimmed.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/i);
-    if (isoMatch) {
-      const hours = Number.parseFloat(isoMatch[1] ?? "0");
-      const minutes = Number.parseFloat(isoMatch[2] ?? "0");
-      const seconds = Number.parseFloat(isoMatch[3] ?? "0");
-      const totalSeconds = Math.round(hours * 3600 + minutes * 60 + seconds);
-      if (Number.isFinite(totalSeconds) && totalSeconds > 0) {
-        return formatDurationSeconds(totalSeconds);
-      }
-    }
-  }
-
-  const main = trimmed.split(".")[0] ?? "";
-  const parts = main
-    .split(":")
-    .map((part) => Number.parseInt(part, 10))
-    .filter((part) => Number.isFinite(part));
-
-  if (parts.length === 0) {
-    return "0:00";
-  }
-
-  let seconds = 0;
-  for (const part of parts) {
-    seconds = seconds * 60 + part;
-  }
-
-  return formatDurationSeconds(seconds);
-}
-
-function formatDurationSeconds(totalSeconds: number): string {
-  const safe = Math.max(0, totalSeconds);
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const seconds = safe % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function toPlayableSrc(value: string): string {
-  if (value.startsWith("/")) {
-    return convertFileSrc(value);
-  }
-
-  return value;
-}
-
-function preloadImage(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error("Failed to preload image"));
-    image.src = src;
-  });
-}
-
-function getAssetAspectRatio(asset: AssetSummary | null): number {
-  if (!asset) {
-    return 4 / 3;
-  }
-
-  if (asset.width && asset.height && asset.height > 0) {
-    return asset.width / asset.height;
-  }
-
-  return 4 / 3;
-}
-
-const thumbhashDataUrlCache = new Map<string, string>();
-
-function thumbhashToDataUrl(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const cached = thumbhashDataUrlCache.get(value);
-  if (cached) {
-    return cached;
-  }
-
-  try {
-    const binary = atob(value);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-
-    const decoded = thumbHashToRGBA(bytes);
-    const canvas = document.createElement("canvas");
-    canvas.width = decoded.w;
-    canvas.height = decoded.h;
-
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return null;
-    }
-
-    const imageData = context.createImageData(decoded.w, decoded.h);
-    imageData.data.set(decoded.rgba);
-    context.putImageData(imageData, 0, 0);
-
-    const dataUrl = canvas.toDataURL("image/png");
-    thumbhashDataUrlCache.set(value, dataUrl);
-    return dataUrl;
-  } catch {
-    return null;
-  }
-}
-
-function parseDayKey(value: string): { year: number; month: number; day: number } | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) {
-    return null;
-  }
-
-  const year = Number.parseInt(match[1], 10);
-  const month = Number.parseInt(match[2], 10);
-  const day = Number.parseInt(match[3], 10);
-
-  if (
-    !Number.isFinite(year) ||
-    !Number.isFinite(month) ||
-    !Number.isFinite(day) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-
-  return { year, month, day };
 }
