@@ -1873,7 +1873,7 @@ export function PhotoGrid({
 
       {activeAsset ? (
         <div
-          className="group fixed inset-0 z-9999 flex items-center justify-center bg-black/96 p-6"
+          className="group fixed inset-0 z-9999 flex items-center justify-center bg-black p-6"
           role="dialog"
           aria-modal="true"
         >
