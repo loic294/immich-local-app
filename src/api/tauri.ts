@@ -71,6 +71,36 @@ let thumbnailCacheHits = 0;
 let thumbnailCacheMisses = 0;
 let thumbnailDeduplicationHits = 0;
 
+// Bound how many thumbnail invokes can be in flight at once. Opening a grid or
+// album mounts dozens-to-hundreds of `AssetThumbnail`s simultaneously; firing
+// every fetch at once floods the Immich server (and the Tauri IPC with large
+// base64 data URLs). Requests then queue past the HTTP client's 30s timeout and
+// reject as "fetch failed" even though the server ultimately serves them.
+// Limiting concurrency keeps each request fast and well within the timeout.
+const THUMBNAIL_MAX_CONCURRENCY = 6;
+let thumbnailActiveCount = 0;
+const thumbnailWaitQueue: Array<() => void> = [];
+
+function acquireThumbnailSlot(): Promise<void> {
+  if (thumbnailActiveCount < THUMBNAIL_MAX_CONCURRENCY) {
+    thumbnailActiveCount += 1;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    thumbnailWaitQueue.push(resolve);
+  });
+}
+
+function releaseThumbnailSlot(): void {
+  const next = thumbnailWaitQueue.shift();
+  if (next) {
+    // Hand the slot straight to the next waiter (active count is unchanged).
+    next();
+  } else {
+    thumbnailActiveCount -= 1;
+  }
+}
+
 export function isThumbnailCached(assetId: string): string | null {
   return thumbnailCache.get(assetId) ?? null;
 }
@@ -95,10 +125,7 @@ export async function completeOAuthFlow(
   });
 }
 
-export async function authenticate(
-  serverUrl: string,
-  apiKey: string,
-): Promise<AuthResponse> {
+export async function authenticate(serverUrl: string, apiKey: string): Promise<AuthResponse> {
   return invoke<AuthResponse>("authenticate", {
     serverUrl,
     apiKey,
@@ -160,10 +187,7 @@ export async function removeAccount(accountId: string): Promise<string | null> {
 }
 
 /** Add a secondary account using an API key. */
-export async function addAccountWithKey(
-  serverUrl: string,
-  apiKey: string,
-): Promise<Account> {
+export async function addAccountWithKey(serverUrl: string, apiKey: string): Promise<Account> {
   return invoke<Account>("add_account_with_key", { serverUrl, apiKey });
 }
 
@@ -400,10 +424,17 @@ export async function getAssetThumbnail(
 
   // Start a new request
   thumbnailCacheMisses++;
-  const promise = invoke<string>("get_asset_thumbnail", {
-    assetId,
-    accountId: accountId ?? null,
-  });
+  const promise = (async () => {
+    await acquireThumbnailSlot();
+    try {
+      return await invoke<string>("get_asset_thumbnail", {
+        assetId,
+        accountId: accountId ?? null,
+      });
+    } finally {
+      releaseThumbnailSlot();
+    }
+  })();
 
   // Store the promise to deduplicate concurrent requests
   thumbnailRequests.set(assetId, promise);
@@ -431,9 +462,7 @@ export async function refreshAsset(assetId: string): Promise<AssetSummary> {
   });
 }
 
-export async function getCachedAssetDetails(
-  assetId: string,
-): Promise<AssetCacheDetails | null> {
+export async function getCachedAssetDetails(assetId: string): Promise<AssetCacheDetails | null> {
   return invoke<AssetCacheDetails | null>("get_cached_asset_details", {
     assetId,
   });
@@ -455,8 +484,7 @@ export function getThumbnailCacheStats(): {
   hitRate: string;
 } {
   const total = thumbnailCacheHits + thumbnailCacheMisses;
-  const hitRate =
-    total > 0 ? ((thumbnailCacheHits / total) * 100).toFixed(1) : "N/A";
+  const hitRate = total > 0 ? ((thumbnailCacheHits / total) * 100).toFixed(1) : "N/A";
   return {
     size: thumbnailCache.size,
     hits: thumbnailCacheHits,
@@ -541,9 +569,7 @@ export async function getCamerasInScope(scope: ViewScope): Promise<string[]> {
 }
 
 /** People that appear in the assets of the given view scope. */
-export async function getPeopleInScope(
-  scope: ViewScope,
-): Promise<PersonSummary[]> {
+export async function getPeopleInScope(scope: ViewScope): Promise<PersonSummary[]> {
   return invoke<PersonSummary[]>("get_people_in_scope", { scope });
 }
 
@@ -609,19 +635,14 @@ export async function createAlbumWithAssets(
   });
 }
 
-export async function addAssetsToAlbum(
-  albumId: string,
-  assetIds: string[],
-): Promise<void> {
+export async function addAssetsToAlbum(albumId: string, assetIds: string[]): Promise<void> {
   return invoke<void>("add_assets_to_album", {
     albumId,
     assetIds,
   });
 }
 
-export async function createShareLinkForAssets(
-  assetIds: string[],
-): Promise<string> {
+export async function createShareLinkForAssets(assetIds: string[]): Promise<string> {
   return invoke<string>("create_share_link_for_assets", {
     assetIds,
   });
@@ -633,25 +654,19 @@ export async function canManageAlbumSharing(albumId: string): Promise<boolean> {
   });
 }
 
-export async function getOrCreateAlbumShareLink(
-  albumId: string,
-): Promise<string> {
+export async function getOrCreateAlbumShareLink(albumId: string): Promise<string> {
   return invoke<string>("get_or_create_album_share_link", {
     albumId,
   });
 }
 
-export async function getAlbumShareLink(
-  albumId: string,
-): Promise<string | null> {
+export async function getAlbumShareLink(albumId: string): Promise<string | null> {
   return invoke<string | null>("get_album_share_link", {
     albumId,
   });
 }
 
-export async function getAlbumShareUsers(
-  albumId: string,
-): Promise<AlbumShareUser[]> {
+export async function getAlbumShareUsers(albumId: string): Promise<AlbumShareUser[]> {
   return invoke<AlbumShareUser[]>("get_album_share_users", {
     albumId,
   });
@@ -661,11 +676,7 @@ export async function getShareableUsers(): Promise<AlbumUserCandidate[]> {
   return invoke<AlbumUserCandidate[]>("get_shareable_users");
 }
 
-export async function addUserToAlbum(
-  albumId: string,
-  userId: string,
-  role: string,
-): Promise<void> {
+export async function addUserToAlbum(albumId: string, userId: string, role: string): Promise<void> {
   return invoke<void>("add_user_to_album", {
     albumId,
     userId,
@@ -673,19 +684,14 @@ export async function addUserToAlbum(
   });
 }
 
-export async function removeUserFromAlbum(
-  albumId: string,
-  userId: string,
-): Promise<void> {
+export async function removeUserFromAlbum(albumId: string, userId: string): Promise<void> {
   return invoke<void>("remove_user_from_album", {
     albumId,
     userId,
   });
 }
 
-export async function saveAlbumLocally(
-  albumId: string,
-): Promise<{ folderPath: string }> {
+export async function saveAlbumLocally(albumId: string): Promise<{ folderPath: string }> {
   const folderPath = await invoke<string>("save_album_locally", {
     albumId,
   });
@@ -797,10 +803,7 @@ export async function copyTextToClipboard(text: string): Promise<void> {
   return invoke<void>("copy_text_to_clipboard", { text });
 }
 
-export async function fetchAssetsByMonth(
-  year: number,
-  month: number,
-): Promise<AssetPage> {
+export async function fetchAssetsByMonth(year: number, month: number): Promise<AssetPage> {
   return invoke<AssetPage>("fetch_assets_by_month", { year, month });
 }
 
@@ -823,21 +826,16 @@ export async function scanSavedLocalFiles(): Promise<number> {
   return invoke<number>("scan_saved_local_files");
 }
 
-export async function getSavedLocalFileChanges(): Promise<
-  SavedLocalFileChange[]
-> {
+export async function getSavedLocalFileChanges(): Promise<SavedLocalFileChange[]> {
   return invoke<SavedLocalFileChange[]>("get_saved_local_file_changes");
 }
 
 export async function applySavedLocalFileChanges(
   changeIds: number[],
 ): Promise<ApplySavedLocalFileChangesResult> {
-  return invoke<ApplySavedLocalFileChangesResult>(
-    "apply_saved_local_file_changes",
-    {
-      input: { changeIds },
-    },
-  );
+  return invoke<ApplySavedLocalFileChangesResult>("apply_saved_local_file_changes", {
+    input: { changeIds },
+  });
 }
 
 export async function calculateGridLayout(

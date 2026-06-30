@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent,
-} from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   ArrowLeft,
   Check,
@@ -66,9 +59,7 @@ type PhotoGridProps = {
   availableDates?: string[];
   onJumpToDate?: (dateKey: string) => Promise<void> | void;
   loadFullLayout?: (containerWidth: number) => Promise<GridLayoutResponse>;
-  loadTimelineLayout?: (
-    containerWidth: number,
-  ) => Promise<TimelineLayoutResponse>;
+  loadTimelineLayout?: (containerWidth: number) => Promise<TimelineLayoutResponse>;
   maxHeight?: number;
   onSelectedCountChange?: (count: number) => void;
   onSelectedIdsChange?: (ids: string[]) => void;
@@ -130,30 +121,22 @@ export function PhotoGrid({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [activeSrc, setActiveSrc] = useState<string | null>(null);
   const [activeStillSrc, setActiveStillSrc] = useState<string | null>(null);
-  const [activeFullsizeStillSrc, setActiveFullsizeStillSrc] = useState<
-    string | null
-  >(null);
+  const [activeFullsizeStillSrc, setActiveFullsizeStillSrc] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [gridSections, setGridSections] = useState<GridLayoutSection[]>([]);
-  const [videoDurations, setVideoDurations] = useState<Record<string, number>>(
-    {},
-  );
+  const [videoDurations, setVideoDurations] = useState<Record<string, number>>({});
   const [showVideoDebug, setShowVideoDebug] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [assetOverrides, setAssetOverrides] = useState<
-    Record<string, Partial<AssetSummary>>
-  >({});
+  const [assetOverrides, setAssetOverrides] = useState<Record<string, Partial<AssetSummary>>>({});
   const [isPlayingLivePhoto, setIsPlayingLivePhoto] = useState(false);
   const [shouldAutoplayLivePhoto, setShouldAutoplayLivePhoto] = useState(false);
   const [favoriteUpdateId, setFavoriteUpdateId] = useState<string | null>(null);
   const [archiveUpdateId, setArchiveUpdateId] = useState<string | null>(null);
   const [ratingUpdateId, setRatingUpdateId] = useState<string | null>(null);
   const pendingFullscreenAdvanceRef = useRef(false);
-  const [descriptionUpdateId, setDescriptionUpdateId] = useState<string | null>(
-    null,
-  );
+  const [descriptionUpdateId, setDescriptionUpdateId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(100);
   const [imageContainerWidth, setImageContainerWidth] = useState(0);
   const [imageContainerHeight, setImageContainerHeight] = useState(0);
@@ -166,12 +149,9 @@ export function PhotoGrid({
 
     return window.localStorage.getItem("immichFullscreenInfoPanel") === "1";
   });
-  const [cachedAssetDetails, setCachedAssetDetails] =
-    useState<AssetCacheDetails | null>(null);
+  const [cachedAssetDetails, setCachedAssetDetails] = useState<AssetCacheDetails | null>(null);
   const [isLoadingCachedDetails, setIsLoadingCachedDetails] = useState(false);
-  const [pendingJumpDateKey, setPendingJumpDateKey] = useState<string | null>(
-    null,
-  );
+  const [pendingJumpDateKey, setPendingJumpDateKey] = useState<string | null>(null);
   const sectionTopMapRef = useRef<Map<string, number>>(new Map());
   const isLoadingNextRef = useRef(false);
   const isLoadingPreviousRef = useRef(false);
@@ -188,18 +168,11 @@ export function PhotoGrid({
   } | null>(null);
   const fullsizeStillLoadingAssetIdRef = useRef<string | null>(null);
   const [layoutReadyAssetCount, setLayoutReadyAssetCount] = useState(0);
-  const [fullGridSections, setFullGridSections] = useState<GridLayoutSection[]>(
-    [],
-  );
+  const [fullGridSections, setFullGridSections] = useState<GridLayoutSection[]>([]);
   const isUsingFullLayout = fullGridSections.length > 0;
-  const [timelineLayout, setTimelineLayout] =
-    useState<TimelineLayoutResponse | null>(null);
-  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<
-    number | null
-  >(null);
+  const [timelineLayout, setTimelineLayout] = useState<TimelineLayoutResponse | null>(null);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(() => new Set());
+  const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<number | null>(null);
   const handledSelectionCommandRef = useRef(0);
 
   const requestFullscreenLoadMore = () => {
@@ -225,8 +198,7 @@ export function PhotoGrid({
     const currentEntries = latestVirtualEntriesRef.current;
     const currentScrollTop = latestRenderScrollTopRef.current;
     const firstVisibleRow = currentEntries.find(
-      (entry) =>
-        entry.type === "row" && entry.top + entry.height > currentScrollTop,
+      (entry) => entry.type === "row" && entry.top + entry.height > currentScrollTop,
     );
 
     if (!firstVisibleRow || firstVisibleRow.type !== "row") {
@@ -273,9 +245,7 @@ export function PhotoGrid({
       return;
     }
 
-    setShowVideoDebug(
-      window.localStorage.getItem("immichDebugVideoMeta") === "1",
-    );
+    setShowVideoDebug(window.localStorage.getItem("immichDebugVideoMeta") === "1");
   }, []);
 
   useEffect(() => {
@@ -283,10 +253,7 @@ export function PhotoGrid({
       return;
     }
 
-    window.localStorage.setItem(
-      "immichFullscreenInfoPanel",
-      showInfoPanel ? "1" : "0",
-    );
+    window.localStorage.setItem("immichFullscreenInfoPanel", showInfoPanel ? "1" : "0");
   }, [showInfoPanel]);
 
   useEffect(() => {
@@ -308,9 +275,7 @@ export function PhotoGrid({
       return;
     }
     if (!sentinelRef.current) {
-      console.log(
-        "[PhotoGrid] Bottom sentinel: no sentinelRef, skipping observer setup",
-      );
+      console.log("[PhotoGrid] Bottom sentinel: no sentinelRef, skipping observer setup");
       return;
     }
 
@@ -348,9 +313,7 @@ export function PhotoGrid({
           pendingRestoreAttemptsRef.current = 0;
           isLoadingNextRef.current = true;
           void Promise.resolve(onLoadMore()).finally(() => {
-            console.log(
-              "[PhotoGrid] onLoadMore settled -> resetting isLoadingNextRef",
-            );
+            console.log("[PhotoGrid] onLoadMore settled -> resetting isLoadingNextRef");
             isLoadingNextRef.current = false;
           });
         }
@@ -367,13 +330,7 @@ export function PhotoGrid({
       console.log("[PhotoGrid] Bottom sentinel: disconnecting observer");
       observer.disconnect();
     };
-  }, [
-    hasNextPage,
-    isFetching,
-    isUsingFullLayout,
-    onLoadMore,
-    pendingJumpDateKey,
-  ]);
+  }, [hasNextPage, isFetching, isUsingFullLayout, onLoadMore, pendingJumpDateKey]);
 
   useEffect(() => {
     if (isUsingFullLayout || !topSentinelRef.current || !onLoadPrevious) {
@@ -384,15 +341,12 @@ export function PhotoGrid({
       (entries) => {
         const entry = entries[0];
         if (entry?.isIntersecting && pendingJumpDateKey) {
-          console.log(
-            "[PhotoGrid] Top sentinel intersection ignored during jump",
-            {
-              pendingJumpDateKey,
-              hasPreviousPage,
-              isFetchingPrevious,
-              isLoadingPrevious: isLoadingPreviousRef.current,
-            },
-          );
+          console.log("[PhotoGrid] Top sentinel intersection ignored during jump", {
+            pendingJumpDateKey,
+            hasPreviousPage,
+            isFetchingPrevious,
+            isLoadingPrevious: isLoadingPreviousRef.current,
+          });
           return;
         }
 
@@ -410,22 +364,16 @@ export function PhotoGrid({
           isLoadingPreviousRef.current = true;
 
           void Promise.resolve(onLoadPrevious()).finally(() => {
-            console.log(
-              "[PhotoGrid] onLoadPrevious settled -> resetting isLoadingPreviousRef",
-            );
+            console.log("[PhotoGrid] onLoadPrevious settled -> resetting isLoadingPreviousRef");
             isLoadingPreviousRef.current = false;
           });
         }
 
         if (entry?.isIntersecting && pendingScrollRestoreRef.current) {
-          console.log(
-            "[PhotoGrid] Top sentinel intersection ignored while restore pending",
-            {
-              pendingRestoreDirection:
-                pendingScrollRestoreRef.current.direction,
-              pendingRestoreAssetId: pendingScrollRestoreRef.current.assetId,
-            },
-          );
+          console.log("[PhotoGrid] Top sentinel intersection ignored while restore pending", {
+            pendingRestoreDirection: pendingScrollRestoreRef.current.direction,
+            pendingRestoreAssetId: pendingScrollRestoreRef.current.assetId,
+          });
         }
       },
       {
@@ -439,19 +387,11 @@ export function PhotoGrid({
     return () => {
       observer.disconnect();
     };
-  }, [
-    hasPreviousPage,
-    isFetchingPrevious,
-    isUsingFullLayout,
-    onLoadPrevious,
-    pendingJumpDateKey,
-  ]);
+  }, [hasPreviousPage, isFetchingPrevious, isUsingFullLayout, onLoadPrevious, pendingJumpDateKey]);
 
   useEffect(() => {
     if (!isFetching) {
-      console.log(
-        "[PhotoGrid] isFetching became false → resetting isLoadingNextRef",
-      );
+      console.log("[PhotoGrid] isFetching became false → resetting isLoadingNextRef");
       isLoadingNextRef.current = false;
     }
   }, [isFetching]);
@@ -539,18 +479,11 @@ export function PhotoGrid({
     for (const asset of assets) {
       const override = assetOverrides[asset.id];
       const nextIsArchived =
-        typeof override?.isArchived === "boolean"
-          ? override.isArchived
-          : asset.isArchived;
+        typeof override?.isArchived === "boolean" ? override.isArchived : asset.isArchived;
       const nextVisibility =
-        typeof override?.visibility === "string"
-          ? override.visibility
-          : asset.visibility;
+        typeof override?.visibility === "string" ? override.visibility : asset.visibility;
 
-      if (
-        nextIsArchived ||
-        (nextVisibility ?? "").toLowerCase() === "archive"
-      ) {
+      if (nextIsArchived || (nextVisibility ?? "").toLowerCase() === "archive") {
         hiddenIds.push(asset.id);
       }
     }
@@ -571,8 +504,7 @@ export function PhotoGrid({
     [displayAssets],
   );
   const assetIndexById = useMemo(
-    () =>
-      new Map(displayAssets.map((asset, index) => [asset.id, index] as const)),
+    () => new Map(displayAssets.map((asset, index) => [asset.id, index] as const)),
     [displayAssets],
   );
 
@@ -637,13 +569,10 @@ export function PhotoGrid({
     const isToggle = modifiers.metaKey || modifiers.ctrlKey;
 
     if (modifiers.shiftKey) {
-      const anchor =
-        selectionAnchorIndex !== null ? selectionAnchorIndex : index;
+      const anchor = selectionAnchorIndex !== null ? selectionAnchorIndex : index;
       const start = Math.min(anchor, index);
       const end = Math.max(anchor, index);
-      const rangeIds = displayAssets
-        .slice(start, end + 1)
-        .map((asset) => asset.id);
+      const rangeIds = displayAssets.slice(start, end + 1).map((asset) => asset.id);
 
       setSelectedAssetIds((current) => {
         const next = isToggle ? new Set(current) : new Set<string>();
@@ -685,79 +614,75 @@ export function PhotoGrid({
   const availableDates = useMemo(
     () =>
       availableDatesProp ??
-      (fullGridSections.length > 0 ? fullGridSections : gridSections).map(
-        (section) => section.key,
-      ),
+      (fullGridSections.length > 0 ? fullGridSections : gridSections).map((section) => section.key),
     [availableDatesProp, fullGridSections, gridSections],
   );
 
-  const { virtualEntries, totalContentHeight, loadedTimelineMonths } =
-    useMemo(() => {
-      const entries: VirtualEntry[] = [];
-      const nextSectionTopMap = new Map<string, number>();
-      const monthMap = new Map<string, TimelineLayoutMonth>();
+  const { virtualEntries, totalContentHeight, loadedTimelineMonths } = useMemo(() => {
+    const entries: VirtualEntry[] = [];
+    const nextSectionTopMap = new Map<string, number>();
+    const monthMap = new Map<string, TimelineLayoutMonth>();
 
-      const headerHeight = 52;
-      const rowGap = 4;
-      const sectionGap = 10;
-      let cursor = 0;
+    const headerHeight = 52;
+    const rowGap = 4;
+    const sectionGap = 10;
+    let cursor = 0;
 
-      // Use the pre-computed full layout when available so positions are stable
-      const sectionsForLayout =
-        fullGridSections.length > 0 ? fullGridSections : gridSections;
+    // Use the pre-computed full layout when available so positions are stable
+    const sectionsForLayout = fullGridSections.length > 0 ? fullGridSections : gridSections;
 
-      for (const section of sectionsForLayout) {
-        nextSectionTopMap.set(section.key, cursor);
+    for (const section of sectionsForLayout) {
+      nextSectionTopMap.set(section.key, cursor);
+      entries.push({
+        type: "header",
+        key: `header-${section.key}`,
+        sectionKey: section.key,
+        label: section.label,
+        top: cursor,
+        height: headerHeight,
+      });
+      cursor += headerHeight;
+
+      section.rows.forEach((row, rowIndex) => {
         entries.push({
-          type: "header",
-          key: `header-${section.key}`,
+          type: "row",
+          key: `${section.key}-${rowIndex}`,
           sectionKey: section.key,
-          label: section.label,
           top: cursor,
-          height: headerHeight,
+          height: row.height,
+          items: row.items,
         });
-        cursor += headerHeight;
+        cursor += row.height + rowGap;
+      });
 
-        section.rows.forEach((row, rowIndex) => {
-          entries.push({
-            type: "row",
-            key: `${section.key}-${rowIndex}`,
-            sectionKey: section.key,
-            top: cursor,
-            height: row.height,
-            items: row.items,
+      cursor += sectionGap;
+
+      const dayInfo = parseDayKey(section.key);
+      if (dayInfo) {
+        const monthKey = `${dayInfo.year}-${String(dayInfo.month).padStart(2, "0")}`;
+        const month = monthMap.get(monthKey);
+
+        if (month) {
+          month.rowCount += section.rows.length;
+        } else {
+          monthMap.set(monthKey, {
+            monthKey,
+            jumpDateKey: section.key,
+            year: dayInfo.year,
+            month: dayInfo.month,
+            rowCount: section.rows.length,
           });
-          cursor += row.height + rowGap;
-        });
-
-        cursor += sectionGap;
-
-        const dayInfo = parseDayKey(section.key);
-        if (dayInfo) {
-          const monthKey = `${dayInfo.year}-${String(dayInfo.month).padStart(2, "0")}`;
-          const month = monthMap.get(monthKey);
-
-          if (month) {
-            month.rowCount += section.rows.length;
-          } else {
-            monthMap.set(monthKey, {
-              monthKey,
-              jumpDateKey: section.key,
-              year: dayInfo.year,
-              month: dayInfo.month,
-              rowCount: section.rows.length,
-            });
-          }
         }
       }
+    }
 
-      sectionTopMapRef.current = nextSectionTopMap;
-      return {
-        virtualEntries: entries,
-        totalContentHeight: cursor,
-        loadedTimelineMonths: [...monthMap.values()],
-      };
-    }, [fullGridSections, gridSections]);
+    sectionTopMapRef.current = nextSectionTopMap;
+    return {
+      virtualEntries: entries,
+      totalContentHeight: cursor,
+      loadedTimelineMonths: [...monthMap.values()],
+    };
+  }, [fullGridSections, gridSections]);
 
   useEffect(() => {
     if (!loadTimelineLayout || viewportWidth <= 0) {
@@ -794,10 +719,7 @@ export function PhotoGrid({
     const start = Math.max(0, scrollTop - overscan);
     const end = scrollTop + viewportHeight + overscan;
 
-    const startIndex = Math.max(
-      0,
-      findFirstEntryAtOrAfter(virtualEntries, start) - 2,
-    );
+    const startIndex = Math.max(0, findFirstEntryAtOrAfter(virtualEntries, start) - 2);
     const endIndex = Math.min(
       virtualEntries.length,
       findFirstEntryAtOrAfter(virtualEntries, end + 1) + 2,
@@ -896,9 +818,7 @@ export function PhotoGrid({
       });
       isLoadingPreviousRef.current = true;
       void Promise.resolve(onLoadPrevious()).finally(() => {
-        console.log(
-          "[PhotoGrid] onLoadPrevious settled -> resetting isLoadingPreviousRef",
-        );
+        console.log("[PhotoGrid] onLoadPrevious settled -> resetting isLoadingPreviousRef");
         isLoadingPreviousRef.current = false;
       });
     }
@@ -917,9 +837,7 @@ export function PhotoGrid({
       });
       isLoadingNextRef.current = true;
       void Promise.resolve(onLoadMore()).finally(() => {
-        console.log(
-          "[PhotoGrid] onLoadMore settled -> resetting isLoadingNextRef",
-        );
+        console.log("[PhotoGrid] onLoadMore settled -> resetting isLoadingNextRef");
         isLoadingNextRef.current = false;
       });
     }
@@ -964,8 +882,7 @@ export function PhotoGrid({
 
     const anchorEntry = virtualEntries.find(
       (entry) =>
-        entry.type === "row" &&
-        entry.items.some((item) => item.id === pendingAnchor.assetId),
+        entry.type === "row" && entry.items.some((item) => item.id === pendingAnchor.assetId),
     );
 
     if (!anchorEntry) {
@@ -979,14 +896,11 @@ export function PhotoGrid({
         pendingScrollRestoreRef.current = null;
         pendingRestoreAttemptsRef.current = 0;
       } else {
-        console.log(
-          "[PhotoGrid] Scroll restore anchor not found yet, retrying",
-          {
-            direction: pendingAnchor.direction,
-            assetId: pendingAnchor.assetId,
-            attempt: pendingRestoreAttemptsRef.current,
-          },
-        );
+        console.log("[PhotoGrid] Scroll restore anchor not found yet, retrying", {
+          direction: pendingAnchor.direction,
+          assetId: pendingAnchor.assetId,
+          attempt: pendingRestoreAttemptsRef.current,
+        });
       }
       return;
     }
@@ -1008,13 +922,7 @@ export function PhotoGrid({
     });
     pendingScrollRestoreRef.current = null;
     pendingRestoreAttemptsRef.current = 0;
-  }, [
-    displayAssets.length,
-    isFetching,
-    isFetchingPrevious,
-    layoutReadyAssetCount,
-    virtualEntries,
-  ]);
+  }, [displayAssets.length, isFetching, isFetchingPrevious, layoutReadyAssetCount, virtualEntries]);
 
   const scrollToDateKey = (targetKey: string) => {
     const targetTop = sectionTopMapRef.current.get(targetKey);
@@ -1026,18 +934,12 @@ export function PhotoGrid({
     return false;
   };
 
-  const resolveDateKeyForRatio = (
-    ratio: number,
-    days: TimelineLayoutDay[],
-  ): string | null => {
+  const resolveDateKeyForRatio = (ratio: number, days: TimelineLayoutDay[]): string | null => {
     if (days.length === 0) {
       return null;
     }
 
-    const totalRows = days.reduce(
-      (sum, day) => sum + Math.max(1, day.rowCount),
-      0,
-    );
+    const totalRows = days.reduce((sum, day) => sum + Math.max(1, day.rowCount), 0);
     if (totalRows <= 0) {
       return days[0]?.dateKey ?? null;
     }
@@ -1068,10 +970,7 @@ export function PhotoGrid({
     }
 
     const clamped = Math.max(0, Math.min(1, ratio));
-    const maxScroll = Math.max(
-      viewport.scrollHeight - viewport.clientHeight,
-      0,
-    );
+    const maxScroll = Math.max(viewport.scrollHeight - viewport.clientHeight, 0);
     viewport.scrollTo({
       top: clamped * maxScroll,
       behavior: "auto",
@@ -1096,18 +995,14 @@ export function PhotoGrid({
         (section) => sectionTopMapRef.current.get(section.key)! >= scrollTop,
       )?.key ??
       (fullGridSections.length > 0 ? fullGridSections : gridSections)[
-        (fullGridSections.length > 0 ? fullGridSections : gridSections).length -
-          1
+        (fullGridSections.length > 0 ? fullGridSections : gridSections).length - 1
       ]?.key;
 
     if (!topVisibleDate) {
       return 0;
     }
 
-    const totalRows = days.reduce(
-      (sum, day) => sum + Math.max(1, day.rowCount),
-      0,
-    );
+    const totalRows = days.reduce((sum, day) => sum + Math.max(1, day.rowCount), 0);
     if (totalRows <= 0) {
       return 0;
     }
@@ -1160,10 +1055,7 @@ export function PhotoGrid({
     }
 
     if (onJumpToDate) {
-      console.log(
-        "[PhotoGrid] calling onJumpToDate, hasNextPage before jump:",
-        hasNextPage,
-      );
+      console.log("[PhotoGrid] calling onJumpToDate, hasNextPage before jump:", hasNextPage);
       await onJumpToDate(dateKey);
       console.log("[PhotoGrid] handleJumpToDate data phase done", {
         jumpId,
@@ -1248,12 +1140,8 @@ export function PhotoGrid({
     };
   }, [displayAssets, viewportWidth]);
 
-  const hasActive =
-    activeIndex !== null &&
-    activeIndex >= 0 &&
-    activeIndex < displayAssets.length;
-  const activeAsset =
-    hasActive && activeIndex !== null ? displayAssets[activeIndex] : null;
+  const hasActive = activeIndex !== null && activeIndex >= 0 && activeIndex < displayAssets.length;
+  const activeAsset = hasActive && activeIndex !== null ? displayAssets[activeIndex] : null;
 
   useEffect(() => {
     if (activeAsset) {
@@ -1350,11 +1238,7 @@ export function PhotoGrid({
   }, [activeAsset?.id]);
 
   useEffect(() => {
-    if (
-      !activeAsset ||
-      isVideoAsset(activeAsset) ||
-      activeAsset.livePhotoVideoId
-    ) {
+    if (!activeAsset || isVideoAsset(activeAsset) || activeAsset.livePhotoVideoId) {
       return;
     }
 
@@ -1507,11 +1391,7 @@ export function PhotoGrid({
       return;
     }
 
-    if (
-      shouldAutoplayLivePhoto &&
-      activeAsset.livePhotoVideoId &&
-      !isPlayingLivePhoto
-    ) {
+    if (shouldAutoplayLivePhoto && activeAsset.livePhotoVideoId && !isPlayingLivePhoto) {
       setShouldAutoplayLivePhoto(false);
       setIsPlayingLivePhoto(true);
     }
@@ -1619,13 +1499,7 @@ export function PhotoGrid({
     if (remaining <= 2) {
       requestFullscreenLoadMore();
     }
-  }, [
-    activeIndex,
-    displayAssets.length,
-    hasNextPage,
-    isFetching,
-    pendingJumpDateKey,
-  ]);
+  }, [activeIndex, displayAssets.length, hasNextPage, isFetching, pendingJumpDateKey]);
 
   useEffect(() => {
     if (!pendingFullscreenAdvanceRef.current || activeIndex === null) {
@@ -1672,9 +1546,7 @@ export function PhotoGrid({
       updateActiveAssetOverride({ isFavorite: activeAsset.isFavorite });
       console.error("Failed to update asset favorite status:", error);
     } finally {
-      setFavoriteUpdateId((current) =>
-        current === activeAsset.id ? null : current,
-      );
+      setFavoriteUpdateId((current) => (current === activeAsset.id ? null : current));
     }
   };
 
@@ -1684,9 +1556,7 @@ export function PhotoGrid({
     }
 
     const nextIsArchived = !activeAsset.isArchived;
-    const nextVisibility: AssetVisibility = nextIsArchived
-      ? "archive"
-      : "timeline";
+    const nextVisibility: AssetVisibility = nextIsArchived ? "archive" : "timeline";
 
     updateActiveAssetOverride({
       isArchived: nextIsArchived,
@@ -1703,9 +1573,7 @@ export function PhotoGrid({
       });
       console.error("Failed to update asset archive status:", error);
     } finally {
-      setArchiveUpdateId((current) =>
-        current === activeAsset.id ? null : current,
-      );
+      setArchiveUpdateId((current) => (current === activeAsset.id ? null : current));
     }
   };
 
@@ -1733,9 +1601,7 @@ export function PhotoGrid({
       updateActiveAssetOverride({ rating: activeAsset.rating });
       console.error("Failed to update asset rating:", error);
     } finally {
-      setRatingUpdateId((current) =>
-        current === activeAsset.id ? null : current,
-      );
+      setRatingUpdateId((current) => (current === activeAsset.id ? null : current));
     }
   };
 
@@ -1744,8 +1610,7 @@ export function PhotoGrid({
       return;
     }
 
-    const nextDescription =
-      description.trim().length > 0 ? description.trim() : null;
+    const nextDescription = description.trim().length > 0 ? description.trim() : null;
     const previousDescription = cachedAssetDetails?.description ?? null;
 
     if (nextDescription === previousDescription) {
@@ -1769,17 +1634,11 @@ export function PhotoGrid({
           : current,
       );
     } finally {
-      setDescriptionUpdateId((current) =>
-        current === activeAsset.id ? null : current,
-      );
+      setDescriptionUpdateId((current) => (current === activeAsset.id ? null : current));
     }
   };
 
-  const handleAssetDimensions = (
-    assetId: string,
-    width: number,
-    height: number,
-  ) => {
+  const handleAssetDimensions = (assetId: string, width: number, height: number) => {
     if (!Number.isFinite(width) || !Number.isFinite(height)) {
       return;
     }
@@ -1793,10 +1652,8 @@ export function PhotoGrid({
     setAssetOverrides((current) => {
       const existingOverride = current[assetId] ?? {};
       const existingAsset = assetsById.get(assetId);
-      const existingWidth =
-        existingOverride.width ?? existingAsset?.width ?? null;
-      const existingHeight =
-        existingOverride.height ?? existingAsset?.height ?? null;
+      const existingWidth = existingOverride.width ?? existingAsset?.width ?? null;
+      const existingHeight = existingOverride.height ?? existingAsset?.height ?? null;
 
       const hasKnownDimensions =
         Number.isFinite(existingWidth) &&
@@ -1849,10 +1706,7 @@ export function PhotoGrid({
             minHeight: 0,
           }}
         >
-          <div
-            className="relative"
-            style={{ height: `${Math.max(totalContentHeight, 1)}px` }}
-          >
+          <div className="relative" style={{ height: `${Math.max(totalContentHeight, 1)}px` }}>
             {/* Load-trigger sentinel for previous page, positioned at loaded content boundary */}
             <div
               ref={topSentinelRef}
@@ -1891,9 +1745,7 @@ export function PhotoGrid({
                       // In full layout mode: render a placeholder so the virtual
                       // canvas stays stable while this page hasn't loaded yet
                       if (isUsingFullLayout) {
-                        const placeholderSrc = thumbhashToDataUrl(
-                          rowItem.thumbhash ?? null,
-                        );
+                        const placeholderSrc = thumbhashToDataUrl(rowItem.thumbhash ?? null);
                         return (
                           <div
                             key={rowItem.id}
@@ -1929,11 +1781,7 @@ export function PhotoGrid({
                           asset={asset}
                           isSelected={isSelected}
                           onOpen={(event) => {
-                            if (
-                              event.shiftKey ||
-                              event.metaKey ||
-                              event.ctrlKey
-                            ) {
+                            if (event.shiftKey || event.metaKey || event.ctrlKey) {
                               if (assetIndex >= 0) {
                                 applySelection(asset.id, assetIndex, {
                                   shiftKey: event.shiftKey,
@@ -1977,9 +1825,7 @@ export function PhotoGrid({
                             handleAssetDimensions(asset.id, width, height);
                           }}
                           showDebug={showVideoDebug}
-                          livePhotoAutoplay={
-                            settings?.livePhotoAutoplay ?? true
-                          }
+                          livePhotoAutoplay={settings?.livePhotoAutoplay ?? true}
                           suppressFullThumbnail={isTimelineScrubbing}
                           jumpMetrics={jumpMetricsRef.current}
                         />
@@ -1996,9 +1842,7 @@ export function PhotoGrid({
               className="absolute left-0 right-0 pointer-events-none"
               style={{
                 top: `${
-                  isUsingFullLayout
-                    ? loadedContentBottom
-                    : Math.max(totalContentHeight - 1, 0)
+                  isUsingFullLayout ? loadedContentBottom : Math.max(totalContentHeight - 1, 0)
                 }px`,
                 height: "1px",
               }}
@@ -2024,9 +1868,7 @@ export function PhotoGrid({
         </p>
       ) : null}
       {!hasNextPage ? (
-        <p className="shrink-0 mt-2 text-xs text-base-content/60">
-          {t("photoGrid.noMoreAssets")}
-        </p>
+        <p className="shrink-0 mt-2 text-xs text-base-content/60">{t("photoGrid.noMoreAssets")}</p>
       ) : null}
 
       {activeAsset ? (
@@ -2129,9 +1971,7 @@ export function PhotoGrid({
                   event.stopPropagation();
                   goNext();
                 }}
-                disabled={
-                  activeIndex === displayAssets.length - 1 && !hasNextPage
-                }
+                disabled={activeIndex === displayAssets.length - 1 && !hasNextPage}
               >
                 <ChevronRight size={28} />
               </button>
@@ -2202,10 +2042,7 @@ export function PhotoGrid({
                     )}
                   </div>
                 ) : activeAsset.livePhotoVideoId ? (
-                  <div
-                    className="flex items-center justify-center"
-                    style={livePhotoFrameStyle}
-                  >
+                  <div className="flex items-center justify-center" style={livePhotoFrameStyle}>
                     <img
                       className="max-h-full max-w-full object-contain"
                       src={activeStillSrc ?? activeSrc ?? ""}
@@ -2219,12 +2056,7 @@ export function PhotoGrid({
                   <div className="relative flex h-full w-full items-center justify-center">
                     <CanvasImageViewer
                       assetId={activeAsset.id}
-                      src={
-                        activeFullsizeStillSrc ??
-                        activeStillSrc ??
-                        activeSrc ??
-                        ""
-                      }
+                      src={activeFullsizeStillSrc ?? activeStillSrc ?? activeSrc ?? ""}
                       alt={activeAsset.originalFileName}
                       zoom={zoom}
                       onZoomChange={setZoom}
@@ -2337,9 +2169,7 @@ function AssetThumbnail({
   const { t } = useI18n();
   const [src, setSrc] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  const [livePhotoVideoSrc, setLivePhotoVideoSrc] = useState<string | null>(
-    null,
-  );
+  const [livePhotoVideoSrc, setLivePhotoVideoSrc] = useState<string | null>(null);
   const [videoRetryToken, setVideoRetryToken] = useState(0);
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
@@ -2380,8 +2210,7 @@ function AssetThumbnail({
         if (!canceled) {
           setSrc(value);
           const fetchDurationMs = Math.round(
-            performance.now() -
-              (thumbnailFetchStartedAtRef.current ?? performance.now()),
+            performance.now() - (thumbnailFetchStartedAtRef.current ?? performance.now()),
           );
 
           if (fetchDurationMs >= 150 || jumpMetrics) {
@@ -2398,7 +2227,7 @@ function AssetThumbnail({
             });
           }
         }
-      } catch {
+      } catch (error) {
         if (!canceled) {
           setSrc(null);
           console.warn("[AssetThumbnail] fetch failed", {
@@ -2406,6 +2235,7 @@ function AssetThumbnail({
             fileName: asset.originalFileName,
             duringJump: Boolean(jumpMetrics),
             jumpId: jumpMetrics?.jumpId ?? null,
+            error: error instanceof Error ? error.message : String(error),
           });
         }
       }
@@ -2419,13 +2249,7 @@ function AssetThumbnail({
   }, [asset.id, suppressFullThumbnail]);
 
   useEffect(() => {
-    if (
-      suppressFullThumbnail ||
-      !isVideo ||
-      !isHovering ||
-      videoSrc ||
-      isVideoLoading
-    ) {
+    if (suppressFullThumbnail || !isVideo || !isHovering || videoSrc || isVideoLoading) {
       return;
     }
 
@@ -2455,14 +2279,7 @@ function AssetThumbnail({
     return () => {
       cancelled = true;
     };
-  }, [
-    asset.id,
-    isHovering,
-    isVideo,
-    isVideoLoading,
-    suppressFullThumbnail,
-    videoSrc,
-  ]);
+  }, [asset.id, isHovering, isVideo, isVideoLoading, suppressFullThumbnail, videoSrc]);
 
   // Load live photo video when hovering (if autoplay enabled and not already loaded)
   useEffect(() => {
@@ -2529,12 +2346,7 @@ function AssetThumbnail({
 
     if (isHovering) {
       // For live photos with autoplay enabled, play the video
-      if (
-        isLivePhoto &&
-        livePhotoAutoplay &&
-        livePhotoVideoSrc &&
-        !isPlayingLivePhoto
-      ) {
+      if (isLivePhoto && livePhotoAutoplay && livePhotoVideoSrc && !isPlayingLivePhoto) {
         setIsPlayingLivePhoto(true);
         void video.play().catch(() => {
           // Ignore autoplay rejection
@@ -2631,11 +2443,7 @@ function AssetThumbnail({
       <div
         role="button"
         tabIndex={-1}
-        aria-label={
-          isSelected
-            ? t("photoGrid.deselectPhotoAria")
-            : t("photoGrid.selectPhotoAria")
-        }
+        aria-label={isSelected ? t("photoGrid.deselectPhotoAria") : t("photoGrid.selectPhotoAria")}
         aria-pressed={isSelected}
         className={`absolute left-1 top-1 z-20 flex h-5 w-5 cursor-pointer items-center justify-center rounded border text-[10px] transition ${
           isSelected
@@ -2684,9 +2492,7 @@ function AssetThumbnail({
         <video
           ref={previewVideoRef}
           className="h-full w-full object-cover"
-          src={
-            videoRetryToken > 0 ? `${videoSrc}?r=${videoRetryToken}` : videoSrc
-          }
+          src={videoRetryToken > 0 ? `${videoSrc}?r=${videoRetryToken}` : videoSrc}
           muted
           loop
           autoPlay
@@ -2785,10 +2591,7 @@ function AssetThumbnail({
       ) : null}
 
       {asset.isFavorite ? (
-        <div
-          className="absolute bottom-1 right-1 z-10 text-error"
-          aria-hidden="true"
-        >
+        <div className="absolute bottom-1 right-1 z-10 text-error" aria-hidden="true">
           <Heart size={14} fill="currentColor" />
         </div>
       ) : null}
@@ -2812,9 +2615,7 @@ function AssetThumbnail({
           <div>raw duration: {asset.duration ?? "null"}</div>
           <div>
             resolved seconds:{" "}
-            {typeof durationSeconds === "number"
-              ? durationSeconds.toFixed(2)
-              : "null"}
+            {typeof durationSeconds === "number" ? durationSeconds.toFixed(2) : "null"}
           </div>
           <div>has playback src: {videoSrc ? "yes" : "no"}</div>
         </div>
@@ -2848,10 +2649,7 @@ function isVideoAsset(asset: AssetSummary): boolean {
   return /(\.mp4|\.mov|\.webm|\.mkv|\.avi|\.m4v)$/.test(name);
 }
 
-function formatVideoDuration(
-  value: string | null,
-  durationSeconds?: number,
-): string {
+function formatVideoDuration(value: string | null, durationSeconds?: number): string {
   if (
     typeof durationSeconds === "number" &&
     Number.isFinite(durationSeconds) &&
@@ -2872,9 +2670,7 @@ function formatVideoDuration(
   }
 
   if (/^PT/i.test(trimmed)) {
-    const isoMatch = trimmed.match(
-      /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/i,
-    );
+    const isoMatch = trimmed.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/i);
     if (isoMatch) {
       const hours = Number.parseFloat(isoMatch[1] ?? "0");
       const minutes = Number.parseFloat(isoMatch[2] ?? "0");
@@ -2987,9 +2783,7 @@ function thumbhashToDataUrl(value: string | null): string | null {
   }
 }
 
-function parseDayKey(
-  value: string,
-): { year: number; month: number; day: number } | null {
+function parseDayKey(value: string): { year: number; month: number; day: number } | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) {
     return null;
