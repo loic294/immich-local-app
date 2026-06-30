@@ -15,6 +15,7 @@ import type {
 } from "../../types";
 import {
   calculateGridLayout,
+  copyAssetsToLocalFolder,
   getAssetPlayback,
   getCachedAssetDetails,
   getAssetThumbnail,
@@ -1003,12 +1004,43 @@ export function PhotoGrid({
 
     async function preloadFullsizeStill() {
       try {
-        const playbackPath = await getAssetPlayback(asset.id);
-        const playbackSrc = toPlayableSrc(playbackPath);
-        await preloadImage(playbackSrc);
+        // If a local copy already exists on disk, reuse it instead of
+        // downloading again. This prevents a redundant second download when the
+        // download badge copies the original and then auto-zooms in.
+        const existingDetails = await getCachedAssetDetails(asset.id);
+        if (existingDetails?.localSavedPath) {
+          const existingSrc = `file://${existingDetails.localSavedPath}`;
+          await preloadImage(existingSrc);
+          if (!cancelled) {
+            setActiveFullsizeStillSrc(existingSrc);
+          }
+          return;
+        }
 
-        if (!cancelled) {
-          setActiveFullsizeStillSrc(playbackSrc);
+        // Copy full-resolution to the user's local folder. Originals must NEVER
+        // be downloaded into the cache folder — only into the configured local
+        // folder. If no local folder is set, we keep using the thumbnail.
+        const settings = await getSettings();
+        const destinationFolder = settings.userLocalFolderPath.trim();
+
+        if (!destinationFolder) {
+          return;
+        }
+
+        // Copy the original file to local folder
+        await copyAssetsToLocalFolder([asset.id], destinationFolder, false);
+
+        // Get updated cache details to find the local path
+        const cacheDetails = await getCachedAssetDetails(asset.id);
+
+        // Use the locally saved file if available
+        if (cacheDetails?.localSavedPath) {
+          const localSrc = `file://${cacheDetails.localSavedPath}`;
+          await preloadImage(localSrc);
+
+          if (!cancelled) {
+            setActiveFullsizeStillSrc(localSrc);
+          }
         }
       } catch {
         // Keep using thumbnail source when full-size preload fails.

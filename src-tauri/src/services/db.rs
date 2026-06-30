@@ -569,6 +569,9 @@ pub struct AssetSummaryExtended {
     pub tags: Option<String>,
     pub exif_info_json: Option<String>,
     pub is_my_photo: bool,
+    pub thumbnail_local: bool,
+    pub preview_local: bool,
+    pub full_resolution_local: bool,
     /// Locally-generated id of the account this asset was synced from.
     #[serde(default)]
     pub account_id: String,
@@ -867,6 +870,9 @@ impl Database {
             ("height", "INTEGER"),
             ("thumbhash", "TEXT"),
             ("exif_info_json", "TEXT"),
+            ("thumbnail_local", "BOOLEAN DEFAULT 0"),
+            ("preview_local", "BOOLEAN DEFAULT 0"),
+            ("full_resolution_local", "BOOLEAN DEFAULT 0"),
         ];
 
         for (col_name, col_type) in required_columns {
@@ -2176,6 +2182,28 @@ impl Database {
         Ok(())
     }
 
+    pub fn mark_asset_local_versions(
+        &self,
+        asset_id: &str,
+        thumbnail_local: bool,
+        preview_local: bool,
+        full_resolution_local: bool,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE assets SET thumbnail_local = ?2, preview_local = ?3, full_resolution_local = ?4, updated_at = strftime('%s', 'now') WHERE id = ?1",
+            params![
+                asset_id,
+                if thumbnail_local { 1 } else { 0 },
+                if preview_local { 1 } else { 0 },
+                if full_resolution_local { 1 } else { 0 },
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
+
     pub fn get_assets(
         &self,
         page: u32,
@@ -2526,6 +2554,9 @@ impl Database {
                     tags,
                     exif_info_json,
                     account_id,
+                    thumbnail_local,
+                    preview_local,
+                    full_resolution_local,
                     (SELECT COALESCE(NULLIF(user_name, ''), user_email, user_id)
                        FROM accounts WHERE accounts.id = assets.account_id) AS account_name
                 FROM assets
@@ -3900,7 +3931,10 @@ fn map_asset_summary_extended(
         exif_info_json: row.get(21)?,
         is_my_photo: false,
         account_id: row.get::<_, Option<String>>(22)?.unwrap_or_default(),
-        account_name: row.get(23)?,
+        thumbnail_local: row.get::<_, Option<i32>>(23)?.unwrap_or(0) != 0,
+        preview_local: row.get::<_, Option<i32>>(24)?.unwrap_or(0) != 0,
+        full_resolution_local: row.get::<_, Option<i32>>(25)?.unwrap_or(0) != 0,
+        account_name: row.get(26)?,
     })
 }
 

@@ -1,14 +1,24 @@
 import type { CSSProperties, RefObject } from "react";
+import React from "react";
+import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, ChevronLeft, ChevronRight, CirclePlay, Info } from "lucide-react";
 import { SelectionActions } from "../Layout/SelectionActions";
 import { useI18n } from "../../i18n";
 import type { AssetCacheDetails, AssetSummary } from "../../types";
+import {
+  copyAssetsToLocalFolder,
+  getSettings,
+  openFolderInFileExplorer,
+  getCachedAssetDetails,
+} from "../../api/tauri";
 import { CanvasImageViewer } from "./CanvasImageViewer";
 import { FullscreenInfoPanel } from "./FullscreenInfoPanel";
 import { FullscreenMetadataBar } from "./FullscreenMetadataBar";
 import { FullscreenThumbnailStrip } from "./FullscreenThumbnailStrip";
 import { ZoomControl } from "./ZoomControl";
 import { isVideoAsset } from "./photoGridUtils";
+import { useAssetState } from "../../hooks/useAssetState";
+import { AssetStatusBadge } from "./AssetStatusBadge";
 
 interface PhotoGridFullscreenOverlayProps {
   activeAsset: AssetSummary;
@@ -78,6 +88,82 @@ export function PhotoGridFullscreenOverlay({
   onUpdateDescription,
 }: PhotoGridFullscreenOverlayProps) {
   const { t } = useI18n();
+  const [isDownloading, setIsDownloading] = React.useState(false);
+  const downloadProgressRef = React.useRef<number>(0);
+  const [downloadProgress, setDownloadProgress] = React.useState<number | null>(null);
+  const [shareProgress, setShareProgress] = React.useState<number | null>(null);
+
+  const assetState = useAssetState({
+    activeAsset,
+    activeStillSrc,
+    activeFullsizeStillSrc,
+    zoom,
+    isPlayingLivePhoto,
+    activeSrc,
+    isLoadingActiveMedia: isVideoAsset(activeAsset) && activeSrc === null,
+  });
+
+  const handleStatusBadgeDownload = async () => {
+    try {
+      const settings = await getSettings();
+      const destinationFolder = settings.userLocalFolderPath.trim();
+      if (!destinationFolder) {
+        console.warn("[PhotoGridFullscreenOverlay] Local folder not configured for download");
+        return;
+      }
+
+      // When the full-resolution copy already exists locally, the badge acts as
+      // an "Open in File Explorer" button instead of re-downloading.
+      if (assetState.isFullResCached) {
+        await openFolderInFileExplorer(destinationFolder);
+        return;
+      }
+
+      setIsDownloading(true);
+      setDownloadProgress(0);
+      downloadProgressRef.current = 0;
+
+      // Listen for real byte-level download progress emitted by the backend for
+      // this specific asset. The backend streams the original to disk and
+      // reports downloaded/total bytes as chunks arrive.
+      const unlisten = await listen<{
+        assetId: string;
+        downloadedBytes: number;
+        totalBytes: number | null;
+        percent: number | null;
+      }>("asset_download_progress", (event) => {
+        if (event.payload.assetId !== activeAsset.id) {
+          return;
+        }
+        if (event.payload.percent !== null) {
+          downloadProgressRef.current = event.payload.percent;
+          setDownloadProgress(event.payload.percent);
+        }
+      });
+
+      try {
+        // Copy the original file, with cached fallback if original is unavailable
+        await copyAssetsToLocalFolder([activeAsset.id], destinationFolder, false);
+      } finally {
+        unlisten();
+      }
+
+      setDownloadProgress(100);
+
+      // Refresh cache details to detect newly available full-resolution
+      await getCachedAssetDetails(activeAsset.id);
+
+      // Clear progress after a short delay
+      setTimeout(() => {
+        setDownloadProgress(null);
+        setIsDownloading(false);
+      }, 500);
+    } catch (error) {
+      console.error("[PhotoGridFullscreenOverlay] Download failed:", error);
+      setDownloadProgress(null);
+      setIsDownloading(false);
+    }
+  };
 
   return (
     <div
@@ -97,6 +183,15 @@ export function PhotoGridFullscreenOverlay({
       >
         <ArrowLeft size={20} />
       </button>
+
+      <div className="pointer-events-auto absolute left-20 top-4">
+        <AssetStatusBadge
+          assetState={assetState}
+          onDownloadClick={handleStatusBadgeDownload}
+          downloadProgress={downloadProgress}
+          shareProgress={shareProgress}
+        />
+      </div>
 
       <div
         className="pointer-events-auto absolute top-4 left-1/2 z-40 max-w-[min(70vw,48rem)] -translate-x-1/2 rounded-xl px-4 py-1.5 text-sm font-medium text-white/95 select-text"
@@ -137,6 +232,7 @@ export function PhotoGridFullscreenOverlay({
           modalZIndexClass="z-[10010]"
           stopPropagation
           disableCopy={isVideoAsset(activeAsset)}
+          onCopyProgress={setShareProgress}
         />
 
         <button

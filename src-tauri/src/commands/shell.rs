@@ -35,6 +35,18 @@ struct PendingFallback {
     cache_path: String,
 }
 
+/// Byte-level progress for a single original-asset download, emitted as the
+/// `asset_download_progress` event so the UI can show a real progress bar.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetDownloadProgress {
+    pub asset_id: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    /// 0-100 percentage, or `None` when the total size is unknown.
+    pub percent: Option<u32>,
+}
+
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
     log::info!("[oauth:shell] opening external url={}", url);
@@ -64,13 +76,14 @@ pub async fn copy_assets_to_local_folder(
     destination_folder: String,
     allow_cached_fallback: bool,
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<LocalCopyResult, String> {
     copy_assets_to_local_folder_internal(
         asset_ids,
         destination_folder,
         allow_cached_fallback,
         state,
-        None,
+        Some(app),
         "explorer_copy",
         None,
     )
@@ -160,150 +173,145 @@ pub async fn copy_assets_to_local_folder_internal(
             }
         };
 
-        let original_path = details.original_path.as_deref().map(Path::new);
-        if let Some(path) = original_path {
-            if path.exists() && path.is_file() {
-                if stage_file_to_destination(
-                    path,
-                    &details.original_file_name,
-                    &destination,
-                    &mut used_names,
-                )
-                .map(|copied_path| {
-                    let (mtime_ms, size_bytes) = get_file_snapshot(&copied_path);
-                    if let Err(err) = state.db.upsert_local_saved_asset(
-                        &details.id,
-                        album_id,
-                        &copied_path.to_string_lossy(),
-                        &details.original_file_name,
-                        source_kind,
-                        mtime_ms,
-                        size_bytes,
-                    ) {
-                        log::warn!(
-                            "[local-copy] failed to persist copied file tracking asset_id={} path={} err={}",
-                            details.id,
-                            copied_path.to_string_lossy(),
-                            err
-                        );
-                    }
-                })
-                .is_ok()
-                {
-                    copied_original_count += 1;
-                    // Emit progress
-                    if let Some(ref app) = app {
-                        let copied = copied_original_count + copied_cached_count;
-                        let _ = app.emit(
-                            "album_save_progress",
-                            crate::commands::albums::AlbumSaveProgress {
-                                total_assets,
-                                copied_count: copied,
-                                current_file: Some(details.original_file_name.clone()),
-                                status: format!("Copying... ({}/{})", copied, total_assets),
-                            },
-                        );
-                    }
-                    continue;
-                }
-                log::info!(
-                    "[local-copy] copy from original failed asset_id={} source={}",
-                    details.id,
-                    path.to_string_lossy()
-                );
-                failed_count += 1;
-                continue;
+        // If we already saved a copy of this asset into THIS destination folder
+        // and the file is still present on disk, reuse it instead of downloading
+        // again. This deduplicates repeated save requests (e.g. the download
+        // badge copying then auto-zooming, which triggers a second copy).
+        let already_saved = state
+            .db
+            .list_local_saved_asset_paths_for_asset(&details.id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|saved_path| {
+                let saved = Path::new(saved_path);
+                saved.is_file() && saved.parent() == Some(destination.as_path())
+            });
+
+        if let Some(saved_path) = already_saved {
+            log::info!(
+                "[local-copy] reusing existing local copy asset_id={} path={}",
+                details.id, saved_path
+            );
+            // Reserve the name so a different asset in this batch doesn't collide.
+            if let Some(name) = Path::new(&saved_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+            {
+                used_names.insert(name.to_string());
             }
+            copied_original_count += 1;
+            if let Some(ref app) = app {
+                let copied = copied_original_count + copied_cached_count;
+                let _ = app.emit(
+                    "album_save_progress",
+                    crate::commands::albums::AlbumSaveProgress {
+                        total_assets,
+                        copied_count: copied,
+                        current_file: Some(details.original_file_name.clone()),
+                        status: format!("Copying... ({}/{})", copied, total_assets),
+                    },
+                );
+            }
+            continue;
         }
 
-        if details.original_path.is_none() {
-            log::info!(
-                "[local-copy] original path missing asset_id={}",
-                details.id
-            );
-        } else if let Some(path) = details.original_path.as_deref() {
-            log::info!(
-                "[local-copy] original path not accessible asset_id={} path={}",
-                details.id, path
-            );
-        }
+        // NOTE: `details.original_path` is the asset's path on the Immich
+        // SERVER (e.g. a NAS mount). It is never a valid local path on this
+        // machine, so we do NOT probe it on disk. Originals are fetched from the
+        // server and written directly into the user's local folder.
 
         log::info!(
             "[local-copy] attempting server original download asset_id={}",
             details.id
         );
         let (_account_id, client) = state.account_and_client_for_asset(&details.id);
+        let dest_path =
+            resolve_destination_path(&details.original_file_name, &destination, &mut used_names);
+        let progress_app = app.clone();
+        let progress_asset_id = details.id.clone();
         match client
-            .get_asset_original_file_path(&details.id, &details.original_file_name)
+            .download_asset_original_to_path(&details.id, &dest_path, |downloaded, total| {
+                if let Some(ref app) = progress_app {
+                    let percent = total.and_then(|total| {
+                        if total == 0 {
+                            None
+                        } else {
+                            Some(((downloaded.min(total) * 100) / total) as u32)
+                        }
+                    });
+                    let _ = app.emit(
+                        "asset_download_progress",
+                        AssetDownloadProgress {
+                            asset_id: progress_asset_id.clone(),
+                            downloaded_bytes: downloaded,
+                            total_bytes: total,
+                            percent,
+                        },
+                    );
+                }
+            })
             .await
         {
-            Ok(downloaded_original_path) => {
+            Ok(()) => {
                 log::info!(
-                    "[local-copy] downloaded original from server asset_id={} path={}",
-                    details.id, downloaded_original_path
+                    "[local-copy] downloaded original from server to local folder asset_id={} path={}",
+                    details.id,
+                    dest_path.to_string_lossy()
                 );
-                let downloaded_source = Path::new(&downloaded_original_path);
-                if downloaded_source.exists() && downloaded_source.is_file() {
-                    if stage_file_to_destination(
-                        downloaded_source,
-                        &details.original_file_name,
-                        &destination,
-                        &mut used_names,
-                    )
-                    .map(|copied_path| {
-                        let (mtime_ms, size_bytes) = get_file_snapshot(&copied_path);
-                        if let Err(err) = state.db.upsert_local_saved_asset(
-                            &details.id,
-                            album_id,
-                            &copied_path.to_string_lossy(),
-                            &details.original_file_name,
-                            source_kind,
-                            mtime_ms,
-                            size_bytes,
-                        ) {
-                            log::warn!(
-                                "[local-copy] failed to persist copied file tracking asset_id={} path={} err={}",
-                                details.id,
-                                copied_path.to_string_lossy(),
-                                err
-                            );
-                        }
-                    })
-                    .is_ok()
-                    {
-                        copied_original_count += 1;
-                        // Emit progress
-                        if let Some(ref app) = app {
-                            let copied = copied_original_count + copied_cached_count;
-                            let _ = app.emit(
-                                "album_save_progress",
-                                crate::commands::albums::AlbumSaveProgress {
-                                    total_assets,
-                                    copied_count: copied,
-                                    current_file: Some(details.original_file_name.clone()),
-                                    status: format!("Copying... ({}/{})", copied, total_assets),
-                                },
-                            );
-                        }
-                        continue;
-                    }
-
-                    log::info!(
-                        "[local-copy] failed to copy downloaded original asset_id={} source={}",
+                let (mtime_ms, size_bytes) = get_file_snapshot(&dest_path);
+                if let Err(err) = state.db.upsert_local_saved_asset(
+                    &details.id,
+                    album_id,
+                    &dest_path.to_string_lossy(),
+                    &details.original_file_name,
+                    source_kind,
+                    mtime_ms,
+                    size_bytes,
+                ) {
+                    log::warn!(
+                        "[local-copy] failed to persist copied file tracking asset_id={} path={} err={}",
                         details.id,
-                        downloaded_original_path
+                        dest_path.to_string_lossy(),
+                        err
                     );
-                    failed_count += 1;
-                    continue;
+                }
+                if let Err(err) =
+                    state
+                        .db
+                        .mark_asset_local_versions(&details.id, false, false, true)
+                {
+                    log::warn!(
+                        "[local-copy] failed to mark local versions asset_id={} err={}",
+                        details.id,
+                        err
+                    );
                 }
 
-                log::info!(
-                    "[local-copy] downloaded original path missing on disk asset_id={} path={}",
-                    details.id,
-                    downloaded_original_path
-                );
+                copied_original_count += 1;
+                // Emit progress
+                if let Some(ref app) = app {
+                    let copied = copied_original_count + copied_cached_count;
+                    let _ = app.emit(
+                        "album_save_progress",
+                        crate::commands::albums::AlbumSaveProgress {
+                            total_assets,
+                            copied_count: copied,
+                            current_file: Some(details.original_file_name.clone()),
+                            status: format!("Copying... ({}/{})", copied, total_assets),
+                        },
+                    );
+                }
+                continue;
             }
             Err(err) => {
+                // Clean up any partial/empty file left at the destination.
+                let _ = fs::remove_file(&dest_path);
+                used_names.remove(
+                    dest_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or_default(),
+                );
                 log::info!(
                     "[local-copy] server original download failed asset_id={} error={}",
                     details.id, err
@@ -587,6 +595,23 @@ fn stage_file_to_destination(
     })?;
 
     Ok(destination)
+}
+
+/// Compute a unique destination path inside `destination_dir` for an original
+/// file, without copying anything. Used when downloading an original directly
+/// into the user's local folder (never the cache).
+fn resolve_destination_path(
+    original_file_name: &str,
+    destination_dir: &Path,
+    used_names: &mut HashSet<String>,
+) -> PathBuf {
+    let mut base_name = sanitize_file_name(original_file_name);
+    if base_name.is_empty() {
+        base_name = "asset.bin".to_string();
+    }
+
+    let unique_name = make_unique_name(&base_name, used_names);
+    destination_dir.join(unique_name)
 }
 
 fn infer_cache_kind(asset_type: Option<&str>, duration: Option<&str>) -> CacheKind {

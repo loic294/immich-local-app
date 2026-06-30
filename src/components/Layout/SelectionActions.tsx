@@ -14,17 +14,16 @@ import {
   openFolderInFileExplorer,
 } from "../../api/tauri";
 import type { AlbumSummary } from "../../types";
+import { useI18n } from "../../i18n";
 
 type SelectionActionsProps = {
   selectedAssetIds: string[];
   selectedCount: number;
   fetchAlbumsForSelection?: () => Promise<AlbumSummary[]>;
-  onAddSelectedToAlbum?: (input: {
-    albumId?: string;
-    newAlbumName?: string;
-  }) => Promise<void>;
+  onAddSelectedToAlbum?: (input: { albumId?: string; newAlbumName?: string }) => Promise<void>;
   onCreateShareLinkForSelected?: () => Promise<string>;
   onSelectionActionCompleted?: () => void;
+  onCopyProgress?: (progress: number | null) => void;
   disableCopy?: boolean;
   variant?: "topbar" | "preview";
   modalZIndexClass?: string;
@@ -38,6 +37,7 @@ export function SelectionActions({
   onAddSelectedToAlbum,
   onCreateShareLinkForSelected,
   onSelectionActionCompleted,
+  onCopyProgress,
   disableCopy = false,
   variant = "topbar",
   modalZIndexClass = "z-[120]",
@@ -46,9 +46,7 @@ export function SelectionActions({
   const [showAlbumModal, setShowAlbumModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [availableAlbums, setAvailableAlbums] = useState<AlbumSummary[]>([]);
-  const [albumThumbnailMap, setAlbumThumbnailMap] = useState<
-    Record<string, string>
-  >({});
+  const [albumThumbnailMap, setAlbumThumbnailMap] = useState<Record<string, string>>({});
   const [isLoadingAlbums, setIsLoadingAlbums] = useState(false);
   const [selectedAlbumId, setSelectedAlbumId] = useState("");
   const [newAlbumName, setNewAlbumName] = useState("");
@@ -56,13 +54,9 @@ export function SelectionActions({
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [isCopyingImages, setIsCopyingImages] = useState(false);
   const [isCopyingToLocalFolder, setIsCopyingToLocalFolder] = useState(false);
-  const [localCopyStatusMessage, setLocalCopyStatusMessage] = useState<
-    string | null
-  >(null);
-  const [showLocalCopyIssuesModal, setShowLocalCopyIssuesModal] =
-    useState(false);
-  const [showLocalCopyFallbackModal, setShowLocalCopyFallbackModal] =
-    useState(false);
+  const [localCopyStatusMessage, setLocalCopyStatusMessage] = useState<string | null>(null);
+  const [showLocalCopyIssuesModal, setShowLocalCopyIssuesModal] = useState(false);
+  const [showLocalCopyFallbackModal, setShowLocalCopyFallbackModal] = useState(false);
   const [localCopyFallbackPrompt, setLocalCopyFallbackPrompt] = useState<{
     originalUnavailableCount: number;
     cacheFallbackAvailableCount: number;
@@ -71,21 +65,18 @@ export function SelectionActions({
     title: string;
     lines: string[];
   } | null>(null);
-  const [localCopyHasFallbackStep, setLocalCopyHasFallbackStep] =
-    useState(false);
-  const localCopyFallbackResolverRef = useRef<
-    ((decision: boolean) => void) | null
-  >(null);
+  const [localCopyHasFallbackStep, setLocalCopyHasFallbackStep] = useState(false);
+  const [localCopyStep, setLocalCopyStep] = useState(2);
+  const localCopyFallbackResolverRef = useRef<((decision: boolean) => void) | null>(null);
   const [shareLink, setShareLink] = useState("");
-  const [linkCopyStatus, setLinkCopyStatus] = useState<
-    "idle" | "success" | "error"
-  >("idle");
+  const [linkCopyStatus, setLinkCopyStatus] = useState<"idle" | "success" | "error">("idle");
   const [selectionError, setSelectionError] = useState<string | null>(null);
 
+  const { t } = useI18n();
   const canRunSelectionAction = selectedAssetIds.length > 0;
 
   const getLocalCopyProgress = (
-    status: string | null,
+    currentStep: number,
     hasFallbackStep: boolean,
   ): {
     currentStep: number;
@@ -93,63 +84,28 @@ export function SelectionActions({
   } => {
     const stepLabels = hasFallbackStep
       ? [
-          "Preparing destination",
-          "Copying accessible originals",
-          "Optional cached fallback",
-          "Opening destination folder",
+          t("selectionActions.stepPreparingDestination"),
+          t("selectionActions.stepCopyingOriginals"),
+          t("selectionActions.stepCachedFallback"),
+          t("selectionActions.stepOpeningFolder"),
         ]
       : [
-          "Preparing destination",
-          "Copying accessible originals",
-          "Opening destination folder",
+          t("selectionActions.stepPreparingDestination"),
+          t("selectionActions.stepCopyingOriginals"),
+          t("selectionActions.stepOpeningFolder"),
         ];
 
-    if (!status) {
-      return { currentStep: 2, stepLabels };
-    }
-
-    if (status.includes("Checking local folder")) {
-      return { currentStep: 1, stepLabels };
-    }
-
-    if (status.includes("Copying accessible original")) {
-      return { currentStep: 2, stepLabels };
-    }
-
-    if (hasFallbackStep) {
-      if (
-        status.includes("Waiting for fallback") ||
-        status.includes("cached fallback") ||
-        status.includes("Skipped cached fallback")
-      ) {
-        return { currentStep: 3, stepLabels };
-      }
-
-      if (status.includes("Opening destination folder")) {
-        return { currentStep: 4, stepLabels };
-      }
-    } else if (status.includes("Opening destination folder")) {
-      return { currentStep: 3, stepLabels };
-    }
-
-    return { currentStep: 2, stepLabels };
+    return { currentStep, stepLabels };
   };
 
   const addButtonClass =
-    variant === "preview"
-      ? "btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
-      : "btn btn-sm btn-outline";
+    variant === "preview" ? "btn btn-sm btn-outline" : "btn btn-sm btn-outline";
   const shareButtonClass =
-    variant === "preview"
-      ? "btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
-      : "btn btn-sm btn-primary";
+    variant === "preview" ? "btn btn-sm btn-primary" : "btn btn-sm btn-primary";
   const shareMenuClass =
     "menu dropdown-content z-[130] mt-2 w-58 rounded-box border border-base-300 bg-base-100 p-1 shadow";
 
-  const triggerAction = (
-    event: MouseEvent<HTMLElement>,
-    callback: () => void,
-  ) => {
+  const triggerAction = (event: MouseEvent<HTMLElement>, callback: () => void) => {
     if (stopPropagation) {
       event.stopPropagation();
     }
@@ -187,8 +143,7 @@ export function SelectionActions({
       }
       setAlbumThumbnailMap(nextMap);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Could not load albums";
+      const message = error instanceof Error ? error.message : "Could not load albums";
       setSelectionError(message);
     } finally {
       setIsLoadingAlbums(false);
@@ -219,8 +174,7 @@ export function SelectionActions({
       setSelectedAlbumId("");
       onSelectionActionCompleted?.();
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to add to album";
+      const message = error instanceof Error ? error.message : "Failed to add to album";
       setSelectionError(message);
     } finally {
       setIsSubmittingAlbum(false);
@@ -246,9 +200,7 @@ export function SelectionActions({
       onSelectionActionCompleted?.();
     } catch (error) {
       const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to create album and add photos";
+        error instanceof Error ? error.message : "Failed to create album and add photos";
       setSelectionError(message);
     } finally {
       setIsSubmittingAlbum(false);
@@ -278,9 +230,7 @@ export function SelectionActions({
       }, 1600);
     } catch (error) {
       const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to create or copy share link";
+        error instanceof Error ? error.message : "Failed to create or copy share link";
       setSelectionError(message);
       setLinkCopyStatus("error");
       window.setTimeout(() => {
@@ -301,8 +251,7 @@ export function SelectionActions({
     try {
       await copyAssetsToClipboard(selectedAssetIds);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to copy images";
+      const message = error instanceof Error ? error.message : "Failed to copy images";
       setSelectionError(message);
     } finally {
       setIsCopyingImages(false);
@@ -338,16 +287,15 @@ export function SelectionActions({
     setSelectionError(null);
     setIsCopyingToLocalFolder(true);
     setLocalCopyHasFallbackStep(false);
-    setLocalCopyStatusMessage("Checking local folder setting...");
+    setLocalCopyStep(1);
+    setLocalCopyStatusMessage(t("selectionActions.statusCheckingLocalFolder"));
     try {
       const settings = await getSettings();
       const destinationFolder = settings.userLocalFolderPath.trim();
       if (!destinationFolder) {
         setLocalCopyIssueDetails({
-          title: "Local folder is not configured",
-          lines: [
-            "Set a Local Files Folder in Settings before using Open in file explorer.",
-          ],
+          title: t("selectionActions.localFolderNotConfiguredTitle"),
+          lines: [t("selectionActions.localFolderNotConfiguredLine")],
         });
         setShowLocalCopyIssuesModal(true);
         return;
@@ -356,12 +304,10 @@ export function SelectionActions({
       await runCopyToDestinationFolder(destinationFolder);
     } catch (error) {
       const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to copy files to local folder";
+        error instanceof Error ? error.message : "Failed to copy files to local folder";
       setSelectionError(message);
       setLocalCopyIssueDetails({
-        title: "Copy failed",
+        title: t("selectionActions.copyFailedTitle"),
         lines: [message],
       });
       setShowLocalCopyIssuesModal(true);
@@ -370,7 +316,7 @@ export function SelectionActions({
       setIsCopyingToLocalFolder(false);
       if (!showLocalCopyIssuesModal && !showLocalCopyFallbackModal) {
         setLocalCopyStatusMessage((current) =>
-          current === "Copy completed successfully." ? current : null,
+          current === t("selectionActions.statusCompleted") ? current : null,
         );
       }
       setLocalCopyHasFallbackStep(false);
@@ -378,83 +324,110 @@ export function SelectionActions({
   };
 
   const runCopyToDestinationFolder = async (destinationFolder: string) => {
-    setLocalCopyStatusMessage("Copying accessible original files...");
-    const initial = await copyAssetsToLocalFolder(
-      selectedAssetIds,
-      destinationFolder,
-      false,
-    );
+    // Start progress tracking
+    onCopyProgress?.(10);
+    let progressValue = 10;
+    const progressInterval = setInterval(() => {
+      progressValue = Math.min(progressValue + Math.random() * 25, 90);
+      onCopyProgress?.(progressValue);
+    }, 200);
 
-    let copiedOriginalCount = initial.copiedOriginalCount;
-    let copiedCachedCount = initial.copiedCachedCount;
-    let skippedCount = initial.skippedCount;
-    let failedCount = initial.failedCount;
+    try {
+      let fallbackStepShown = false;
+      setLocalCopyStep(2);
+      setLocalCopyStatusMessage(t("selectionActions.statusCopyingOriginals"));
+      const initial = await copyAssetsToLocalFolder(selectedAssetIds, destinationFolder, false);
 
-    if (
-      initial.hasFallbackCandidates &&
-      initial.cacheFallbackAvailableCount > 0 &&
-      initial.fallbackCandidateAssetIds.length > 0
-    ) {
-      setLocalCopyHasFallbackStep(true);
-      setLocalCopyStatusMessage(
-        "Some originals are unavailable. Waiting for fallback confirmation...",
-      );
-      const useFallback = await requestCachedFallbackDecision({
-        originalUnavailableCount: initial.originalUnavailableCount,
-        cacheFallbackAvailableCount: initial.cacheFallbackAvailableCount,
-      });
+      let copiedOriginalCount = initial.copiedOriginalCount;
+      let copiedCachedCount = initial.copiedCachedCount;
+      let skippedCount = initial.skippedCount;
+      let failedCount = initial.failedCount;
 
-      if (useFallback) {
-        setLocalCopyStatusMessage("Copying cached fallback files...");
-        const fallback = await copyAssetsToLocalFolder(
-          initial.fallbackCandidateAssetIds,
-          destinationFolder,
-          true,
-        );
-        copiedOriginalCount += fallback.copiedOriginalCount;
-        copiedCachedCount += fallback.copiedCachedCount;
-        skippedCount += fallback.skippedCount;
-        failedCount += fallback.failedCount;
-      } else {
-        setLocalCopyStatusMessage("Skipped cached fallback copy.");
-        skippedCount += initial.cacheFallbackAvailableCount;
-      }
-    }
+      if (
+        initial.hasFallbackCandidates &&
+        initial.cacheFallbackAvailableCount > 0 &&
+        initial.fallbackCandidateAssetIds.length > 0
+      ) {
+        setLocalCopyHasFallbackStep(true);
+        fallbackStepShown = true;
+        setLocalCopyStep(3);
+        setLocalCopyStatusMessage(t("selectionActions.statusWaitingFallback"));
+        const useFallback = await requestCachedFallbackDecision({
+          originalUnavailableCount: initial.originalUnavailableCount,
+          cacheFallbackAvailableCount: initial.cacheFallbackAvailableCount,
+        });
 
-    const totalCopied = copiedOriginalCount + copiedCachedCount;
-    if (totalCopied > 0) {
-      setLocalCopyStatusMessage("Opening destination folder...");
-      await openFolderInFileExplorer(destinationFolder);
-      onSelectionActionCompleted?.();
-    }
-
-    const hasIssues = skippedCount > 0 || failedCount > 0;
-    if (hasIssues) {
-      const issueLines = [
-        `Originals copied: ${copiedOriginalCount}`,
-        `Cached copied: ${copiedCachedCount}`,
-        `Skipped: ${skippedCount}`,
-        `Failed: ${failedCount}`,
-      ];
-
-      if (initial.originalUnavailableCount > 0) {
-        issueLines.push(
-          `${initial.originalUnavailableCount} original file(s) were not accessible during this operation.`,
-        );
+        if (useFallback) {
+          setLocalCopyStatusMessage(t("selectionActions.statusCopyingCached"));
+          const fallback = await copyAssetsToLocalFolder(
+            initial.fallbackCandidateAssetIds,
+            destinationFolder,
+            true,
+          );
+          copiedOriginalCount += fallback.copiedOriginalCount;
+          copiedCachedCount += fallback.copiedCachedCount;
+          skippedCount += fallback.skippedCount;
+          failedCount += fallback.failedCount;
+        } else {
+          setLocalCopyStatusMessage(t("selectionActions.statusSkippedCached"));
+          skippedCount += initial.cacheFallbackAvailableCount;
+        }
       }
 
-      setLocalCopyIssueDetails({
-        title: "Copy completed with issues",
-        lines: issueLines,
-      });
-      setShowLocalCopyIssuesModal(true);
-    }
+      // Update progress to complete
+      clearInterval(progressInterval);
+      onCopyProgress?.(100);
 
-    if (!hasIssues) {
-      setLocalCopyStatusMessage("Copy completed successfully.");
-      window.setTimeout(() => {
-        setLocalCopyStatusMessage(null);
-      }, 1800);
+      const totalCopied = copiedOriginalCount + copiedCachedCount;
+      if (totalCopied > 0) {
+        setLocalCopyStep(fallbackStepShown ? 4 : 3);
+        setLocalCopyStatusMessage(t("selectionActions.statusOpeningFolder"));
+        await openFolderInFileExplorer(destinationFolder);
+        onSelectionActionCompleted?.();
+      }
+
+      // Clear progress after a short delay
+      setTimeout(() => {
+        onCopyProgress?.(null);
+      }, 500);
+
+      const hasIssues = skippedCount > 0 || failedCount > 0;
+      if (hasIssues) {
+        const issueLines = [
+          t("selectionActions.originalsCopied", { count: copiedOriginalCount }),
+          t("selectionActions.cachedCopied", { count: copiedCachedCount }),
+          t("selectionActions.skippedCount", { count: skippedCount }),
+          t("selectionActions.failedCount", { count: failedCount }),
+        ];
+
+        if (initial.originalUnavailableCount > 0) {
+          issueLines.push(
+            t("selectionActions.originalsNotAccessible", {
+              count: initial.originalUnavailableCount,
+            }),
+          );
+        }
+
+        setLocalCopyIssueDetails({
+          title: t("selectionActions.copyCompletedWithIssues"),
+          lines: issueLines,
+        });
+        setShowLocalCopyIssuesModal(true);
+      }
+
+      if (!hasIssues) {
+        setLocalCopyStatusMessage(t("selectionActions.statusCompleted"));
+        window.setTimeout(() => {
+          setLocalCopyStatusMessage(null);
+        }, 1800);
+      }
+    } catch (error) {
+      console.error("[SelectionActions] Copy error:", error);
+      clearInterval(progressInterval);
+      onCopyProgress?.(null);
+      throw error;
+    } finally {
+      clearInterval(progressInterval);
     }
   };
 
@@ -466,7 +439,8 @@ export function SelectionActions({
     setSelectionError(null);
     setIsCopyingToLocalFolder(true);
     setLocalCopyHasFallbackStep(false);
-    setLocalCopyStatusMessage("Selecting destination folder...");
+    setLocalCopyStep(1);
+    setLocalCopyStatusMessage(t("selectionActions.statusSelectingFolder"));
     try {
       const selected = await open({
         directory: true,
@@ -481,12 +455,10 @@ export function SelectionActions({
       await runCopyToDestinationFolder(selected);
     } catch (error) {
       const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to copy files to selected folder";
+        error instanceof Error ? error.message : "Failed to copy files to selected folder";
       setSelectionError(message);
       setLocalCopyIssueDetails({
-        title: "Copy failed",
+        title: t("selectionActions.copyFailedTitle"),
         lines: [message],
       });
       setShowLocalCopyIssuesModal(true);
@@ -495,7 +467,7 @@ export function SelectionActions({
       setIsCopyingToLocalFolder(false);
       if (!showLocalCopyIssuesModal && !showLocalCopyFallbackModal) {
         setLocalCopyStatusMessage((current) =>
-          current === "Copy completed successfully." ? current : null,
+          current === t("selectionActions.statusCompleted") ? current : null,
         );
       }
       setLocalCopyHasFallbackStep(false);
@@ -504,8 +476,8 @@ export function SelectionActions({
 
   const shareSubject =
     selectedCount === 1
-      ? "this photo"
-      : `${selectedCount} selected photo${selectedCount > 1 ? "s" : ""}`;
+      ? t("selectionActions.subjectSingle")
+      : t("selectionActions.subjectMultiple", { count: selectedCount });
 
   return (
     <>
@@ -519,7 +491,7 @@ export function SelectionActions({
         }}
       >
         <BookImage size={16} />
-        Add to album
+        {t("selectionActions.addToAlbum")}
       </button>
 
       <details
@@ -532,7 +504,7 @@ export function SelectionActions({
       >
         <summary className={shareButtonClass}>
           <Link size={16} />
-          Share
+          {t("selectionActions.share")}
         </summary>
         <ul className={shareMenuClass}>
           <li>
@@ -546,7 +518,7 @@ export function SelectionActions({
               }}
             >
               <Link size={14} />
-              Share with a link
+              {t("selectionActions.shareWithLink")}
             </button>
           </li>
           <li>
@@ -559,8 +531,8 @@ export function SelectionActions({
             >
               <BookImage size={14} />
               {isCopyingImages
-                ? "Copying images..."
-                : "Copy images to clipboard"}
+                ? t("selectionActions.copyingImages")
+                : t("selectionActions.copyImagesToClipboard")}
             </button>
           </li>
           <li>
@@ -573,8 +545,8 @@ export function SelectionActions({
             >
               <Folder size={14} />
               {isCopyingToLocalFolder
-                ? "Copying to local folder..."
-                : "Open in File Explorer"}
+                ? t("selectionActions.copyingToLocalFolder")
+                : t("selectionActions.openInFileExplorer")}
             </button>
           </li>
           <li>
@@ -587,8 +559,8 @@ export function SelectionActions({
             >
               <Copy size={14} />
               {isCopyingToLocalFolder
-                ? "Copying to selected folder..."
-                : "Copy to USB stick/folder"}
+                ? t("selectionActions.copyingToSelectedFolder")
+                : t("selectionActions.copyToUsb")}
             </button>
           </li>
         </ul>
@@ -599,31 +571,30 @@ export function SelectionActions({
           className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
         >
           <div className="w-full max-w-xl rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
-            <h3 className="m-0 text-lg font-semibold">Add to album</h3>
+            <h3 className="m-0 text-lg font-semibold">{t("selectionActions.addToAlbum")}</h3>
             <p className="mb-4 mt-1 text-sm text-base-content/70">
-              Add {shareSubject} to an existing album or create a new one.
+              {t("selectionActions.addToAlbumSubtitle", { subject: shareSubject })}
             </p>
 
             <div className="mb-3">
               <label className="label px-0 pb-1 pt-0">
-                <span className="label-text">Existing album</span>
+                <span className="label-text">{t("selectionActions.existingAlbum")}</span>
               </label>
 
               <details className="dropdown w-full">
                 <summary className="btn btn-outline w-full justify-between">
                   {selectedAlbumId
-                    ? (availableAlbums.find(
-                        (album) => album.id === selectedAlbumId,
-                      )?.albumName ?? "Select album")
-                    : "Select album"}
+                    ? (availableAlbums.find((album) => album.id === selectedAlbumId)?.albumName ??
+                      t("selectionActions.selectAlbum"))
+                    : t("selectionActions.selectAlbum")}
                 </summary>
                 <ul className="menu dropdown-content z-[130] mt-2 max-h-72 w-full overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow">
                   {availableAlbums.length === 0 ? (
                     <li>
                       <span className="text-base-content/60">
                         {isLoadingAlbums
-                          ? "Loading albums..."
-                          : "No albums available"}
+                          ? t("selectionActions.loadingAlbums")
+                          : t("selectionActions.noAlbumsAvailable")}
                       </span>
                     </li>
                   ) : (
@@ -654,9 +625,7 @@ export function SelectionActions({
                                   </span>
                                 </span>
                               )}
-                              <span className="truncate max-w-52">
-                                {album.albumName}
-                              </span>
+                              <span className="truncate max-w-52">{album.albumName}</span>
                             </div>
                             <span className="badge badge-sm badge-ghost">
                               {album.assetCount ?? 0}
@@ -680,7 +649,7 @@ export function SelectionActions({
                 }}
               >
                 <Plus size={16} />
-                Add to album
+                {t("selectionActions.addToAlbum")}
               </button>
             </div>
 
@@ -688,14 +657,14 @@ export function SelectionActions({
 
             <div className="mb-3">
               <label className="label px-0 pb-1 pt-0">
-                <span className="label-text">New album name</span>
+                <span className="label-text">{t("selectionActions.newAlbumName")}</span>
               </label>
               <input
                 type="text"
                 className="input input-bordered w-full"
                 value={newAlbumName}
                 onChange={(event) => setNewAlbumName(event.target.value)}
-                placeholder="Summer trip"
+                placeholder={t("selectionActions.newAlbumPlaceholder")}
                 disabled={isSubmittingAlbum}
               />
             </div>
@@ -713,7 +682,7 @@ export function SelectionActions({
                 onClick={() => setShowAlbumModal(false)}
                 disabled={isSubmittingAlbum}
               >
-                Cancel
+                {t("selectionActions.cancel")}
               </button>
               <button
                 type="button"
@@ -723,7 +692,7 @@ export function SelectionActions({
                   void submitCreateAlbum();
                 }}
               >
-                Create album
+                {t("selectionActions.createAlbum")}
               </button>
             </div>
           </div>
@@ -735,15 +704,15 @@ export function SelectionActions({
           className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
         >
           <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
-            <h3 className="m-0 text-lg font-semibold">Share with a link</h3>
+            <h3 className="m-0 text-lg font-semibold">{t("selectionActions.shareWithLink")}</h3>
             <p className="mb-4 mt-1 text-sm text-base-content/70">
-              Generate a share link for {shareSubject}.
+              {t("selectionActions.shareWithLinkSubtitle", { subject: shareSubject })}
             </p>
 
             {shareLink ? (
               <div className="mb-3">
                 <label className="label px-0 pb-1 pt-0">
-                  <span className="label-text">Share link</span>
+                  <span className="label-text">{t("selectionActions.shareLinkLabel")}</span>
                 </label>
                 <input
                   type="text"
@@ -766,7 +735,7 @@ export function SelectionActions({
                 className="btn btn-ghost"
                 onClick={() => setShowShareModal(false)}
               >
-                Close
+                {t("selectionActions.close")}
               </button>
               <button
                 type="button"
@@ -777,12 +746,12 @@ export function SelectionActions({
                 disabled={isCreatingShare}
               >
                 {isCreatingShare
-                  ? "Creating..."
+                  ? t("selectionActions.creating")
                   : linkCopyStatus === "success"
-                    ? "Link copied!"
+                    ? t("selectionActions.linkCopied")
                     : linkCopyStatus === "error"
-                      ? "Copy failed"
-                      : "Create link"}
+                      ? t("selectionActions.copyFailedShort")
+                      : t("selectionActions.createLink")}
               </button>
             </div>
           </div>
@@ -794,9 +763,7 @@ export function SelectionActions({
           className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
         >
           <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
-            <h3 className="m-0 text-lg font-semibold">
-              {localCopyIssueDetails.title}
-            </h3>
+            <h3 className="m-0 text-lg font-semibold">{localCopyIssueDetails.title}</h3>
             <div className="mt-3 space-y-2 text-sm text-base-content/80">
               {localCopyIssueDetails.lines.map((line) => (
                 <p key={line}>{line}</p>
@@ -812,7 +779,7 @@ export function SelectionActions({
                   setLocalCopyIssueDetails(null);
                 }}
               >
-                Close
+                {t("selectionActions.close")}
               </button>
             </div>
           </div>
@@ -825,18 +792,20 @@ export function SelectionActions({
         >
           <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
             <h3 className="m-0 text-lg font-semibold">
-              Original files unavailable
+              {t("selectionActions.originalsUnavailableTitle")}
             </h3>
             <div className="mt-3 space-y-2 text-sm text-base-content/80">
               <p>
-                {localCopyFallbackPrompt.originalUnavailableCount} original
-                file(s) could not be accessed or downloaded.
+                {t("selectionActions.originalsUnavailableLine", {
+                  count: localCopyFallbackPrompt.originalUnavailableCount,
+                })}
               </p>
               <p>
-                {localCopyFallbackPrompt.cacheFallbackAvailableCount} cached
-                file(s) are available.
+                {t("selectionActions.cachedAvailableLine", {
+                  count: localCopyFallbackPrompt.cacheFallbackAvailableCount,
+                })}
               </p>
-              <p>Do you want to copy cached files instead?</p>
+              <p>{t("selectionActions.copyCachedQuestion")}</p>
             </div>
 
             <div className="mt-4 flex justify-end gap-2">
@@ -845,14 +814,14 @@ export function SelectionActions({
                 className="btn btn-ghost"
                 onClick={() => resolveCachedFallbackDecision(false)}
               >
-                Skip cached copy
+                {t("selectionActions.skipCachedCopy")}
               </button>
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => resolveCachedFallbackDecision(true)}
               >
-                Copy cached files
+                {t("selectionActions.copyCachedFiles")}
               </button>
             </div>
           </div>
@@ -866,23 +835,22 @@ export function SelectionActions({
           <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
             {(() => {
               const { currentStep, stepLabels } = getLocalCopyProgress(
-                localCopyStatusMessage,
+                localCopyStep,
                 localCopyHasFallbackStep,
               );
               const totalSteps = stepLabels.length;
               return (
                 <>
                   <div className="badge badge-outline mb-2">
-                    Step {currentStep}/{totalSteps}
+                    {t("selectionActions.stepLabel", { current: currentStep, total: totalSteps })}
                   </div>
                   <h3 className="m-0 text-lg font-semibold">
-                    Copy in progress
+                    {t("selectionActions.copyInProgress")}
                   </h3>
                   <div className="mt-3 flex items-center gap-3 text-sm text-base-content/80">
                     <span className="loading loading-spinner loading-sm"></span>
                     <span>
-                      {localCopyStatusMessage ??
-                        "Copying accessible files to your local folder..."}
+                      {localCopyStatusMessage ?? t("selectionActions.copyingDefaultStatus")}
                     </span>
                   </div>
                   <ul className="list mt-4 rounded-box border border-base-300/60 bg-base-200/40">
@@ -904,9 +872,7 @@ export function SelectionActions({
                           ></span>
                           <span
                             className={`text-sm ${
-                              isActive
-                                ? "font-medium text-base-content"
-                                : "text-base-content/70"
+                              isActive ? "font-medium text-base-content" : "text-base-content/70"
                             }`}
                           >
                             {label}

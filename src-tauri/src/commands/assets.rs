@@ -184,6 +184,12 @@ pub struct CachedAssetDetails {
     pub is_my_photo: bool,
     pub account_id: String,
     pub account_name: Option<String>,
+    pub thumbnail_local: bool,
+    pub preview_local: bool,
+    pub full_resolution_local: bool,
+    /// Absolute path to a copy of this asset saved in the user's local folder,
+    /// if one exists on disk. Originals are only ever stored here, never in cache.
+    pub local_saved_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -766,6 +772,15 @@ pub async fn get_cached_asset_details(
         .get_asset_details(&asset_id)
         .map_err(|err| format!("asset details cache read failed: {err}"))?;
 
+    // Resolve a locally-saved copy (in the user's local folder) if one exists on
+    // disk. Originals are never stored in the cache directory.
+    let local_saved_path = state
+        .db
+        .list_local_saved_asset_paths_for_asset(&asset_id)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|path| std::path::Path::new(path).is_file());
+
     Ok(details.map(|asset| CachedAssetDetails {
         id: asset.id,
         original_file_name: asset.original_file_name,
@@ -787,6 +802,10 @@ pub async fn get_cached_asset_details(
         is_my_photo: asset.is_my_photo,
         account_id: asset.account_id,
         account_name: asset.account_name,
+        thumbnail_local: asset.thumbnail_local,
+        preview_local: asset.preview_local,
+        full_resolution_local: asset.full_resolution_local,
+        local_saved_path,
     }))
 }
 

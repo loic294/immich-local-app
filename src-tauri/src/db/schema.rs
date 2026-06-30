@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS assets (
   file_size_bytes INTEGER,
   file_extension TEXT,
   people TEXT,
-  tags TEXT
+  tags TEXT,
+  thumbnail_local BOOLEAN DEFAULT 0,
+  preview_local BOOLEAN DEFAULT 0,
+  full_resolution_local BOOLEAN DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (

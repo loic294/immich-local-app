@@ -2215,26 +2215,29 @@ impl ImmichClient {
         Ok(output_path.to_string_lossy().to_string())
     }
 
-    pub async fn get_asset_original_file_path(
+    /// Download an asset's original file directly to `destination_path` in the
+    /// user's local folder. This intentionally does NOT write to any cache
+    /// directory — originals must only ever live in the configured local folder.
+    ///
+    /// The response body is streamed to disk and `on_progress(downloaded_bytes,
+    /// total_bytes)` is invoked as chunks arrive so callers can report real
+    /// download progress. `total_bytes` is taken from the `Content-Length`
+    /// header and may be `None` if the server does not provide it.
+    pub async fn download_asset_original_to_path<F>(
         &self,
         asset_id: &str,
-        original_file_name: &str,
-    ) -> Result<String, String> {
+        destination_path: &Path,
+        mut on_progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64, Option<u64>),
+    {
         let session = self
             .session
             .lock()
             .await
             .clone()
             .ok_or_else(|| "not authenticated".to_string())?;
-
-        let cache_dir = original_cache_dir()?;
-        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
-
-        let safe_name = sanitize_cache_file_name(original_file_name);
-        let output = cache_dir.join(format!("{}-{}", asset_id, safe_name));
-        if output.exists() {
-            return Ok(output.to_string_lossy().to_string());
-        }
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2255,13 +2258,25 @@ impl ImmichClient {
         let mut last_error: Option<String> = None;
 
         for url in endpoints {
-            let response = self
+            let mut response = match self
                 .client
                 .get(&url)
                 .headers(headers.clone())
+                // Original files (full-resolution photos / videos) can be large,
+                // so override the client's short default timeout — which exists
+                // for fast offline detection — with a generous per-request
+                // timeout. The 5s connect timeout still applies, so an
+                // unreachable server still fails fast.
+                .timeout(std::time::Duration::from_secs(600))
                 .send()
                 .await
-                .map_err(|err| err.to_string())?;
+            {
+                Ok(value) => value,
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                    continue;
+                }
+            };
 
             let status = response.status();
             if !status.is_success() {
@@ -2275,14 +2290,51 @@ impl ImmichClient {
                 continue;
             }
 
-            let bytes = response.bytes().await.map_err(|err| err.to_string())?;
-            if bytes.is_empty() {
-                last_error = Some(format!("download original returned empty body from {}", url));
+            let total_bytes = response.content_length();
+            // Report the starting point (0 of total) so the UI can immediately
+            // switch from indeterminate to a determinate bar.
+            on_progress(0, total_bytes);
+
+            let mut file = match tokio::fs::File::create(destination_path).await {
+                Ok(value) => value,
+                Err(err) => return Err(err.to_string()),
+            };
+
+            let mut downloaded: u64 = 0;
+            let mut wrote_any = false;
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        if let Err(err) = file.write_all(&chunk).await {
+                            return Err(err.to_string());
+                        }
+                        downloaded += chunk.len() as u64;
+                        wrote_any = true;
+                        on_progress(downloaded, total_bytes);
+                    }
+                    Ok(None) => break,
+                    Err(err) => {
+                        last_error = Some(err.to_string());
+                        wrote_any = false;
+                        break;
+                    }
+                }
+            }
+
+            if !wrote_any {
+                let _ = tokio::fs::remove_file(destination_path).await;
+                if last_error.is_none() {
+                    last_error =
+                        Some(format!("download original returned empty body from {}", url));
+                }
                 continue;
             }
 
-            fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
-            return Ok(output.to_string_lossy().to_string());
+            if let Err(err) = file.flush().await {
+                return Err(err.to_string());
+            }
+
+            return Ok(());
         }
 
         Err(last_error.unwrap_or_else(|| {
@@ -3602,13 +3654,6 @@ fn video_cache_dir() -> Result<PathBuf, String> {
         .join(".config")
         .join("immich-local-app")
         .join("videos"))
-}
-
-fn original_cache_dir() -> Result<PathBuf, String> {
-    Ok(home_dir()?
-        .join(".config")
-        .join("immich-local-app")
-        .join("originals"))
 }
 
 fn profile_cache_dir() -> Result<PathBuf, String> {

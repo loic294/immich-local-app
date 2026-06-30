@@ -242,9 +242,7 @@ export function isFilterActive(criteria: AssetFilterCriteria): boolean {
  * Build the criteria payload to send to the backend, collapsing an inactive
  * filter to `null` so unfiltered queries skip the criteria subquery entirely.
  */
-export function criteriaPayload(
-  criteria: AssetFilterCriteria,
-): AssetFilterCriteria | null {
+export function criteriaPayload(criteria: AssetFilterCriteria): AssetFilterCriteria | null {
   return isFilterActive(criteria) ? criteria : null;
 }
 
@@ -295,6 +293,14 @@ export type AssetCacheDetails = {
   accountId: string;
   /** Display name (or email) of the owning account, for the info panel. */
   accountName: string | null;
+  /** Whether thumbnail version is saved locally */
+  thumbnailLocal: boolean;
+  /** Whether preview version is saved locally */
+  previewLocal: boolean;
+  /** Whether full-resolution version is saved locally */
+  fullResolutionLocal: boolean;
+  /** Absolute path to a copy saved in the user's local folder, if present on disk. */
+  localSavedPath: string | null;
 };
 
 export type SavedLocalFileChange = {

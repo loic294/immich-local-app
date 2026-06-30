@@ -75,8 +75,7 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       syncAlbumsListRunning: "Syncing Albums List...",
       syncAlbumsListHelp:
         "Refresh album list metadata now. The app also refreshes it automatically at launch and when reconnecting.",
-      navigationDescription:
-        "Choose which items appear in the sidebar. Settings is always shown.",
+      navigationDescription: "Choose which items appear in the sidebar. Settings is always shown.",
       myPhotosDescription:
         "Define which photos are considered yours using date ranges and a camera. The My Photos filter will match assets that satisfy any rule below.",
       myPhotosEmpty:
@@ -152,8 +151,7 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       back: "Back",
       startOauth: "Start OAuth in Browser",
       openingBrowser: "Opening browser...",
-      oauthHelpA:
-        "After signing in, you should be redirected back to this app automatically.",
+      oauthHelpA: "After signing in, you should be redirected back to this app automatically.",
       oauthHelpB:
         "If it does not complete, paste either the full redirect URL or just the value of the code parameter below.",
       authCodeLabel: "Authorization Code or Callback URL",
@@ -219,8 +217,7 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       methodOAuth: "Browser (OAuth)",
       methodApiKey: "API key",
       methodPassword: "Email & password",
-      oauthHelp:
-        "Sign in through your browser, then paste the callback URL back here.",
+      oauthHelp: "Sign in through your browser, then paste the callback URL back here.",
       startOauth: "Open browser to sign in",
       callbackLabel: "Callback URL",
       callbackPlaceholder: "app://callback?code=...",
@@ -386,6 +383,81 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       datePickerCancel: "Cancel",
       closeDatePickerAria: "Close date picker",
       openThumbnailAria: "Open {name}",
+      assetStatus: {
+        unavailable: "Image unavailable",
+        unavailableSubtitle: "Connect to the internet to access this image",
+        downloadingPreview: "Downloading preview image",
+        downloadingPreviewSubtitle: "The image is downloading",
+        downloadingVideo: "Downloading video",
+        downloadingVideoSubtitle: "The video is downloading",
+        downloadingFullRes: "Downloading high-resolution image",
+        downloadingFullResSubtitle: "The image is downloading at full resolution",
+        previewSaved: "Preview image saved locally",
+        previewSavedSubtitle: "Download the full-resolution image",
+        offlineCannotDownload: "Connect to server to download high-resolution image",
+        fullResLoaded: "Full-resolution image loaded",
+        fullResLoadedSubtitle: "Open in File Explorer",
+      },
+    },
+    selectionActions: {
+      addToAlbum: "Add to album",
+      share: "Share",
+      shareWithLink: "Share with a link",
+      copyingImages: "Copying images...",
+      copyImagesToClipboard: "Copy images to clipboard",
+      copyingToLocalFolder: "Copying to local folder...",
+      openInFileExplorer: "Open in File Explorer",
+      copyingToSelectedFolder: "Copying to selected folder...",
+      copyToUsb: "Copy to USB stick/folder",
+      addToAlbumSubtitle: "Add {subject} to an existing album or create a new one.",
+      existingAlbum: "Existing album",
+      selectAlbum: "Select album",
+      loadingAlbums: "Loading albums...",
+      noAlbumsAvailable: "No albums available",
+      newAlbumName: "New album name",
+      newAlbumPlaceholder: "Summer trip",
+      cancel: "Cancel",
+      createAlbum: "Create album",
+      shareWithLinkSubtitle: "Generate a share link for {subject}.",
+      shareLinkLabel: "Share link",
+      close: "Close",
+      creating: "Creating...",
+      linkCopied: "Link copied!",
+      copyFailedShort: "Copy failed",
+      createLink: "Create link",
+      localFolderNotConfiguredTitle: "Local folder is not configured",
+      localFolderNotConfiguredLine:
+        "Set a Local Files Folder in Settings before using Open in file explorer.",
+      copyFailedTitle: "Copy failed",
+      copyCompletedWithIssues: "Copy completed with issues",
+      originalsCopied: "Originals copied: {count}",
+      cachedCopied: "Cached copied: {count}",
+      skippedCount: "Skipped: {count}",
+      failedCount: "Failed: {count}",
+      originalsNotAccessible: "{count} original file(s) were not accessible during this operation.",
+      originalsUnavailableTitle: "Original files unavailable",
+      originalsUnavailableLine: "{count} original file(s) could not be accessed or downloaded.",
+      cachedAvailableLine: "{count} cached file(s) are available.",
+      copyCachedQuestion: "Do you want to copy cached files instead?",
+      skipCachedCopy: "Skip cached copy",
+      copyCachedFiles: "Copy cached files",
+      stepLabel: "Step {current}/{total}",
+      copyInProgress: "Copy in progress",
+      copyingDefaultStatus: "Copying accessible files to your local folder...",
+      subjectSingle: "this photo",
+      subjectMultiple: "{count} selected photos",
+      stepPreparingDestination: "Preparing destination",
+      stepCopyingOriginals: "Copying accessible originals",
+      stepCachedFallback: "Optional cached fallback",
+      stepOpeningFolder: "Opening destination folder",
+      statusCheckingLocalFolder: "Checking local folder setting...",
+      statusSelectingFolder: "Selecting destination folder...",
+      statusCopyingOriginals: "Copying accessible original files...",
+      statusWaitingFallback: "Some originals are unavailable. Waiting for fallback confirmation...",
+      statusCopyingCached: "Copying cached fallback files...",
+      statusSkippedCached: "Skipped cached fallback copy.",
+      statusOpeningFolder: "Opening destination folder...",
+      statusCompleted: "Copy completed successfully.",
     },
   },
   "fr-CA": {
@@ -486,17 +558,13 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       checkForUpdates: "Verifier les mises a jour",
       aboutDescription:
         "Une application locale de navigation photo pour les serveurs Immich, avec prise en charge des photos Live, des albums et du cache hors ligne.",
-      failedSaveLocalFolder:
-        "Impossible d'enregistrer le chemin du dossier local.",
+      failedSaveLocalFolder: "Impossible d'enregistrer le chemin du dossier local.",
       failedOpenFolderPicker: "Impossible d'ouvrir le selecteur de dossier.",
       clearCacheConfirm:
         "Etes-vous sur de vouloir effacer tous les videos et miniatures en cache ? Cela liberera de l'espace mais peut prendre du temps pour recharger les medias.",
-      failedSaveMyPhotosRules:
-        "Impossible d'enregistrer les regles Mes photos.",
-      failedOpenLocalFolder:
-        "Impossible d'ouvrir le dossier local dans l'explorateur de fichiers.",
-      failedOpenCacheFolder:
-        "Impossible d'ouvrir le dossier cache dans l'explorateur de fichiers.",
+      failedSaveMyPhotosRules: "Impossible d'enregistrer les regles Mes photos.",
+      failedOpenLocalFolder: "Impossible d'ouvrir le dossier local dans l'explorateur de fichiers.",
+      failedOpenCacheFolder: "Impossible d'ouvrir le dossier cache dans l'explorateur de fichiers.",
     },
     auth: {
       signInTitle: "Se connecter a Immich",
@@ -504,13 +572,11 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       modeDev: "Mode dev",
       modeApiKey: "Clé API",
       modePassword: "Nom d'utilisateur / Mot de passe",
-      apiKeyHelp:
-        "Collez votre clé API Immich pour vous connecter directement.",
+      apiKeyHelp: "Collez votre clé API Immich pour vous connecter directement.",
       apiKeyLabel: "Clé API",
       apiKeyPlaceholder: "immich_api_key...",
       apiKeySubmit: "Se connecter avec une clé API",
-      passwordHelp:
-        "Connectez-vous avec l'email et le mot de passe de votre compte Immich.",
+      passwordHelp: "Connectez-vous avec l'email et le mot de passe de votre compte Immich.",
       emailLabel: "Email",
       emailPlaceholder: "vous@exemple.com",
       passwordLabel: "Mot de passe",
@@ -587,8 +653,7 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       methodOAuth: "Navigateur (OAuth)",
       methodApiKey: "Clé API",
       methodPassword: "Courriel et mot de passe",
-      oauthHelp:
-        "Connectez-vous via votre navigateur, puis collez l'URL de rappel ici.",
+      oauthHelp: "Connectez-vous via votre navigateur, puis collez l'URL de rappel ici.",
       startOauth: "Ouvrir le navigateur pour se connecter",
       callbackLabel: "URL de rappel",
       callbackPlaceholder: "app://callback?code=...",
@@ -600,8 +665,7 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       removeConfirm: "Retirer ce compte de cet appareil ?",
       removeFailed: "Impossible de retirer le compte.",
       setPrimaryFailed: "Impossible de changer le compte principal.",
-      restartHint:
-        "L'application va se recharger pour appliquer le changement.",
+      restartHint: "L'application va se recharger pour appliquer le changement.",
     },
     topBar: {
       cancel: "Annuler",
@@ -754,6 +818,85 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       datePickerCancel: "Annuler",
       closeDatePickerAria: "Fermer le sélecteur de date",
       openThumbnailAria: "Ouvrir {name}",
+      assetStatus: {
+        unavailable: "Image indisponible",
+        unavailableSubtitle: "Connectez-vous à Internet pour accéder à cette image",
+        downloadingPreview: "Téléchargement de l'aperçu",
+        downloadingPreviewSubtitle: "L'image est en cours de téléchargement",
+        downloadingVideo: "Téléchargement de la vidéo",
+        downloadingVideoSubtitle: "La vidéo est en cours de téléchargement",
+        downloadingFullRes: "Téléchargement de l'image haute résolution",
+        downloadingFullResSubtitle: "L'image est en cours de téléchargement",
+        previewSaved: "Aperçu enregistré localement",
+        previewSavedSubtitle: "Télécharger l'image en haute résolution",
+        offlineCannotDownload:
+          "Connectez-vous au serveur pour télécharger l'image haute résolution",
+        fullResLoaded: "Image haute résolution téléchargée",
+        fullResLoadedSubtitle: "Ouvrir dans l'Explorateur de fichiers",
+      },
+    },
+    selectionActions: {
+      addToAlbum: "Ajouter à un album",
+      share: "Partager",
+      shareWithLink: "Partager avec un lien",
+      copyingImages: "Copie des images...",
+      copyImagesToClipboard: "Copier les images dans le presse-papiers",
+      copyingToLocalFolder: "Copie vers le dossier local...",
+      openInFileExplorer: "Ouvrir dans l'Explorateur de fichiers",
+      copyingToSelectedFolder: "Copie vers le dossier sélectionné...",
+      copyToUsb: "Copier vers une clé USB/un dossier",
+      addToAlbumSubtitle: "Ajouter {subject} à un album existant ou en créer un nouveau.",
+      existingAlbum: "Album existant",
+      selectAlbum: "Sélectionner un album",
+      loadingAlbums: "Chargement des albums...",
+      noAlbumsAvailable: "Aucun album disponible",
+      newAlbumName: "Nom du nouvel album",
+      newAlbumPlaceholder: "Voyage d'été",
+      cancel: "Annuler",
+      createAlbum: "Créer l'album",
+      shareWithLinkSubtitle: "Générer un lien de partage pour {subject}.",
+      shareLinkLabel: "Lien de partage",
+      close: "Fermer",
+      creating: "Création...",
+      linkCopied: "Lien copié !",
+      copyFailedShort: "Échec de la copie",
+      createLink: "Créer le lien",
+      localFolderNotConfiguredTitle: "Le dossier local n'est pas configuré",
+      localFolderNotConfiguredLine:
+        "Définissez un dossier de fichiers locaux dans les paramètres avant d'utiliser Ouvrir dans l'Explorateur de fichiers.",
+      copyFailedTitle: "Échec de la copie",
+      copyCompletedWithIssues: "Copie terminée avec des problèmes",
+      originalsCopied: "Originaux copiés : {count}",
+      cachedCopied: "En cache copiés : {count}",
+      skippedCount: "Ignorés : {count}",
+      failedCount: "Échoués : {count}",
+      originalsNotAccessible:
+        "{count} fichier(s) original(aux) n'étaient pas accessibles pendant cette opération.",
+      originalsUnavailableTitle: "Fichiers originaux indisponibles",
+      originalsUnavailableLine:
+        "{count} fichier(s) original(aux) n'ont pas pu être consultés ou téléchargés.",
+      cachedAvailableLine: "{count} fichier(s) en cache sont disponibles.",
+      copyCachedQuestion: "Voulez-vous copier les fichiers en cache à la place ?",
+      skipCachedCopy: "Ignorer la copie en cache",
+      copyCachedFiles: "Copier les fichiers en cache",
+      stepLabel: "Étape {current}/{total}",
+      copyInProgress: "Copie en cours",
+      copyingDefaultStatus: "Copie des fichiers accessibles vers votre dossier local...",
+      subjectSingle: "cette photo",
+      subjectMultiple: "{count} photos sélectionnées",
+      stepPreparingDestination: "Préparation de la destination",
+      stepCopyingOriginals: "Copie des originaux accessibles",
+      stepCachedFallback: "Repli optionnel sur le cache",
+      stepOpeningFolder: "Ouverture du dossier de destination",
+      statusCheckingLocalFolder: "Vérification du réglage du dossier local...",
+      statusSelectingFolder: "Sélection du dossier de destination...",
+      statusCopyingOriginals: "Copie des fichiers originaux accessibles...",
+      statusWaitingFallback:
+        "Certains originaux sont indisponibles. En attente de confirmation du repli...",
+      statusCopyingCached: "Copie des fichiers de repli en cache...",
+      statusSkippedCached: "Copie en cache ignorée.",
+      statusOpeningFolder: "Ouverture du dossier de destination...",
+      statusCompleted: "Copie terminée avec succès.",
     },
   },
 };
@@ -795,14 +938,15 @@ function resolveTranslation(locale: AppLocale, key: string): string {
     return cursor;
   }
 
-  const fallbackCursor = segments.reduce<
-    TranslationLeaf | TranslationTree | undefined
-  >((current, segment) => {
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    return current[segment];
-  }, RESOURCES["en-CA"]);
+  const fallbackCursor = segments.reduce<TranslationLeaf | TranslationTree | undefined>(
+    (current, segment) => {
+      if (!current || typeof current !== "object") {
+        return undefined;
+      }
+      return current[segment];
+    },
+    RESOURCES["en-CA"],
+  );
 
   if (typeof fallbackCursor === "string") {
     return fallbackCursor;
@@ -846,10 +990,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     [locale],
   );
 
-  const value = useMemo<I18nContextValue>(
-    () => ({ locale, setLocale, t }),
-    [locale, setLocale, t],
-  );
+  const value = useMemo<I18nContextValue>(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
