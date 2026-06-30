@@ -2204,6 +2204,25 @@ impl Database {
         Ok(())
     }
 
+    /// Updates only the `full_resolution_local` download flag for an asset,
+    /// leaving the thumbnail/preview cache flags untouched. Used when a locally
+    /// saved original is detected as removed from disk so the badge no longer
+    /// reports the asset as downloaded.
+    pub fn set_asset_full_resolution_local(
+        &self,
+        asset_id: &str,
+        full_resolution_local: bool,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "UPDATE assets SET full_resolution_local = ?2, updated_at = strftime('%s', 'now') WHERE id = ?1",
+            params![asset_id, if full_resolution_local { 1 } else { 0 }],
+        )
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
+
     pub fn get_assets(
         &self,
         page: u32,

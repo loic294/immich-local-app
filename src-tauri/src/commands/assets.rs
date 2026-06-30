@@ -732,13 +732,31 @@ pub async fn get_person_thumbnail(
 #[tauri::command]
 pub async fn get_asset_playback(
     asset_id: String,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     let (_account_id, client) = state.account_and_client_for_asset(&asset_id);
     client
-        .get_asset_playback_file_path(&asset_id)
+        .get_asset_playback_file_path(&asset_id, Some(app))
         .await
         .map_err(|err| format!("video playback load failed: {err}"))
+}
+
+/// Returns `true` only when the video's playback file has been fully downloaded
+/// to the local cache (a partial / in-progress download reports `false`). Used
+/// by the UI to avoid a race where an already-cached video emits its completion
+/// event before the frontend listener is attached.
+#[tauri::command]
+pub async fn is_video_download_complete(
+    asset_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    let (_account_id, client) = state.account_and_client_for_asset(&asset_id);
+    let cached = client
+        .get_cached_video_path(&asset_id)
+        .await
+        .map_err(|err| format!("video cache check failed: {err}"))?;
+    Ok(cached.is_some())
 }
 
 #[tauri::command]

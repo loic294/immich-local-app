@@ -18,6 +18,7 @@ use commands::assets::{
     get_cached_asset_details, get_cached_asset_jump_target, get_cached_assets,
     get_cached_calendar_full_grid_layout, get_cached_full_grid_layout, get_cached_timeline_layout,
     get_calendar_assets_paged, get_cameras_in_scope, get_pending_mutation_count,
+    is_video_download_complete,
     get_people_in_scope, get_person_thumbnail, get_timeline_months, refresh_asset,
     update_asset_description, update_asset_favorite, update_asset_rating, update_asset_visibility,
 };
@@ -270,6 +271,7 @@ pub fn main() {
             get_people_in_scope,
             get_person_thumbnail,
             get_asset_playback,
+            is_video_download_complete,
             get_cached_asset_details,
             refresh_asset,
             get_timeline_months,

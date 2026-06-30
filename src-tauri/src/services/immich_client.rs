@@ -9,10 +9,28 @@ use chrono::Local;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 const IMMICH_API_KEY_HEADER: &str = "x-api-key";
+
+/// Byte-level progress for a single video playback download, emitted as the
+/// `video_download_progress` event so the UI can keep showing a "downloading"
+/// badge (with a real progress bar) until the ENTIRE file has been written to
+/// the playback cache — not just until playback can start.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoDownloadProgress {
+    pub asset_id: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    /// 0-100 percentage, or `None` when the total size is unknown.
+    pub percent: Option<u32>,
+    /// `true` once the full file is cached (either freshly downloaded or already
+    /// present), so the UI can transition out of the downloading state.
+    pub complete: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2125,7 +2143,11 @@ impl ImmichClient {
         Ok(output.to_string_lossy().to_string())
     }
 
-    pub async fn get_asset_playback_file_path(&self, asset_id: &str) -> Result<String, String> {
+    pub async fn get_asset_playback_file_path(
+        &self,
+        asset_id: &str,
+        app: Option<tauri::AppHandle>,
+    ) -> Result<String, String> {
         let session = self
             .session
             .lock()
@@ -2136,81 +2158,191 @@ impl ImmichClient {
         let cache_dir = video_cache_dir()?;
         fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
 
-        if let Some(cached_path) = read_cached_video_path(&cache_dir, asset_id)? {
+        // A fully-downloaded video is marked with a sibling `.done` file. If that
+        // marker exists, the cached file is complete: report completion so the UI
+        // clears the downloading badge immediately.
+        if let Some(cached_path) = read_complete_video_path(&cache_dir, asset_id)? {
+            if let Some(app) = &app {
+                let _ = app.emit(
+                    "video_download_progress",
+                    VideoDownloadProgress {
+                        asset_id: asset_id.to_string(),
+                        downloaded_bytes: 0,
+                        total_bytes: None,
+                        percent: Some(100),
+                        complete: true,
+                    },
+                );
+            }
             return Ok(cached_path);
         }
 
         let output_path = cache_dir.join(format!("{}.mp4", asset_id));
-        if !output_path.exists() {
-            let _ = fs::File::create(&output_path).map_err(|err| err.to_string())?;
-        }
+        let done_marker = cache_dir.join(format!("{}.mp4.done", asset_id));
 
-        let should_spawn = {
+        // Acquire the per-asset download guard. If another task is already
+        // downloading this video, wait for it to finish and reuse its fully
+        // cached file instead of starting a second download.
+        let owns_download = {
             let mut downloads = self.playback_downloads.lock().await;
             downloads.insert(asset_id.to_string())
         };
 
-        if should_spawn {
-            let client = self.client.clone();
-            let access_token = session.access_token.clone();
-            let server_url = session.server_url.clone();
-            let asset_id_string = asset_id.to_string();
-            let path_for_download = output_path.clone();
-            let downloads = Arc::clone(&self.playback_downloads);
-
-            tokio::spawn(async move {
-                let mut headers = HeaderMap::new();
-                if let Ok(header_value) = HeaderValue::from_str(&access_token) {
-                    headers.insert(IMMICH_API_KEY_HEADER, header_value);
-                } else {
-                    let mut guard = downloads.lock().await;
-                    guard.remove(&asset_id_string);
-                    return;
+        if !owns_download {
+            // Poll for the in-flight download to complete (capped well above the
+            // request timeout). We never hand back a partial file.
+            for _ in 0..3000 {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                if let Some(cached_path) = read_complete_video_path(&cache_dir, asset_id)? {
+                    if let Some(app) = &app {
+                        let _ = app.emit(
+                            "video_download_progress",
+                            VideoDownloadProgress {
+                                asset_id: asset_id.to_string(),
+                                downloaded_bytes: 0,
+                                total_bytes: None,
+                                percent: Some(100),
+                                complete: true,
+                            },
+                        );
+                    }
+                    return Ok(cached_path);
                 }
 
-                let url = format!(
-                    "{}/api/assets/{}/video/playback",
-                    server_url, asset_id_string
-                );
-
-                let response_result = client.get(url).headers(headers).send().await;
-                let mut response = match response_result {
-                    Ok(value) => value,
-                    Err(_) => {
-                        let mut guard = downloads.lock().await;
-                        guard.remove(&asset_id_string);
-                        return;
-                    }
+                let still_downloading = {
+                    let downloads = self.playback_downloads.lock().await;
+                    downloads.contains(asset_id)
                 };
-
-                if !response.status().is_success() {
-                    let mut guard = downloads.lock().await;
-                    guard.remove(&asset_id_string);
-                    return;
+                if !still_downloading {
+                    break;
                 }
+            }
 
-                let file_result = tokio::fs::File::create(&path_for_download).await;
-                let mut file = match file_result {
-                    Ok(value) => value,
-                    Err(_) => {
-                        let mut guard = downloads.lock().await;
-                        guard.remove(&asset_id_string);
-                        return;
-                    }
-                };
-
-                while let Ok(Some(chunk)) = response.chunk().await {
-                    if file.write_all(&chunk).await.is_err() {
-                        break;
-                    }
-                }
-
-                let _ = file.flush().await;
-
-                let mut guard = downloads.lock().await;
-                guard.remove(&asset_id_string);
-            });
+            // The other download finished without producing a complete file (it
+            // failed) or timed out; take ownership and download it ourselves.
+            let mut downloads = self.playback_downloads.lock().await;
+            downloads.insert(asset_id.to_string());
         }
+
+        // Download the ENTIRE file before returning. The webview media element
+        // reads a `file://` source once and will not re-poll a file that grows
+        // underneath it, so serving a partially-written file makes playback stall
+        // on the buffered frames. Awaiting the full download guarantees the path
+        // we return points at a complete, playable file.
+        let result = self
+            .download_playback_to_cache(
+                &session.access_token,
+                &session.server_url,
+                &cache_dir,
+                &output_path,
+                &done_marker,
+                asset_id,
+                &app,
+            )
+            .await;
+
+        {
+            let mut downloads = self.playback_downloads.lock().await;
+            downloads.remove(asset_id);
+        }
+
+        result
+    }
+
+    /// Streams a video's playback file fully to the cache, emitting
+    /// `video_download_progress` events as it goes and a final `complete` event
+    /// once the whole file is written. Downloads to a `.part` temp file first and
+    /// atomically renames it into place so a reader never observes a half-written
+    /// file, then writes a `.done` marker recognised by `read_complete_video_path`.
+    async fn download_playback_to_cache(
+        &self,
+        access_token: &str,
+        server_url: &str,
+        cache_dir: &Path,
+        output_path: &Path,
+        done_marker: &Path,
+        asset_id: &str,
+        app: &Option<tauri::AppHandle>,
+    ) -> Result<String, String> {
+        let mut headers = HeaderMap::new();
+        let header_value = HeaderValue::from_str(access_token)
+            .map_err(|err| format!("invalid access token header: {err}"))?;
+        headers.insert(IMMICH_API_KEY_HEADER, header_value);
+
+        let url = format!("{}/api/assets/{}/video/playback", server_url, asset_id);
+
+        // Override the short default client timeout — large videos can take well
+        // over 30s to download in full.
+        let mut response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .timeout(std::time::Duration::from_secs(600))
+            .send()
+            .await
+            .map_err(|err| format!("playback request failed: {err}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "playback request returned status {}",
+                response.status()
+            ));
+        }
+
+        let total_bytes = response.content_length();
+
+        // Clear any stale markers/partials before a fresh download.
+        let _ = fs::remove_file(done_marker);
+        let temp_path = cache_dir.join(format!("{}.mp4.part", asset_id));
+        let mut file = tokio::fs::File::create(&temp_path)
+            .await
+            .map_err(|err| format!("failed to create playback cache file: {err}"))?;
+
+        emit_video_progress(app, asset_id, 0, total_bytes, false);
+
+        let mut downloaded: u64 = 0;
+        let mut last_emitted_percent: i32 = -1;
+
+        loop {
+            let chunk = response
+                .chunk()
+                .await
+                .map_err(|err| format!("playback download failed: {err}"))?;
+            let chunk = match chunk {
+                Some(chunk) => chunk,
+                None => break,
+            };
+
+            file.write_all(&chunk)
+                .await
+                .map_err(|err| format!("failed writing playback cache: {err}"))?;
+            downloaded += chunk.len() as u64;
+
+            // Throttle progress events to whole-percent advances.
+            if let Some(total) = total_bytes {
+                if total > 0 {
+                    let percent = ((downloaded.min(total) * 100) / total) as i32;
+                    if percent != last_emitted_percent {
+                        last_emitted_percent = percent;
+                        emit_video_progress(app, asset_id, downloaded, total_bytes, false);
+                    }
+                }
+            } else {
+                emit_video_progress(app, asset_id, downloaded, None, false);
+            }
+        }
+
+        file.flush()
+            .await
+            .map_err(|err| format!("failed to flush playback cache: {err}"))?;
+        drop(file);
+
+        // Atomically promote the completed download and mark it done.
+        fs::rename(&temp_path, output_path)
+            .map_err(|err| format!("failed to finalize playback cache: {err}"))?;
+        let _ = fs::File::create(done_marker);
+
+        emit_video_progress(app, asset_id, downloaded, total_bytes, true);
 
         Ok(output_path.to_string_lossy().to_string())
     }
@@ -2352,7 +2484,7 @@ impl ImmichClient {
     pub async fn get_cached_video_path(&self, asset_id: &str) -> Result<Option<String>, String> {
         let cache_dir = video_cache_dir()?;
         fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
-        read_cached_video_path(&cache_dir, asset_id)
+        read_complete_video_path(&cache_dir, asset_id)
     }
 
     pub async fn update_asset_favorite(
@@ -3710,10 +3842,45 @@ fn read_cached_thumbnail_path(cache_dir: &Path, asset_id: &str) -> Option<PathBu
     None
 }
 
-fn read_cached_video_path(cache_dir: &Path, asset_id: &str) -> Result<Option<String>, String> {
+/// Emits a `video_download_progress` event describing the current state of a
+/// playback download. `complete` forces the reported percent to 100.
+fn emit_video_progress(
+    app: &Option<tauri::AppHandle>,
+    asset_id: &str,
+    downloaded: u64,
+    total: Option<u64>,
+    complete: bool,
+) {
+    if let Some(app) = app {
+        let percent = total.and_then(|total| {
+            if total == 0 {
+                None
+            } else {
+                Some(((downloaded.min(total) * 100) / total) as u32)
+            }
+        });
+        let _ = app.emit(
+            "video_download_progress",
+            VideoDownloadProgress {
+                asset_id: asset_id.to_string(),
+                downloaded_bytes: downloaded,
+                total_bytes: total,
+                percent: if complete { Some(100) } else { percent },
+                complete,
+            },
+        );
+    }
+}
+
+/// Returns the cached video path only when the file is fully downloaded, which
+/// is signalled by a sibling `{file}.done` marker written after the last chunk.
+/// A partially-written cache file (download still in progress, or interrupted by
+/// a crash) is intentionally treated as "not cached" so it gets re-downloaded.
+fn read_complete_video_path(cache_dir: &Path, asset_id: &str) -> Result<Option<String>, String> {
     for ext in ["mp4", "webm", "mov", "m4v"] {
         let candidate = cache_dir.join(format!("{}.{}", asset_id, ext));
-        if candidate.exists() {
+        let marker = cache_dir.join(format!("{}.{}.done", asset_id, ext));
+        if candidate.exists() && marker.exists() {
             return Ok(Some(candidate.to_string_lossy().to_string()));
         }
     }

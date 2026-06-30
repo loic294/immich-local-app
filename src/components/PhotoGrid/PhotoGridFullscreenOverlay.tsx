@@ -303,9 +303,22 @@ export function PhotoGridFullscreenOverlay({
                   }}
                 />
               ) : (
-                <div className="flex items-center gap-2 text-sm text-white/80">
-                  <span className="loading loading-spinner loading-sm" />
-                  {t("photoGrid.loadingVideo")}
+                <div className="flex flex-col items-center gap-2 text-sm text-white/80">
+                  <div className="flex items-center gap-2">
+                    <span className="loading loading-spinner loading-sm" />
+                    {t("photoGrid.loadingVideo")}
+                  </div>
+                  <p className="max-w-xs text-center text-xs text-white/60">
+                    {t("photoGrid.loadingVideoHint")}
+                  </p>
+                  {assetState.videoDownloadProgress !== null ? (
+                    <div className="h-1.5 w-48 overflow-hidden rounded-full bg-white/20">
+                      <div
+                        className="h-full bg-primary transition-all duration-300"
+                        style={{ width: `${assetState.videoDownloadProgress}%` }}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               )
             ) : isPlayingLivePhoto && activeAsset.livePhotoVideoId ? (

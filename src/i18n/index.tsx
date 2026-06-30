@@ -342,6 +342,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       previousImageAria: "Previous image",
       nextImageAria: "Next image",
       loadingVideo: "Loading video...",
+      loadingVideoHint:
+        "This video needs to download the first time you watch it. Once downloaded, it will be available locally the next time you view it.",
       loadingPreview: "Loading preview...",
       openFullscreenAria: "Open {name} in full screen",
       selectPhotoAria: "Select photo",
@@ -397,6 +399,9 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
         offlineCannotDownload: "Connect to server to download high-resolution image",
         fullResLoaded: "Full-resolution image loaded",
         fullResLoadedSubtitle: "Open in File Explorer",
+        videoReady: "Video loaded",
+        videoReadySubtitle: "Download to local folder",
+        videoSaved: "Video saved locally",
       },
     },
     selectionActions: {
@@ -777,6 +782,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       previousImageAria: "Image précédente",
       nextImageAria: "Image suivante",
       loadingVideo: "Chargement de la video...",
+      loadingVideoHint:
+        "Cette vidéo doit être téléchargée la première fois que vous la regardez. Une fois téléchargée, elle sera disponible localement la prochaine fois que vous la visionnerez.",
       loadingPreview: "Chargement de l'aperçu...",
       openFullscreenAria: "Ouvrir {name} en plein écran",
       selectPhotoAria: "Sélectionner la photo",
@@ -833,6 +840,9 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
           "Connectez-vous au serveur pour télécharger l'image haute résolution",
         fullResLoaded: "Image haute résolution téléchargée",
         fullResLoadedSubtitle: "Ouvrir dans l'Explorateur de fichiers",
+        videoReady: "Vidéo chargée",
+        videoReadySubtitle: "Télécharger dans le dossier local",
+        videoSaved: "Vidéo enregistrée localement",
       },
     },
     selectionActions: {

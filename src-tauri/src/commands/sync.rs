@@ -624,6 +624,36 @@ pub async fn scan_saved_local_files(state: tauri::State<'_, AppState>) -> Result
                 "deleted",
                 &details_json,
             )?;
+
+            // Reconcile the asset's download status: the saved original is gone
+            // from disk, so clear `full_resolution_local` unless another tracked
+            // copy of the same asset still exists locally. This keeps the status
+            // badge from reporting a removed file as still downloaded.
+            let still_has_local_copy = state
+                .db
+                .list_local_saved_asset_paths_for_asset(&item.asset_id)
+                .unwrap_or_default()
+                .into_iter()
+                .any(|other| Path::new(&other).is_file());
+            if !still_has_local_copy {
+                if let Err(err) = state
+                    .db
+                    .set_asset_full_resolution_local(&item.asset_id, false)
+                {
+                    log::warn!(
+                        "[sync.scan_saved_local_files] failed to clear download flag asset_id={} err={}",
+                        item.asset_id,
+                        err
+                    );
+                } else {
+                    log::info!(
+                        "[sync.scan_saved_local_files] cleared download flag for removed local file asset_id={} path={}",
+                        item.asset_id,
+                        item.local_path
+                    );
+                }
+            }
+
             created_changes += 1;
             continue;
         }

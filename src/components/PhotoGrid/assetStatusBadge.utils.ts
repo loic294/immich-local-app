@@ -41,7 +41,10 @@ export function getStatusBadgeContent(
   if (isFullResCached) {
     return {
       icon: Check,
-      title: t("photoGrid.assetStatus.fullResLoaded"),
+      title:
+        mediaType === "video"
+          ? t("photoGrid.assetStatus.videoSaved")
+          : t("photoGrid.assetStatus.fullResLoaded"),
       subtitle: t("photoGrid.assetStatus.fullResLoadedSubtitle"),
       isClickable: true,
       iconColor: "text-success",
@@ -113,6 +116,20 @@ export function getStatusBadgeContent(
       icon: CloudDownload,
       title: t("photoGrid.assetStatus.previewSaved"),
       subtitle: t("photoGrid.assetStatus.previewSavedSubtitle"),
+      isClickable: true,
+      iconColor: "text-success",
+      circleColor: "bg-success",
+    };
+  }
+
+  // 7. Online video that isn't saved locally yet → offer to download the original.
+  //    Videos don't have a preview-cache concept like images, so without this
+  //    branch a loaded video would show no badge at all.
+  if (mediaType === "video" && isOnline && !isFullResCached) {
+    return {
+      icon: CloudDownload,
+      title: t("photoGrid.assetStatus.videoReady"),
+      subtitle: t("photoGrid.assetStatus.videoReadySubtitle"),
       isClickable: true,
       iconColor: "text-success",
       circleColor: "bg-success",

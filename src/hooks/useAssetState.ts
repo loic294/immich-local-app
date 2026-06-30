@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import type { AssetSummary } from "../types";
-import { getCachedAssetDetails } from "../api/tauri";
+import { getCachedAssetDetails, isVideoDownloadComplete } from "../api/tauri";
 import { isVideoAsset } from "../components/PhotoGrid/photoGridUtils";
 import { useConnection } from "./useConnection";
 
@@ -11,6 +12,7 @@ export type AssetStateStatus = {
   isPreviewCached: boolean;
   isFullResCached: boolean;
   videoDownloadProgress: number | null;
+  videoDownloadComplete: boolean;
   fullResDownloadProgress: number | null;
   mediaType: "image" | "video";
 };
@@ -50,6 +52,7 @@ export function useAssetState({
     isPreviewCached: false,
     isFullResCached: false,
     videoDownloadProgress: null,
+    videoDownloadComplete: false,
     fullResDownloadProgress: null,
     mediaType: "image",
   });
@@ -81,10 +84,21 @@ export function useAssetState({
 
   // Determine preview loading state
   useEffect(() => {
-    if (!activeAsset || isVideoAsset(activeAsset)) {
+    if (!activeAsset) {
       setState((prev) => ({
         ...prev,
         isPreviewLoading: false,
+      }));
+      return;
+    }
+
+    if (isVideoAsset(activeAsset)) {
+      // For videos the "downloading" state must persist until the ENTIRE
+      // playback file has been written to the cache, not just until playback
+      // can start. `videoDownloadComplete` is driven by real progress events.
+      setState((prev) => ({
+        ...prev,
+        isPreviewLoading: !prev.videoDownloadComplete,
       }));
       return;
     }
@@ -95,7 +109,7 @@ export function useAssetState({
       ...prev,
       isPreviewLoading: isLoading,
     }));
-  }, [activeAsset, activeStillSrc]);
+  }, [activeAsset, activeStillSrc, state.videoDownloadComplete]);
 
   // Determine full-resolution loading state
   useEffect(() => {
@@ -164,32 +178,94 @@ export function useAssetState({
     };
   }, [activeAsset, activeStillSrc, activeFullsizeStillSrc]);
 
-  // Track video download progress (placeholder for now)
-  // This will be populated by actual video download tracking in the future
+  // Track real video playback download progress. The backend streams the video
+  // file to its cache and emits `video_download_progress` events; we keep the
+  // "downloading" badge (with a progress bar) until the file is fully cached.
   useEffect(() => {
     if (!activeAsset || !isVideoAsset(activeAsset)) {
       setState((prev) => ({
         ...prev,
         videoDownloadProgress: null,
+        videoDownloadComplete: false,
       }));
       return;
     }
 
-    // If actively loading the video
-    if (isLoadingActiveMedia && activeSrc === null) {
-      // Will be set to actual progress value when integrated with video download tracking
-      setState((prev) => ({
-        ...prev,
-        videoDownloadProgress: null, // Will be set to 0-100 when integrated
-      }));
-    } else if (activeSrc !== null) {
-      // Video has loaded
-      setState((prev) => ({
-        ...prev,
-        videoDownloadProgress: null,
-      }));
-    }
-  }, [activeAsset, isLoadingActiveMedia, activeSrc]);
+    const assetId = activeAsset.id;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    let clearTimer: number | undefined;
+
+    // Reset progress for the newly active video.
+    setState((prev) => ({
+      ...prev,
+      videoDownloadProgress: null,
+      videoDownloadComplete: false,
+    }));
+
+    void listen<{
+      assetId: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+      percent: number | null;
+      complete: boolean;
+    }>("video_download_progress", (event) => {
+      if (cancelled || event.payload.assetId !== assetId) {
+        return;
+      }
+
+      if (event.payload.complete) {
+        setState((prev) => ({
+          ...prev,
+          videoDownloadProgress: 100,
+          videoDownloadComplete: true,
+        }));
+        clearTimer = window.setTimeout(() => {
+          setState((prev) => ({
+            ...prev,
+            videoDownloadProgress: null,
+          }));
+        }, 500);
+      } else {
+        setState((prev) => ({
+          ...prev,
+          videoDownloadProgress: event.payload.percent,
+        }));
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+
+    // Guard against the race where an already-cached video emits its completion
+    // event before this listener attaches: ask the backend directly.
+    void isVideoDownloadComplete(assetId)
+      .then((complete) => {
+        if (!cancelled && complete) {
+          setState((prev) => ({
+            ...prev,
+            videoDownloadProgress: null,
+            videoDownloadComplete: true,
+          }));
+        }
+      })
+      .catch((error) => {
+        console.log("[useAssetState] video completeness check failed:", error);
+      });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        unlisten();
+      }
+      if (clearTimer) {
+        window.clearTimeout(clearTimer);
+      }
+    };
+  }, [activeAsset]);
 
   // Track full-resolution image download progress during zoom
   useEffect(() => {

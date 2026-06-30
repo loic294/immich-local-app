@@ -456,6 +456,12 @@ export async function getAssetPlayback(assetId: string): Promise<string> {
   });
 }
 
+export async function isVideoDownloadComplete(assetId: string): Promise<boolean> {
+  return invoke<boolean>("is_video_download_complete", {
+    assetId,
+  });
+}
+
 export async function refreshAsset(assetId: string): Promise<AssetSummary> {
   return invoke<AssetSummary>("refresh_asset", {
     assetId,
