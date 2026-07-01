@@ -261,6 +261,9 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       archiveFailed: "Failed to delete photos",
       archiving: "Deleting...",
       archive: "Delete",
+      undelete: "Un-delete",
+      undeleting: "Restoring...",
+      undeleteFailed: "Failed to restore photos",
     },
     photos: {
       genericError: "An error occurred",
@@ -722,6 +725,9 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       archiveFailed: "Impossible de supprimer les photos",
       archiving: "Suppression...",
       archive: "Supprimer",
+      undelete: "Restaurer",
+      undeleting: "Restauration...",
+      undeleteFailed: "Échec de la restauration des photos",
     },
     photos: {
       genericError: "Une erreur est survenue",

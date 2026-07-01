@@ -231,12 +231,26 @@ export function PhotosPage({
             }
           }}
           onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
-          onArchiveSelected={async () => {
-            await Promise.all(
-              selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
-            );
-            setArchiveRefreshNonce((current) => current + 1);
-          }}
+          onArchiveSelected={
+            assetFilter === "archived"
+              ? undefined
+              : async () => {
+                  await Promise.all(
+                    selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
+                  );
+                  setArchiveRefreshNonce((current) => current + 1);
+                }
+          }
+          onUnarchiveSelected={
+            assetFilter === "archived"
+              ? async () => {
+                  await Promise.all(
+                    selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "timeline")),
+                  );
+                  setArchiveRefreshNonce((current) => current + 1);
+                }
+              : undefined
+          }
           onClearSelection={() => {
             setSelectionCommand({ type: "clear", nonce: Date.now() });
           }}

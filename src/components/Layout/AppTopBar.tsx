@@ -1,4 +1,4 @@
-import { X, Trash2 } from "lucide-react";
+import { X, Trash2, ArchiveRestore } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Session } from "../../hooks/useSession";
 import type { AlbumSummary, SortPreference } from "../../types";
@@ -17,12 +17,14 @@ interface AppTopBarProps {
   onClearSelection?: () => void;
   onSelectAll?: () => void;
   fetchAlbumsForSelection?: () => Promise<AlbumSummary[]>;
-  onAddSelectedToAlbum?: (input: {
-    albumId?: string;
-    newAlbumName?: string;
-  }) => Promise<void>;
+  onAddSelectedToAlbum?: (input: { albumId?: string; newAlbumName?: string }) => Promise<void>;
   onCreateShareLinkForSelected?: () => Promise<string>;
   onArchiveSelected?: () => Promise<void>;
+  /**
+   * When provided, the selection toolbar shows a single "Un-delete" action
+   * (used on the Deleted view) instead of Add to album / Share / Delete.
+   */
+  onUnarchiveSelected?: () => Promise<void>;
   /** Whether to show the Filter button (only on photo grid views). */
   showFilterButton?: boolean;
   /** Whether any filter is currently active. */
@@ -50,6 +52,7 @@ export function AppTopBar({
   onAddSelectedToAlbum,
   onCreateShareLinkForSelected,
   onArchiveSelected,
+  onUnarchiveSelected,
   showFilterButton = false,
   filterActive = false,
   filterOpen = false,
@@ -61,6 +64,7 @@ export function AppTopBar({
   const { t } = useI18n();
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
+  const [isUnarchiving, setIsUnarchiving] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
 
   const canRunSelectionAction = selectedAssetIds.length > 0;
@@ -84,11 +88,28 @@ export function AppTopBar({
       setShowArchiveModal(false);
       onClearSelection?.();
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : t("topBar.archiveFailed");
+      const message = error instanceof Error ? error.message : t("topBar.archiveFailed");
       setSelectionError(message);
     } finally {
       setIsArchiving(false);
+    }
+  };
+
+  const submitUnarchive = async () => {
+    if (!onUnarchiveSelected || !canRunSelectionAction) {
+      return;
+    }
+
+    setSelectionError(null);
+    setIsUnarchiving(true);
+    try {
+      await onUnarchiveSelected();
+      onClearSelection?.();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("topBar.undeleteFailed");
+      setSelectionError(message);
+    } finally {
+      setIsUnarchiving(false);
     }
   };
 
@@ -105,11 +126,7 @@ export function AppTopBar({
               <X size={16} />
               {t("topBar.cancel")}
             </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-neutral"
-              onClick={onSelectAll}
-            >
+            <button type="button" className="btn btn-sm btn-neutral" onClick={onSelectAll}>
               {t("topBar.selectAll")}
             </button>
             <p className="text-sm font-semibold text-base-content">
@@ -118,35 +135,55 @@ export function AppTopBar({
           </div>
 
           <div className="navbar-end gap-2">
-            <SelectionActions
-              selectedAssetIds={selectedAssetIds}
-              selectedCount={selectedCount}
-              fetchAlbumsForSelection={fetchAlbumsForSelection}
-              onAddSelectedToAlbum={onAddSelectedToAlbum}
-              onCreateShareLinkForSelected={onCreateShareLinkForSelected}
-              onSelectionActionCompleted={onClearSelection}
-            />
-            <div className="h-5 w-px bg-base-300" />
-            <button
-              type="button"
-              className="btn btn-sm btn-error"
-              onClick={() => {
-                setSelectionError(null);
-                setShowArchiveModal(true);
-              }}
-            >
-              <Trash2 size={16} />
-              {t("topBar.delete")}
-            </button>
+            {onUnarchiveSelected ? (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => {
+                  void submitUnarchive();
+                }}
+                disabled={isUnarchiving || !canRunSelectionAction}
+              >
+                <ArchiveRestore size={16} />
+                {isUnarchiving ? t("topBar.undeleting") : t("topBar.undelete")}
+              </button>
+            ) : (
+              <>
+                <SelectionActions
+                  selectedAssetIds={selectedAssetIds}
+                  selectedCount={selectedCount}
+                  fetchAlbumsForSelection={fetchAlbumsForSelection}
+                  onAddSelectedToAlbum={onAddSelectedToAlbum}
+                  onCreateShareLinkForSelected={onCreateShareLinkForSelected}
+                  onSelectionActionCompleted={onClearSelection}
+                />
+                <div className="h-5 w-px bg-base-300" />
+                <button
+                  type="button"
+                  className="btn btn-sm btn-error"
+                  onClick={() => {
+                    setSelectionError(null);
+                    setShowArchiveModal(true);
+                  }}
+                >
+                  <Trash2 size={16} />
+                  {t("topBar.delete")}
+                </button>
+              </>
+            )}
           </div>
         </header>
+
+        {onUnarchiveSelected && selectionError ? (
+          <div role="alert" className="alert alert-error alert-soft mx-3 mt-2 py-2 text-sm sm:mx-4">
+            <span>{selectionError}</span>
+          </div>
+        ) : null}
 
         {showArchiveModal ? (
           <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/45 p-4">
             <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
-              <h3 className="m-0 text-lg font-semibold">
-                {t("topBar.archiveConfirmTitle")}
-              </h3>
+              <h3 className="m-0 text-lg font-semibold">{t("topBar.archiveConfirmTitle")}</h3>
               <p className="mb-4 mt-1 text-sm text-base-content/70">
                 {t("topBar.archiveConfirmBody", {
                   count: selectedCount,
