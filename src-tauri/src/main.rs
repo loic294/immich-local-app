@@ -37,9 +37,10 @@ use commands::shell::{
     open_folder_in_file_explorer, open_url,
 };
 use commands::sync::{
-    apply_saved_local_file_changes, cancel_asset_sync, check_for_new_assets, force_full_asset_sync,
-    get_saved_local_file_changes, get_sync_status, refresh_album_assets, refresh_album_list,
-    scan_saved_local_files, start_asset_sync,
+    apply_saved_local_file_changes, cancel_asset_sync, check_for_new_assets,
+    dismiss_saved_local_file_changes, force_full_asset_sync, get_saved_local_file_changes,
+    get_sync_status, refresh_album_assets, refresh_album_list, scan_saved_local_files,
+    start_asset_sync,
 };
 use services::db::Database;
 use services::account_manager::AccountManager;
@@ -323,7 +324,8 @@ pub fn main() {
             refresh_album_list,
             scan_saved_local_files,
             get_saved_local_file_changes,
-            apply_saved_local_file_changes
+            apply_saved_local_file_changes,
+            dismiss_saved_local_file_changes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

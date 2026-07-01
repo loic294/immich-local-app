@@ -973,6 +973,91 @@ pub async fn apply_saved_local_file_changes(
     })
 }
 
+/// Dismiss (skip) tracked local file changes WITHOUT applying them to the
+/// server or local cache. This updates the tracking information in the database
+/// so the same change is not re-detected on the next scan (which is what caused
+/// the dialog to reappear on every launch):
+///   - "modified": refresh the tracked snapshot to the current file state so the
+///     drift no longer registers as a change.
+///   - "deleted": stop tracking that local path so its absence is no longer
+///     reported as a pending change.
+#[tauri::command]
+pub async fn dismiss_saved_local_file_changes(
+    input: ApplySavedLocalFileChangesInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<u32, String> {
+    let mut dismissed_count = 0u32;
+
+    for change_id in input.change_ids {
+        let Some(change) = state.db.get_local_saved_asset_change_by_id(change_id)? else {
+            continue;
+        };
+
+        if change.resolved_at.is_some() {
+            continue;
+        }
+
+        match change.change_kind.as_str() {
+            "modified" => {
+                // Refresh the tracked snapshot to the current on-disk state so the
+                // next scan no longer sees this as a change.
+                let path = Path::new(&change.local_path);
+                let (mtime_ms, size_bytes) = get_file_snapshot(path);
+                if let Err(err) = state.db.update_local_saved_asset_snapshot(
+                    &change.asset_id,
+                    &change.local_path,
+                    mtime_ms,
+                    size_bytes,
+                ) {
+                    log::warn!(
+                        "[sync.dismiss_saved_local_file_changes] failed to refresh snapshot asset_id={} path={} err={}",
+                        change.asset_id,
+                        change.local_path,
+                        err
+                    );
+                }
+            }
+            "deleted" => {
+                // Stop tracking the now-missing local copy so it is not reported
+                // again on the next scan.
+                if let Err(err) = state
+                    .db
+                    .delete_local_saved_asset_by_path(&change.asset_id, &change.local_path)
+                {
+                    log::warn!(
+                        "[sync.dismiss_saved_local_file_changes] failed to untrack path asset_id={} path={} err={}",
+                        change.asset_id,
+                        change.local_path,
+                        err
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        if let Err(err) = state
+            .db
+            .resolve_local_saved_asset_changes_by_ids(&[change.id])
+        {
+            log::warn!(
+                "[sync.dismiss_saved_local_file_changes] failed to resolve change id={} err={}",
+                change.id,
+                err
+            );
+            continue;
+        }
+
+        dismissed_count += 1;
+    }
+
+    log::info!(
+        "[sync.dismiss_saved_local_file_changes] dismissed {} change(s)",
+        dismissed_count
+    );
+
+    Ok(dismissed_count)
+}
+
 #[tauri::command]
 pub async fn check_for_new_assets(
     state: tauri::State<'_, AppState>,

@@ -46,7 +46,7 @@ export function MemoryCard({
   return (
     <button
       type="button"
-      className={`relative aspect-[2.4/1] overflow-hidden rounded-lg border bg-base-300 text-left transition ${
+      className={`relative aspect-[2.4/1] w-64 shrink-0 overflow-hidden rounded-lg border bg-base-300 text-left transition ${
         isActive
           ? "border-primary ring-2 ring-primary/60"
           : "border-transparent hover:border-base-300"

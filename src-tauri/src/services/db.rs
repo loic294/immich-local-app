@@ -1651,6 +1651,20 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_local_saved_asset_by_path(
+        &self,
+        asset_id: &str,
+        local_path: &str,
+    ) -> Result<(), String> {
+        let conn = self.open()?;
+        conn.execute(
+            "DELETE FROM local_saved_assets WHERE asset_id = ?1 AND local_path = ?2",
+            params![asset_id, local_path],
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
     pub fn delete_local_saved_assets_for_album(&self, album_id: &str) -> Result<(), String> {
         let conn = self.open()?;
         conn.execute(

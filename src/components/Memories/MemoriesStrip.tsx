@@ -7,17 +7,13 @@ interface MemoriesStripProps {
   onOpenMemory: (memoryId: string) => void;
 }
 
-export function MemoriesStrip({
-  memories,
-  activeMemoryId,
-  onOpenMemory,
-}: MemoriesStripProps) {
+export function MemoriesStrip({ memories, activeMemoryId, onOpenMemory }: MemoriesStripProps) {
   if (memories.length === 0) {
     return null;
   }
 
   return (
-    <section className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+    <section className="mb-3 flex gap-2 overflow-x-auto">
       {memories.map((memory) => (
         <MemoryCard
           key={memory.id}

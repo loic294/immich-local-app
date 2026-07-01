@@ -106,9 +106,7 @@ export function PhotosPage({
   );
 
   const activeMemoryId =
-    memoryViewer !== null
-      ? (memoryItems[memoryViewer.memoryIndex]?.id ?? null)
-      : null;
+    memoryViewer !== null ? (memoryItems[memoryViewer.memoryIndex]?.id ?? null) : null;
 
   // Debounced search
   useEffect(() => {
@@ -133,15 +131,9 @@ export function PhotosPage({
       }
 
       const container = contentRef.current;
-      const memoryStrip = container.querySelector(
-        '[data-test="memories-strip"]',
-      ) as HTMLElement;
-      const searchBar = container.querySelector(
-        '[data-test="search-bar"]',
-      ) as HTMLElement;
-      const errorAlert = container.querySelector(
-        '[data-test="error-alert"]',
-      ) as HTMLElement;
+      const memoryStrip = container.querySelector('[data-test="memories-strip"]') as HTMLElement;
+      const searchBar = container.querySelector('[data-test="search-bar"]') as HTMLElement;
+      const errorAlert = container.querySelector('[data-test="error-alert"]') as HTMLElement;
 
       const padding = 16; // padding from p-2 sm:p-3 lg:p-4 (bottom only)
       let usedHeight = padding;
@@ -238,14 +230,10 @@ export function PhotosPage({
               await addAssetsToAlbum(albumId, selectedAssetIds);
             }
           }}
-          onCreateShareLinkForSelected={async () =>
-            createShareLinkForAssets(selectedAssetIds)
-          }
+          onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
           onArchiveSelected={async () => {
             await Promise.all(
-              selectedAssetIds.map((assetId) =>
-                updateAssetVisibility(assetId, "archive"),
-              ),
+              selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
             );
             setArchiveRefreshNonce((current) => current + 1);
           }}
@@ -263,8 +251,7 @@ export function PhotosPage({
           sortPreference={sortPreference}
           onSortChange={(patch) => {
             if (patch.field !== undefined) setSortField(patch.field);
-            if (patch.direction !== undefined)
-              setSortDirection(patch.direction);
+            if (patch.direction !== undefined) setSortDirection(patch.direction);
           }}
         />
 
@@ -277,33 +264,29 @@ export function PhotosPage({
           onReset={filters.reset}
         />
 
-        <section
-          ref={contentRef}
-          className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4"
-        >
-          <div data-test="memories-strip" className="shrink-0">
-            <MemoriesStrip
-              memories={memoryItems}
-              activeMemoryId={activeMemoryId}
-              onOpenMemory={(memoryId: string) => {
-                const memoryIndex = memoryItems.findIndex(
-                  (memory: MemoryItem) => memory.id === memoryId,
-                );
-                if (memoryIndex < 0) {
-                  return;
-                }
+        <section ref={contentRef} className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4">
+          {activePage === "photos" && (
+            <div data-test="memories-strip" className="shrink-0">
+              <MemoriesStrip
+                memories={memoryItems}
+                activeMemoryId={activeMemoryId}
+                onOpenMemory={(memoryId: string) => {
+                  const memoryIndex = memoryItems.findIndex(
+                    (memory: MemoryItem) => memory.id === memoryId,
+                  );
+                  if (memoryIndex < 0) {
+                    return;
+                  }
 
-                setMemoryViewer({ memoryIndex, assetIndex: 0 });
-                setSearchInput("");
-              }}
-            />
-          </div>
+                  setMemoryViewer({ memoryIndex, assetIndex: 0 });
+                  setSearchInput("");
+                }}
+              />
+            </div>
+          )}
 
           {searchInput.trim() ? (
-            <div
-              data-test="search-bar"
-              className="shrink-0 flex flex-wrap gap-2"
-            >
+            <div data-test="search-bar" className="shrink-0 flex flex-wrap gap-2">
               {searchInput.trim() ? (
                 <button
                   type="button"
@@ -319,8 +302,7 @@ export function PhotosPage({
             </div>
           ) : null}
 
-          {(assetsWindow.error || memoriesQuery.isError) &&
-          assets.length === 0 ? (
+          {(assetsWindow.error || memoriesQuery.isError) && assets.length === 0 ? (
             <div
               role="alert"
               data-test="error-alert"
@@ -343,9 +325,7 @@ export function PhotosPage({
               isFetchingPrevious={assetsWindow.isFetchingPreviousPage}
               hasPreviousPage={assetsWindow.hasPreviousPage}
               availableDates={
-                sortPreference.field === "filename"
-                  ? undefined
-                  : (assetDaysQuery.data ?? [])
+                sortPreference.field === "filename" ? undefined : (assetDaysQuery.data ?? [])
               }
               hasNextPage={assetsWindow.hasNextPage}
               maxHeight={photoGridHeight}
@@ -379,18 +359,14 @@ export function PhotosPage({
                         dateKey,
                         found: Boolean(jumpTarget),
                         page: jumpTarget?.page ?? null,
-                        durationMs: Math.round(
-                          performance.now() - jumpTargetStartedAt,
-                        ),
+                        durationMs: Math.round(performance.now() - jumpTargetStartedAt),
                       });
 
                       if (!jumpTarget) {
                         console.log("[PhotosPage] jump aborted (no target)", {
                           jumpId,
                           dateKey,
-                          totalDurationMs: Math.round(
-                            performance.now() - jumpStartedAt,
-                          ),
+                          totalDurationMs: Math.round(performance.now() - jumpStartedAt),
                         });
                         return;
                       }
@@ -401,20 +377,14 @@ export function PhotosPage({
                         jumpId,
                         dateKey,
                         page: jumpTarget.page,
-                        replaceDurationMs: Math.round(
-                          performance.now() - replaceStartedAt,
-                        ),
-                        totalDurationMs: Math.round(
-                          performance.now() - jumpStartedAt,
-                        ),
+                        replaceDurationMs: Math.round(performance.now() - replaceStartedAt),
+                        totalDurationMs: Math.round(performance.now() - jumpStartedAt),
                       });
                     }
               }
               loadFullLayout={loadFullLayout}
               loadTimelineLayout={
-                sortPreference.field === "filename"
-                  ? undefined
-                  : loadTimelineLayout
+                sortPreference.field === "filename" ? undefined : loadTimelineLayout
               }
             />
           )}
@@ -427,9 +397,7 @@ export function PhotosPage({
           memoryIndex={memoryViewer.memoryIndex}
           assetIndex={memoryViewer.assetIndex}
           onClose={() => setMemoryViewer(null)}
-          onChange={(next: { memoryIndex: number; assetIndex: number }) =>
-            setMemoryViewer(next)
-          }
+          onChange={(next: { memoryIndex: number; assetIndex: number }) => setMemoryViewer(next)}
         />
       ) : null}
     </main>

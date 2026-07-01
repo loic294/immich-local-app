@@ -844,6 +844,17 @@ export async function applySavedLocalFileChanges(
   });
 }
 
+/**
+ * Dismiss (skip) tracked local file changes without applying them. Updates the
+ * tracked snapshot / stops tracking removed paths so the same changes are not
+ * re-detected on the next scan.
+ */
+export async function dismissSavedLocalFileChanges(changeIds: number[]): Promise<number> {
+  return invoke<number>("dismiss_saved_local_file_changes", {
+    input: { changeIds },
+  });
+}
+
 export async function calculateGridLayout(
   assets: GridLayoutAssetInput[],
   containerWidth: number,

@@ -7,6 +7,7 @@ import { useConnection } from "./hooks/useConnection";
 import { ConnectionProvider } from "./hooks/connectionContext";
 import {
   applySavedLocalFileChanges,
+  dismissSavedLocalFileChanges,
   getSavedLocalFileChanges,
   refreshAlbumList,
   scanSavedLocalFiles,
@@ -25,28 +26,25 @@ import { PhotosPage } from "./pages/PhotosPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { DeletedPage } from "./pages/DeletedPage";
+import { useI18n } from "./i18n";
 
 export function App() {
+  const { t } = useI18n();
   const [activePage, setActivePage] = useState<AppPage>("photos");
   const [showServerUrlScreen, setShowServerUrlScreen] = useState(false);
   const [applyProgressTotal, setApplyProgressTotal] = useState(0);
   const [applyProgressDone, setApplyProgressDone] = useState(0);
-  const [localFileApplyErrors, setLocalFileApplyErrors] = useState<string[]>(
-    [],
-  );
-  const [localFileChanges, setLocalFileChanges] = useState<
-    SavedLocalFileChange[]
-  >([]);
-  const [showLocalFileChangesModal, setShowLocalFileChangesModal] =
-    useState(false);
-  const [isApplyingLocalFileChanges, setIsApplyingLocalFileChanges] =
-    useState(false);
+  const [localFileApplyErrors, setLocalFileApplyErrors] = useState<string[]>([]);
+  const [localFileChanges, setLocalFileChanges] = useState<SavedLocalFileChange[]>([]);
+  const [showLocalFileChangesModal, setShowLocalFileChangesModal] = useState(false);
+  const [isApplyingLocalFileChanges, setIsApplyingLocalFileChanges] = useState(false);
   const hasTriggeredResume = useRef(false);
   const hasAutoStartedSync = useRef(false);
   const hasQuickCheckedOnBoot = useRef(false);
   const hasSyncedAlbumListOnBoot = useRef(false);
   const hasScannedLocalFilesOnBoot = useRef(false);
   const lastLocalFileScanAtRef = useRef(0);
+  const localFileChangesDismissedRef = useRef(false);
   const {
     session,
     error,
@@ -105,7 +103,9 @@ export function App() {
       await scanSavedLocalFiles();
       const unresolved = await getSavedLocalFileChanges();
       setLocalFileChanges(unresolved);
-      setShowLocalFileChangesModal(unresolved.length > 0);
+      if (!localFileChangesDismissedRef.current) {
+        setShowLocalFileChangesModal(unresolved.length > 0);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!message.startsWith("offline:")) {
@@ -180,12 +180,7 @@ export function App() {
   // sync has completed). This is a cheap "recent only" check, not a full
   // re-scan. See sync.instructions.md.
   useEffect(() => {
-    if (
-      session &&
-      !isRestoringSession &&
-      isOnline === true &&
-      !hasSyncedAlbumListOnBoot.current
-    ) {
+    if (session && !isRestoringSession && isOnline === true && !hasSyncedAlbumListOnBoot.current) {
       hasSyncedAlbumListOnBoot.current = true;
       void refreshAlbumList().catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -202,6 +197,7 @@ export function App() {
       hasScannedLocalFilesOnBoot.current = false;
       hasAutoStartedSync.current = false;
       lastLocalFileScanAtRef.current = 0;
+      localFileChangesDismissedRef.current = false;
       setLocalFileChanges([]);
       setLocalFileApplyErrors([]);
       setShowLocalFileChangesModal(false);
@@ -254,10 +250,7 @@ export function App() {
       setLocalFileApplyErrors(result.errors);
 
       if (result.failedCount > 0) {
-        console.warn(
-          "[app] apply local file changes completed with failures",
-          result,
-        );
+        console.warn("[app] apply local file changes completed with failures", result);
       }
 
       // Refresh active data sources so album/photo-grid state reflects the
@@ -373,55 +366,19 @@ export function App() {
   const pageContent = (() => {
     switch (activePage) {
       case "albums":
-        return (
-          <AlbumsPage
-            session={session}
-            onNavigate={setActivePage}
-            onLogout={logout}
-          />
-        );
+        return <AlbumsPage session={session} onNavigate={setActivePage} onLogout={logout} />;
       case "folders":
-        return (
-          <FoldersPage
-            session={session}
-            onNavigate={setActivePage}
-            onLogout={logout}
-          />
-        );
+        return <FoldersPage session={session} onNavigate={setActivePage} onLogout={logout} />;
       case "calendar":
-        return (
-          <CalendarPage
-            session={session}
-            onNavigate={setActivePage}
-            onLogout={logout}
-          />
-        );
+        return <CalendarPage session={session} onNavigate={setActivePage} onLogout={logout} />;
       case "settings":
         return <SettingsPage onNavigate={setActivePage} onLogout={logout} />;
       case "favorites":
-        return (
-          <FavoritesPage
-            session={session}
-            onNavigate={setActivePage}
-            onLogout={logout}
-          />
-        );
+        return <FavoritesPage session={session} onNavigate={setActivePage} onLogout={logout} />;
       case "deleted":
-        return (
-          <DeletedPage
-            session={session}
-            onNavigate={setActivePage}
-            onLogout={logout}
-          />
-        );
+        return <DeletedPage session={session} onNavigate={setActivePage} onLogout={logout} />;
       default:
-        return (
-          <PhotosPage
-            session={session}
-            onNavigate={setActivePage}
-            onLogout={logout}
-          />
-        );
+        return <PhotosPage session={session} onNavigate={setActivePage} onLogout={logout} />;
     }
   })();
 
@@ -435,17 +392,26 @@ export function App() {
         isApplying={isApplyingLocalFileChanges}
         applyErrors={localFileApplyErrors}
         onApplyAll={async () => {
-          await applySelectedLocalFileChanges(
-            localFileChanges.map((item) => item.id),
-          );
+          await applySelectedLocalFileChanges(localFileChanges.map((item) => item.id));
         }}
         onApplySelected={applySelectedLocalFileChanges}
-        onCancel={() => setShowLocalFileChangesModal(false)}
+        onCancel={() => {
+          localFileChangesDismissedRef.current = true;
+          setShowLocalFileChangesModal(false);
+          // Persist the skip: update the tracked snapshot / stop tracking removed
+          // paths so the same changes are not re-detected on the next scan.
+          const idsToDismiss = localFileChanges.map((item) => item.id);
+          setLocalFileChanges([]);
+          void dismissSavedLocalFileChanges(idsToDismiss).catch((err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn("[app] failed to dismiss local file changes", message);
+          });
+        }}
       />
       {isApplyingLocalFileChanges ? (
         <div className="fixed bottom-4 right-4 z-50 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
           <p className="text-xs font-medium text-base-content mb-2">
-            Applying local changes...
+            {t("localChanges.applyingOverlay")}
           </p>
           <progress
             className="progress progress-primary progress-sm w-full"
