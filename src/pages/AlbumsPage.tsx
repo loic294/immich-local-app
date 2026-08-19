@@ -1,14 +1,6 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  Link,
-  Share2,
-  HardDrive,
-  Check,
-  LoaderCircle,
-  FolderOpen,
-  Trash2,
-} from "lucide-react";
+import { Link, Share2, HardDrive, Check, LoaderCircle, FolderOpen, Trash2 } from "lucide-react";
 import type { GridLayoutResponse } from "../types";
 import { AlbumCard } from "../components/Albums/AlbumCard";
 import { AlbumShareModal } from "../components/Albums/AlbumShareModal";
@@ -86,21 +78,16 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     setDirection: setSortDirection,
   } = useSortPreference();
 
-  const getValidSavedFolderPath = useCallback(
-    (album: AlbumSummary | null): string | null => {
-      const value = album?.savedLocalFolderPath;
-      if (typeof value !== "string") {
-        return null;
-      }
-      const normalized = value.trim();
-      return normalized.length > 0 ? normalized : null;
-    },
-    [],
-  );
+  const getValidSavedFolderPath = useCallback((album: AlbumSummary | null): string | null => {
+    const value = album?.savedLocalFolderPath;
+    if (typeof value !== "string") {
+      return null;
+    }
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  }, []);
 
-  const albumGridFullLayout = useCallback<
-    (containerWidth: number) => Promise<GridLayoutResponse>
-  >(
+  const albumGridFullLayout = useCallback<(containerWidth: number) => Promise<GridLayoutResponse>>(
     (containerWidth) =>
       getCachedAlbumFullGridLayout(
         selectedAlbumId ?? "",
@@ -114,15 +101,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     [selectedAlbumId, albumRefreshNonce, filterPayload, sortPreference],
   );
   const albumLoadFullLayout =
-    selectedAlbumId && searchInput.trim().length === 0
-      ? albumGridFullLayout
-      : undefined;
+    selectedAlbumId && searchInput.trim().length === 0 ? albumGridFullLayout : undefined;
 
   const albumsQuery = useAlbums(true);
   const selectedAlbum = useMemo(
-    () =>
-      (albumsQuery.data ?? []).find((album) => album.id === selectedAlbumId) ??
-      null,
+    () => (albumsQuery.data ?? []).find((album) => album.id === selectedAlbumId) ?? null,
     [albumsQuery.data, selectedAlbumId],
   );
 
@@ -179,15 +162,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
       }
 
       const container = contentRef.current;
-      const albumHeader = container.querySelector(
-        '[data-test="album-header"]',
-      ) as HTMLElement;
+      const albumHeader = container.querySelector('[data-test="album-header"]') as HTMLElement;
       const albumDescription = container.querySelector(
         '[data-test="album-description"]',
       ) as HTMLElement;
-      const errorAlert = container.querySelector(
-        '[data-test="error-alert"]',
-      ) as HTMLElement;
+      const errorAlert = container.querySelector('[data-test="error-alert"]') as HTMLElement;
 
       const padding = 16; // padding from p-2 sm:p-3 lg:p-4 (bottom only)
       let usedHeight = padding;
@@ -233,15 +212,12 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
   const filteredAlbumAssets = useMemo(() => {
     const term = searchInput.trim().toLowerCase();
-    const assets =
-      albumAssetsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+    const assets = albumAssetsQuery.data?.pages.flatMap((page) => page.items) ?? [];
     if (!term) {
       return assets;
     }
 
-    return assets.filter((asset) =>
-      asset.originalFileName.toLowerCase().includes(term),
-    );
+    return assets.filter((asset) => asset.originalFileName.toLowerCase().includes(term));
   }, [albumAssetsQuery.data?.pages, searchInput]);
 
   const filteredAlbums = useMemo(() => {
@@ -329,9 +305,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
   const handleSaveAlbumLocally = async () => {
     if (!selectedAlbum) {
-      console.warn(
-        "[album-save-locally] save requested with no album selected",
-      );
+      console.warn("[album-save-locally] save requested with no album selected");
       return;
     }
 
@@ -389,9 +363,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
   const handleOpenAlbumFolder = async () => {
     if (!selectedAlbum) {
-      console.error(
-        "[album-save-locally] open folder requested with no album selected",
-      );
+      console.error("[album-save-locally] open folder requested with no album selected");
       return;
     }
 
@@ -434,9 +406,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         );
       } catch (err) {
         const errorMsg =
-          err instanceof Error
-            ? err.message
-            : "Folder path not found for this album";
+          err instanceof Error ? err.message : "Folder path not found for this album";
         setSaveAlbumError(errorMsg);
         console.error(
           "[album-save-locally] failed to recover missing folder path",
@@ -457,8 +427,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         folderPath,
       );
     } catch (err) {
-      const errorMsg =
-        err instanceof Error ? err.message : "Failed to open folder";
+      const errorMsg = err instanceof Error ? err.message : "Failed to open folder";
       setSaveAlbumError(errorMsg);
       console.error(
         "[album-save-locally] open folder failed",
@@ -475,9 +444,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
   const handleDeleteLocalAlbum = async () => {
     if (!selectedAlbum) {
-      console.error(
-        "[album-delete-local] delete requested with no album selected",
-      );
+      console.error("[album-delete-local] delete requested with no album selected");
       return;
     }
 
@@ -495,15 +462,12 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         ["albums"],
         (current) =>
           current?.map((album) =>
-            album.id === selectedAlbum.id
-              ? { ...album, savedLocalFolderPath: null }
-              : album,
+            album.id === selectedAlbum.id ? { ...album, savedLocalFolderPath: null } : album,
           ) ?? current,
       );
       console.log("[album-delete-local] success", "albumId=", selectedAlbum.id);
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : t("albums.deleteLocalFailed");
+      const errorMessage = err instanceof Error ? err.message : t("albums.deleteLocalFailed");
       setSaveAlbumError(errorMessage);
       console.error(
         "[album-delete-local] failed",
@@ -530,8 +494,6 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         <AppTopBar
           session={session}
           onLogout={onLogout}
-          searchInput={searchInput}
-          onSearchChange={setSearchInput}
           selectedAssetIds={selectedAssetIds}
           selectedCount={selectedCount}
           fetchAlbumsForSelection={fetchAlbums}
@@ -549,14 +511,10 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               await addAssetsToAlbum(albumId, selectedAssetIds);
             }
           }}
-          onCreateShareLinkForSelected={async () =>
-            createShareLinkForAssets(selectedAssetIds)
-          }
+          onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
           onArchiveSelected={async () => {
             await Promise.all(
-              selectedAssetIds.map((assetId) =>
-                updateAssetVisibility(assetId, "archive"),
-              ),
+              selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
             );
             await albumAssetsQuery.refetch();
           }}
@@ -566,11 +524,6 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           onSelectAll={() => {
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
-          searchPlaceholder={
-            selectedAlbumId
-              ? t("albums.searchInAlbum")
-              : t("albums.searchAlbums")
-          }
           showFilterButton={selectedAlbumId !== null}
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
@@ -579,8 +532,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           sortPreference={sortPreference}
           onSortChange={(patch) => {
             if (patch.field !== undefined) setSortField(patch.field);
-            if (patch.direction !== undefined)
-              setSortDirection(patch.direction);
+            if (patch.direction !== undefined) setSortDirection(patch.direction);
           }}
         />
 
@@ -598,9 +550,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         <section
           ref={contentRef}
           className={`p-2 sm:p-3 lg:p-4 ${
-            selectedAlbum
-              ? "flex min-h-0 flex-1 flex-col gap-2"
-              : "min-h-0 flex-1 overflow-y-auto"
+            selectedAlbum ? "flex min-h-0 flex-1 flex-col gap-2" : "min-h-0 flex-1 overflow-y-auto"
           }`}
         >
           {selectedAlbum ? (
@@ -624,53 +574,72 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
                 <div className="flex items-center gap-2 shrink-0">
                   {!isAlbumSavedLocally ? (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary shrink-0"
-                      onClick={handleSaveAlbumLocally}
-                      disabled={isSavingAlbum}
+                    <div
+                      className="tooltip tooltip-bottom shrink-0"
+                      data-tip={
+                        isSavingAlbum
+                          ? t("albums.savingLocallyTooltip")
+                          : t("albums.saveLocallyTooltip")
+                      }
                     >
-                      {isSavingAlbum ? (
-                        <>
-                          <LoaderCircle size={16} className="animate-spin" />
-                          {t("albums.saving")}
-                        </>
-                      ) : (
-                        <>
-                          <HardDrive size={16} />
-                          {t("albums.saveLocally")}
-                        </>
-                      )}
-                    </button>
-                  ) : (
-                    <>
                       <button
                         type="button"
-                        className="btn btn-sm btn-neutral shrink-0"
-                        onClick={handleOpenAlbumFolder}
-                        disabled={isDeletingLocalAlbum}
+                        className="btn btn-sm btn-primary"
+                        onClick={handleSaveAlbumLocally}
+                        disabled={isSavingAlbum}
                       >
-                        <FolderOpen size={16} />
-                        {t("albums.openExplorer")}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-error btn-outline shrink-0"
-                        onClick={handleDeleteLocalAlbum}
-                        disabled={isDeletingLocalAlbum}
-                      >
-                        {isDeletingLocalAlbum ? (
+                        {isSavingAlbum ? (
                           <>
                             <LoaderCircle size={16} className="animate-spin" />
-                            {t("albums.deletingLocal")}
+                            {t("albums.saving")}
                           </>
                         ) : (
                           <>
-                            <Trash2 size={16} />
-                            {t("albums.deleteLocal")}
+                            <HardDrive size={16} />
+                            {t("albums.saveLocally")}
                           </>
                         )}
                       </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        className="tooltip tooltip-bottom shrink-0"
+                        data-tip={t("albums.savedLocallyTooltip")}
+                      >
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-neutral"
+                          onClick={handleOpenAlbumFolder}
+                          disabled={isDeletingLocalAlbum}
+                        >
+                          <FolderOpen size={16} />
+                          {t("albums.openExplorer")}
+                        </button>
+                      </div>
+                      <div
+                        className="tooltip tooltip-bottom shrink-0"
+                        data-tip={t("albums.deleteLocalTooltip")}
+                      >
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-error btn-outline"
+                          onClick={handleDeleteLocalAlbum}
+                          disabled={isDeletingLocalAlbum}
+                        >
+                          {isDeletingLocalAlbum ? (
+                            <>
+                              <LoaderCircle size={16} className="animate-spin" />
+                              {t("albums.deletingLocal")}
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 size={16} />
+                              {t("albums.deleteLocal")}
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </>
                   )}
 
@@ -690,9 +659,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               {saveAlbumError ? (
                 <div role="alert" className="alert alert-error shrink-0">
                   <div className="flex items-start gap-2 min-w-0">
-                    <span className="text-sm wrap-break-word">
-                      {saveAlbumError}
-                    </span>
+                    <span className="text-sm wrap-break-word">{saveAlbumError}</span>
                     <button
                       className="link link-hover text-sm ml-auto shrink-0"
                       onClick={() => setSaveAlbumError(null)}
@@ -705,9 +672,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
               {selectedAlbum.description ? (
                 <div data-test="album-description" className="shrink-0">
-                  <AlbumDescriptionSection
-                    description={selectedAlbum.description}
-                  />
+                  <AlbumDescriptionSection description={selectedAlbum.description} />
                 </div>
               ) : null}
 
@@ -731,9 +696,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                   isFetching={albumAssetsQuery.isFetchingNextPage}
                   hasNextPage={Boolean(albumAssetsQuery.hasNextPage)}
                   maxHeight={photoGridHeight}
-                  onLoadMore={() =>
-                    albumAssetsQuery.fetchNextPage().then(() => undefined)
-                  }
+                  onLoadMore={() => albumAssetsQuery.fetchNextPage().then(() => undefined)}
                   loadFullLayout={albumLoadFullLayout}
                 />
               )}
@@ -753,27 +716,28 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           ) : (
             <section className="space-y-4 pb-2">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <h1 className="m-0 text-2xl font-bold text-base-content">
-                  {t("albums.title")}
-                </h1>
+                <h1 className="m-0 text-2xl font-bold text-base-content">{t("albums.title")}</h1>
                 <div className="join">
                   <button
                     type="button"
-                    className={`btn btn-sm join-item ${filter === "all" ? "btn-primary" : "btn-ghost"}`}
+                    className={`tooltip tooltip-bottom btn btn-sm join-item ${filter === "all" ? "btn-primary" : "btn-ghost"}`}
+                    data-tip={t("albums.filterAllTooltip")}
                     onClick={() => setFilter("all")}
                   >
                     {t("albums.filterAll")}
                   </button>
                   <button
                     type="button"
-                    className={`btn btn-sm join-item ${filter === "owned" ? "btn-primary" : "btn-ghost"}`}
+                    className={`tooltip tooltip-bottom btn btn-sm join-item ${filter === "owned" ? "btn-primary" : "btn-ghost"}`}
+                    data-tip={t("albums.filterMineTooltip")}
                     onClick={() => setFilter("owned")}
                   >
                     {t("albums.filterMine")}
                   </button>
                   <button
                     type="button"
-                    className={`btn btn-sm join-item ${filter === "shared" ? "btn-primary" : "btn-ghost"}`}
+                    className={`tooltip tooltip-bottom btn btn-sm join-item ${filter === "shared" ? "btn-primary" : "btn-ghost"}`}
+                    data-tip={t("albums.filterSharedTooltip")}
                     onClick={() => setFilter("shared")}
                   >
                     {t("albums.filterShared")}
@@ -782,13 +746,9 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               </div>
 
               {albumsQuery.isError ? (
-                <div
-                  role="alert"
-                  className="alert alert-error alert-soft text-sm"
-                >
+                <div role="alert" className="alert alert-error alert-soft text-sm">
                   <span>
-                    {(albumsQuery.error as Error | null)?.message ??
-                      t("albums.loadAlbumsFailed")}
+                    {(albumsQuery.error as Error | null)?.message ?? t("albums.loadAlbumsFailed")}
                   </span>
                 </div>
               ) : null}
@@ -823,11 +783,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                           key={album.id}
                           album={album}
                           isOwned={album.ownerId === session.userId}
-                          dateLabel={getAlbumDateLabel(
-                            album,
-                            locale,
-                            t("albums.unknownDate"),
-                          )}
+                          dateLabel={getAlbumDateLabel(album, locale, t("albums.unknownDate"))}
                           onClick={() => {
                             setSelectedAlbumId(album.id);
                             setSearchInput("");
@@ -870,11 +826,7 @@ function getAlbumDateMs(album: AlbumSummary): number {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
-function getAlbumDateLabel(
-  album: AlbumSummary,
-  locale: string,
-  unknownDate: string,
-): string {
+function getAlbumDateLabel(album: AlbumSummary, locale: string, unknownDate: string): string {
   const start = formatMonthYear(album.startDate ?? album.createdAt, locale);
   const end = formatMonthYear(album.endDate ?? album.updatedAt, locale);
 
@@ -922,21 +874,15 @@ interface AlbumDescriptionSectionProps {
   description: string;
 }
 
-function AlbumDescriptionSection({
-  description,
-}: AlbumDescriptionSectionProps) {
+function AlbumDescriptionSection({ description }: AlbumDescriptionSectionProps) {
   const { t } = useI18n();
   const url = extractFirstUrl(description);
-  const textWithoutUrl = url
-    ? description.replace(url, "").trim()
-    : description;
+  const textWithoutUrl = url ? description.replace(url, "").trim() : description;
 
   return (
     <div className="mb-4 space-y-3">
       {textWithoutUrl ? (
-        <p className="text-sm text-base-content/80 whitespace-pre-wrap">
-          {textWithoutUrl}
-        </p>
+        <p className="text-sm text-base-content/80 whitespace-pre-wrap">{textWithoutUrl}</p>
       ) : null}
       {url ? (
         <button

@@ -1,5 +1,6 @@
 import { User } from "lucide-react";
 import { useI18n } from "../../i18n";
+import { FilterTooltip } from "./FilterTooltip";
 
 interface MyPhotosFilterProps {
   /** When true, only assets matching My Photos rules are shown. */
@@ -12,7 +13,7 @@ export function MyPhotosFilter({ active, onChange }: MyPhotosFilterProps) {
   const { t } = useI18n();
 
   return (
-    <div className="flex shrink-0 flex-col gap-1">
+    <FilterTooltip className="shrink-0" content={t("filters.myPhotosTooltip")}>
       <button
         type="button"
         className={`btn btn-sm ${active ? "btn-primary" : "btn-ghost"}`}
@@ -23,6 +24,6 @@ export function MyPhotosFilter({ active, onChange }: MyPhotosFilterProps) {
         <User size={16} />
         {t("filters.myPhotos")}
       </button>
-    </div>
+    </FilterTooltip>
   );
 }

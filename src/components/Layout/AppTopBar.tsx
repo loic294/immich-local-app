@@ -9,9 +9,6 @@ import { useI18n } from "../../i18n";
 interface AppTopBarProps {
   session: Session;
   onLogout: () => void;
-  searchInput: string;
-  onSearchChange: (value: string) => void;
-  searchPlaceholder?: string;
   selectedAssetIds?: string[];
   selectedCount?: number;
   onClearSelection?: () => void;
@@ -41,9 +38,6 @@ interface AppTopBarProps {
 export function AppTopBar({
   session,
   onLogout,
-  searchInput,
-  onSearchChange,
-  searchPlaceholder,
   selectedAssetIds = [],
   selectedCount = 0,
   onClearSelection,
@@ -226,13 +220,10 @@ export function AppTopBar({
 
   return (
     <Header
-      searchInput={searchInput}
-      onSearchChange={onSearchChange}
       serverUrl={session.serverUrl}
       userId={session.userId}
       userName={session.userName}
       onLogout={onLogout}
-      searchPlaceholder={searchPlaceholder}
       showFilterButton={showFilterButton}
       filterActive={filterActive}
       filterOpen={filterOpen}

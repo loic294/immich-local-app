@@ -1465,7 +1465,8 @@ export function PhotoGrid({
         {availableDates.length > 0 ? (
           <button
             type="button"
-            className="btn btn-ghost btn-sm gap-1"
+            className="tooltip tooltip-left btn btn-ghost btn-sm gap-1"
+            data-tip={t("photoGrid.jumpToDateTooltip")}
             onClick={() => setShowDatePicker(true)}
             aria-label={t("photoGrid.jumpToDateAria")}
           >

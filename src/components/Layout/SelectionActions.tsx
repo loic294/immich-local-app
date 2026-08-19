@@ -99,9 +99,10 @@ export function SelectionActions({
   };
 
   const addButtonClass =
-    variant === "preview" ? "btn btn-sm btn-outline" : "btn btn-sm btn-outline";
-  const shareButtonClass =
-    variant === "preview" ? "btn btn-sm btn-primary" : "btn btn-sm btn-primary";
+    variant === "preview"
+      ? "tooltip tooltip-bottom btn btn-sm border border-white/15 bg-zinc-900 text-white"
+      : "tooltip tooltip-bottom btn btn-sm btn-outline";
+  const shareButtonClass = "tooltip tooltip-bottom btn btn-sm btn-primary";
   const shareMenuClass =
     "menu dropdown-content z-[130] mt-2 w-58 rounded-box border border-base-300 bg-base-100 p-1 shadow";
 
@@ -484,6 +485,7 @@ export function SelectionActions({
       <button
         type="button"
         className={addButtonClass}
+        data-tip={t("selectionActions.addToAlbumTooltip")}
         onClick={(event) => {
           triggerAction(event, () => {
             void openAlbumModal();
@@ -502,7 +504,10 @@ export function SelectionActions({
           }
         }}
       >
-        <summary className={shareButtonClass}>
+        <summary
+          className={shareButtonClass + " tooltip-end"}
+          data-tip={t("selectionActions.shareTooltip")}
+        >
           <Link size={16} />
           {t("selectionActions.share")}
         </summary>
@@ -510,6 +515,8 @@ export function SelectionActions({
           <li>
             <button
               type="button"
+              className="tooltip tooltip-left w-full"
+              data-tip={t("selectionActions.shareWithLinkTooltip")}
               onClick={() => {
                 setSelectionError(null);
                 setShareLink("");
@@ -524,6 +531,8 @@ export function SelectionActions({
           <li>
             <button
               type="button"
+              className="tooltip tooltip-left w-full"
+              data-tip={t("selectionActions.copyImagesToClipboardTooltip")}
               disabled={isCopyingImages || disableCopy}
               onClick={() => {
                 void submitCopyImagesToClipboard();
@@ -538,6 +547,8 @@ export function SelectionActions({
           <li>
             <button
               type="button"
+              className="tooltip tooltip-left w-full"
+              data-tip={t("selectionActions.openInFileExplorerTooltip")}
               disabled={isCopyingToLocalFolder}
               onClick={() => {
                 void submitOpenInFileExplorer();
@@ -552,6 +563,8 @@ export function SelectionActions({
           <li>
             <button
               type="button"
+              className="tooltip tooltip-left w-full"
+              data-tip={t("selectionActions.copyToUsbTooltip")}
               disabled={isCopyingToLocalFolder}
               onClick={() => {
                 void submitCopyToUsbFolder();

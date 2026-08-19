@@ -1,4 +1,5 @@
 import { useI18n } from "../../i18n";
+import { FilterTooltip } from "./FilterTooltip";
 
 interface CameraFilterProps {
   /** Selected camera name, or null for all cameras. */
@@ -10,16 +11,11 @@ interface CameraFilterProps {
 }
 
 /** daisyUI select listing the cameras present in the current view. */
-export function CameraFilter({
-  value,
-  cameras,
-  isLoading,
-  onChange,
-}: CameraFilterProps) {
+export function CameraFilter({ value, cameras, isLoading, onChange }: CameraFilterProps) {
   const { t } = useI18n();
 
   return (
-    <div className="flex shrink-0 flex-col gap-1">
+    <FilterTooltip className="shrink-0" content={t("filters.cameraTooltip")}>
       <select
         className="select select-sm z-10 w-48"
         value={value ?? ""}
@@ -30,15 +26,13 @@ export function CameraFilter({
         }}
         aria-label={t("filters.cameraAria")}
       >
-        <option value="">
-          {isLoading ? t("filters.loading") : t("filters.allCameras")}
-        </option>
+        <option value="">{isLoading ? t("filters.loading") : t("filters.allCameras")}</option>
         {cameras.map((camera) => (
           <option key={camera} value={camera}>
             {camera}
           </option>
         ))}
       </select>
-    </div>
+    </FilterTooltip>
   );
 }

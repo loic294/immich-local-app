@@ -1,5 +1,6 @@
 import type { MediaTypeFilter } from "../../types";
 import { useI18n } from "../../i18n";
+import { FilterTooltip } from "./FilterTooltip";
 
 interface TypeFilterProps {
   /** The selected media type, or null for all types. */
@@ -21,7 +22,7 @@ export function TypeFilter({ value, onChange }: TypeFilterProps) {
   ];
 
   return (
-    <div className="flex shrink-0 flex-col gap-1">
+    <FilterTooltip className="shrink-0" content={t("filters.mediaTypeTooltip")}>
       <select
         className="select select-sm z-10 w-40"
         value={value ?? ""}
@@ -38,6 +39,6 @@ export function TypeFilter({ value, onChange }: TypeFilterProps) {
           </option>
         ))}
       </select>
-    </div>
+    </FilterTooltip>
   );
 }

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { ZoomIn } from "lucide-react";
+import { useI18n } from "../../i18n";
 
 interface ZoomControlProps {
   zoomLevel: number;
@@ -7,6 +8,7 @@ interface ZoomControlProps {
 }
 
 export function ZoomControl({ zoomLevel, onZoomChange }: ZoomControlProps) {
+  const { t } = useI18n();
   const [showSlider, setShowSlider] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hideTimeoutRef = useRef<number | null>(null);
@@ -29,7 +31,8 @@ export function ZoomControl({ zoomLevel, onZoomChange }: ZoomControlProps) {
   return (
     <div
       ref={containerRef}
-      className="relative"
+      className="tooltip tooltip-left relative"
+      data-tip={t("photoGrid.zoomTooltip")}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onClick={(e) => e.stopPropagation()}

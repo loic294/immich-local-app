@@ -173,7 +173,8 @@ export function PhotoGridFullscreenOverlay({
     >
       <button
         type="button"
-        className="btn btn-circle btn-sm btn-ghost absolute left-4 top-4 border border-white/15 bg-zinc-900 text-white"
+        className="tooltip tooltip-bottom tooltip-start btn btn-circle btn-sm btn-ghost absolute left-4 top-4 border border-white/15 bg-zinc-900 text-white"
+        data-tip={t("photoGrid.backTooltip")}
         aria-label={t("photoGrid.backAria")}
         onClick={(event) => {
           event.stopPropagation();
@@ -237,7 +238,8 @@ export function PhotoGridFullscreenOverlay({
 
         <button
           type="button"
-          className={`btn btn-sm border border-white/15 ${showInfoPanel ? "bg-white text-black hover:bg-white" : "bg-zinc-900 text-white"}`}
+          className={`tooltip tooltip-bottom tooltip-end btn btn-sm border border-white/15 ${showInfoPanel ? "bg-white text-black hover:bg-white" : "bg-zinc-900 text-white"}`}
+          data-tip={t("photoGrid.infoTooltip")}
           aria-label={t("photoGrid.toggleInfoAria")}
           onClick={(event) => {
             event.stopPropagation();

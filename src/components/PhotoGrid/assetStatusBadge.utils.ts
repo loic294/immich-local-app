@@ -6,6 +6,7 @@ export interface BadgeContent {
   icon: ComponentType<any>;
   title: string;
   subtitle: string;
+  tooltip: string;
   isClickable: boolean;
   iconColor: string;
   /** Solid background color for the icon circle (icon itself is white). */
@@ -46,6 +47,7 @@ export function getStatusBadgeContent(
           ? t("photoGrid.assetStatus.videoSaved")
           : t("photoGrid.assetStatus.fullResLoaded"),
       subtitle: t("photoGrid.assetStatus.fullResLoadedSubtitle"),
+      tooltip: t("photoGrid.assetStatus.fullResLoadedTooltip"),
       isClickable: true,
       iconColor: "text-success",
       circleColor: "bg-success",
@@ -58,6 +60,7 @@ export function getStatusBadgeContent(
       icon: CloudAlert,
       title: t("photoGrid.assetStatus.unavailable"),
       subtitle: t("photoGrid.assetStatus.unavailableSubtitle"),
+      tooltip: t("photoGrid.assetStatus.unavailableTooltip"),
       isClickable: false,
       iconColor: "text-warning",
       circleColor: "bg-warning",
@@ -71,6 +74,7 @@ export function getStatusBadgeContent(
         icon: CloudSync,
         title: t("photoGrid.assetStatus.downloadingVideo"),
         subtitle: t("photoGrid.assetStatus.downloadingVideoSubtitle"),
+        tooltip: t("photoGrid.assetStatus.downloadingTooltip"),
         isClickable: false,
         iconColor: "text-info",
         circleColor: "bg-info",
@@ -80,6 +84,7 @@ export function getStatusBadgeContent(
       icon: CloudSync,
       title: t("photoGrid.assetStatus.downloadingPreview"),
       subtitle: t("photoGrid.assetStatus.downloadingPreviewSubtitle"),
+      tooltip: t("photoGrid.assetStatus.downloadingTooltip"),
       isClickable: false,
       iconColor: "text-info",
       circleColor: "bg-info",
@@ -92,6 +97,7 @@ export function getStatusBadgeContent(
       icon: CloudSync,
       title: t("photoGrid.assetStatus.downloadingFullRes"),
       subtitle: t("photoGrid.assetStatus.downloadingFullResSubtitle"),
+      tooltip: t("photoGrid.assetStatus.downloadingTooltip"),
       isClickable: false,
       iconColor: "text-info",
       circleColor: "bg-info",
@@ -104,6 +110,7 @@ export function getStatusBadgeContent(
       icon: CloudDownload,
       title: t("photoGrid.assetStatus.previewSaved"),
       subtitle: t("photoGrid.assetStatus.offlineCannotDownload"),
+      tooltip: t("photoGrid.assetStatus.offlinePreviewTooltip"),
       isClickable: false,
       iconColor: "text-warning",
       circleColor: "bg-warning",
@@ -116,6 +123,7 @@ export function getStatusBadgeContent(
       icon: CloudDownload,
       title: t("photoGrid.assetStatus.previewSaved"),
       subtitle: t("photoGrid.assetStatus.previewSavedSubtitle"),
+      tooltip: t("photoGrid.assetStatus.previewSavedTooltip"),
       isClickable: true,
       iconColor: "text-success",
       circleColor: "bg-success",
@@ -130,6 +138,7 @@ export function getStatusBadgeContent(
       icon: CloudDownload,
       title: t("photoGrid.assetStatus.videoReady"),
       subtitle: t("photoGrid.assetStatus.videoReadySubtitle"),
+      tooltip: t("photoGrid.assetStatus.videoReadyTooltip"),
       isClickable: true,
       iconColor: "text-success",
       circleColor: "bg-success",

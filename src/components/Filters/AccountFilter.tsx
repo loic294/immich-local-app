@@ -1,5 +1,6 @@
 import { useI18n } from "../../i18n";
 import type { Account } from "../../api/tauri";
+import { FilterTooltip } from "./FilterTooltip";
 
 interface AccountFilterProps {
   /** Selected account id, or null for all accounts. */
@@ -14,15 +15,11 @@ interface AccountFilterProps {
  * grid to a single account's photos. Only rendered when more than one account
  * is signed in.
  */
-export function AccountFilter({
-  value,
-  accounts,
-  onChange,
-}: AccountFilterProps) {
+export function AccountFilter({ value, accounts, onChange }: AccountFilterProps) {
   const { t } = useI18n();
 
   return (
-    <div className="flex shrink-0 flex-col gap-1">
+    <FilterTooltip className="shrink-0" content={t("filters.accountTooltip")}>
       <select
         className="select select-sm z-10 w-48"
         value={value ?? ""}
@@ -39,6 +36,6 @@ export function AccountFilter({
           </option>
         ))}
       </select>
-    </div>
+    </FilterTooltip>
   );
 }

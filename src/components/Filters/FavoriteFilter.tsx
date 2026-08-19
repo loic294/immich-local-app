@@ -1,5 +1,6 @@
 import { Heart } from "lucide-react";
 import { useI18n } from "../../i18n";
+import { FilterTooltip } from "./FilterTooltip";
 
 interface FavoriteFilterProps {
   /** When true, only favorites are shown. */
@@ -12,7 +13,7 @@ export function FavoriteFilter({ active, onChange }: FavoriteFilterProps) {
   const { t } = useI18n();
 
   return (
-    <div className="flex shrink-0 flex-col gap-1">
+    <FilterTooltip className="shrink-0" content={t("filters.favoritesTooltip")}>
       <button
         type="button"
         className={`btn btn-sm ${active ? "btn-error" : "btn-ghost"}`}
@@ -23,6 +24,6 @@ export function FavoriteFilter({ active, onChange }: FavoriteFilterProps) {
         <Heart size={16} className={active ? "fill-current" : ""} />
         {t("filters.favorites")}
       </button>
-    </div>
+    </FilterTooltip>
   );
 }

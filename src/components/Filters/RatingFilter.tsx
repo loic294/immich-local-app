@@ -1,6 +1,7 @@
 import { Star, Equal, ChevronUp, ChevronDown } from "lucide-react";
 import type { RatingMode } from "../../types";
 import { useI18n } from "../../i18n";
+import { FilterTooltip } from "./FilterTooltip";
 
 interface RatingFilterProps {
   /** The selected rating threshold (1-5), or null when inactive. */
@@ -48,39 +49,37 @@ export function RatingFilter({ rating, mode, onChange }: RatingFilterProps) {
   return (
     <div className="flex shrink-0 flex-col justify-center">
       <div className="flex items-center gap-1">
-        <button
-          type="button"
-          className="btn btn-xs btn-ghost btn-square"
-          onClick={cycleMode}
-          aria-label={modeLabels[mode]}
-          title={modeLabels[mode]}
-        >
-          <ModeIcon mode={mode} />
-        </button>
+        <FilterTooltip content={t("filters.ratingModeTooltip")}>
+          <button
+            type="button"
+            className="btn btn-xs btn-ghost btn-square"
+            onClick={cycleMode}
+            aria-label={modeLabels[mode]}
+          >
+            <ModeIcon mode={mode} />
+          </button>
+        </FilterTooltip>
         <div className="flex items-center">
           {[1, 2, 3, 4, 5].map((value) => {
             const filled = rating != null && value <= rating;
             return (
-              <button
-                key={value}
-                type="button"
-                className="btn btn-xs btn-ghost btn-square"
-                onClick={() => handleStarClick(value)}
-                aria-label={t("filters.starsAria", {
-                  count: value,
-                  suffix: value > 1 ? "s" : "",
-                })}
-                aria-pressed={filled}
-              >
-                <Star
-                  size={16}
-                  className={
-                    filled
-                      ? "fill-warning text-warning"
-                      : "text-base-content/40"
-                  }
-                />
-              </button>
+              <FilterTooltip key={value} content={t("filters.starsTooltip", { count: value })}>
+                <button
+                  type="button"
+                  className="btn btn-xs btn-ghost btn-square"
+                  onClick={() => handleStarClick(value)}
+                  aria-label={t("filters.starsAria", {
+                    count: value,
+                    suffix: value > 1 ? "s" : "",
+                  })}
+                  aria-pressed={filled}
+                >
+                  <Star
+                    size={16}
+                    className={filled ? "fill-warning text-warning" : "text-base-content/40"}
+                  />
+                </button>
+              </FilterTooltip>
             );
           })}
         </div>

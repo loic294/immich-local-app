@@ -1,4 +1,4 @@
-import { Funnel, LogOut, Plus, Search, Star, Trash2 } from "lucide-react";
+import { Funnel, LogOut, Plus, Star, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getProfileImage } from "../../api/tauri";
@@ -9,13 +9,10 @@ import { useAccounts } from "../../hooks/useAccounts";
 import { AddAccountModal } from "../Auth/AddAccountModal";
 
 interface HeaderProps {
-  searchInput: string;
-  onSearchChange: (value: string) => void;
   serverUrl: string;
   userId: string;
   userName: string;
   onLogout: () => void;
-  searchPlaceholder?: string;
   /** Whether to show the Filter button (only on photo grid views). */
   showFilterButton?: boolean;
   /** Whether any filter is currently active (highlights the button). */
@@ -30,13 +27,10 @@ interface HeaderProps {
 }
 
 export function Header({
-  searchInput,
-  onSearchChange,
   serverUrl,
   userId,
   userName,
   onLogout,
-  searchPlaceholder,
   showFilterButton = false,
   filterActive = false,
   filterOpen = false,
@@ -117,27 +111,12 @@ export function Header({
   return (
     <header className="navbar border-b border-base-300 bg-base-100 px-3 sm:px-4">
       <div className="navbar-start gap-4">
-        <label
-          className="input input-bordered flex w-full min-w-[16rem] items-center gap-2 rounded-full sm:min-w-[20rem] lg:min-w-md"
-          htmlFor="asset-search"
-        >
-          <Search size={16} className="text-base-content/60" />
-          <input
-            id="asset-search"
-            placeholder={searchPlaceholder ?? t("header.searchPhotos")}
-            type="text"
-            className="grow"
-            value={searchInput}
-            onChange={(event) => {
-              onSearchChange(event.target.value);
-            }}
-          />
-        </label>
         {showFilterButton && (
           <button
-            className={`btn btn-sm ${
+            className={`tooltip tooltip-bottom btn btn-sm ${
               filterActive || filterOpen ? "btn-primary" : "btn-outline"
             }`}
+            data-tip={t("header.filterTooltip")}
             type="button"
             onClick={onToggleFilter}
             aria-pressed={filterOpen}
@@ -161,11 +140,7 @@ export function Header({
             {profileImage ? (
               <div className="avatar">
                 <div className="w-8 rounded-full">
-                  <img
-                    src={profileImage}
-                    alt={t("header.profileAlt")}
-                    className="object-cover"
-                  />
+                  <img src={profileImage} alt={t("header.profileAlt")} className="object-cover" />
                 </div>
               </div>
             ) : (
@@ -177,12 +152,8 @@ export function Header({
             )}
           </summary>
           <div className="dropdown-content z-20 mt-2 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow">
-            <p className="m-0 text-sm font-semibold text-base-content">
-              {userName}
-            </p>
-            <p className="m-0 truncate text-xs text-base-content/60">
-              {serverUrl}
-            </p>
+            <p className="m-0 text-sm font-semibold text-base-content">{userName}</p>
+            <p className="m-0 truncate text-xs text-base-content/60">{serverUrl}</p>
 
             {accounts.accounts.length > 0 ? (
               <>
@@ -191,15 +162,9 @@ export function Header({
                 </div>
                 <ul className="max-h-64 space-y-1 overflow-y-auto">
                   {accounts.accounts.map((account) => {
-                    const label =
-                      account.userName || account.userEmail || account.userId;
-                    const seed = (
-                      account.userName ||
-                      account.userEmail ||
-                      "U"
-                    ).trim();
-                    const accountInitials =
-                      seed.slice(0, 2).toUpperCase() || "U";
+                    const label = account.userName || account.userEmail || account.userId;
+                    const seed = (account.userName || account.userEmail || "U").trim();
+                    const accountInitials = seed.slice(0, 2).toUpperCase() || "U";
                     return (
                       <li
                         key={account.id}

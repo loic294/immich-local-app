@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { PersonSummary } from "../../types";
 import { PersonThumbnail } from "./PersonThumbnail";
 import { useI18n } from "../../i18n";
+import { FilterTooltip } from "./FilterTooltip";
 
 interface PeopleFilterProps {
   /** Selected person ID, or null for everyone. */
@@ -27,12 +28,7 @@ function personLabel(person: PersonSummary, unnamedLabel: string): string {
  * macOS WebKit webview; manual `getBoundingClientRect` positioning works on both
  * macOS (WKWebView) and Windows (WebView2).
  */
-export function PeopleFilter({
-  value,
-  people,
-  isLoading,
-  onChange,
-}: PeopleFilterProps) {
+export function PeopleFilter({ value, people, isLoading, onChange }: PeopleFilterProps) {
   const { t } = useI18n();
   const selected = people.find((person) => person.id === value) ?? null;
   const [open, setOpen] = useState(false);
@@ -76,10 +72,7 @@ export function PeopleFilter({
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (
-        buttonRef.current?.contains(target) ||
-        menuRef.current?.contains(target)
-      ) {
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) {
         return;
       }
       setOpen(false);
@@ -106,7 +99,7 @@ export function PeopleFilter({
   }, [open, updatePosition]);
 
   return (
-    <div className="flex shrink-0 flex-col gap-1">
+    <FilterTooltip className="shrink-0" content={t("filters.peopleTooltip")}>
       <button
         ref={buttonRef}
         type="button"
@@ -119,14 +112,8 @@ export function PeopleFilter({
         <span className="flex items-center gap-2 truncate">
           {selected ? (
             <>
-              <PersonThumbnail
-                personId={selected.id}
-                name={selected.name}
-                size={20}
-              />
-              <span className="truncate">
-                {personLabel(selected, t("filters.unnamedPerson"))}
-              </span>
+              <PersonThumbnail personId={selected.id} name={selected.name} size={20} />
+              <span className="truncate">{personLabel(selected, t("filters.unnamedPerson"))}</span>
             </>
           ) : (
             <span className="text-base-content/70">
@@ -168,31 +155,23 @@ export function PeopleFilter({
                   onClick={() => select(person.id)}
                 >
                   <span className="flex items-center gap-2 truncate">
-                    <PersonThumbnail
-                      personId={person.id}
-                      name={person.name}
-                      size={24}
-                    />
+                    <PersonThumbnail personId={person.id} name={person.name} size={24} />
                     <span className="truncate">
                       {personLabel(person, t("filters.unnamedPerson"))}
                     </span>
                   </span>
-                  {value === person.id && (
-                    <Check size={14} className="shrink-0" />
-                  )}
+                  {value === person.id && <Check size={14} className="shrink-0" />}
                 </button>
               </li>
             ))}
             {!isLoading && people.length === 0 && (
               <li className="menu-disabled">
-                <span className="text-base-content/60">
-                  {t("filters.noPeopleFound")}
-                </span>
+                <span className="text-base-content/60">{t("filters.noPeopleFound")}</span>
               </li>
             )}
           </ul>,
           document.body,
         )}
-    </div>
+    </FilterTooltip>
   );
 }

@@ -32,7 +32,8 @@ export function SortButton({ preference, onChange }: SortButtonProps) {
   return (
     <details className="dropdown dropdown-end">
       <summary
-        className={`btn btn-sm list-none ${active ? "btn-primary" : "btn-outline"}`}
+        className={`tooltip tooltip-bottom btn btn-sm list-none ${active ? "btn-primary" : "btn-outline"}`}
+        data-tip={t("filters.sortTooltip")}
         aria-label={t("filters.sortAria")}
       >
         <Icon size={14} className="shrink-0" />
@@ -51,9 +52,7 @@ export function SortButton({ preference, onChange }: SortButtonProps) {
             onClick={() => onChange({ field: value })}
           >
             {label}
-            {preference.field === value && (
-              <span className="ml-auto text-primary">✓</span>
-            )}
+            {preference.field === value && <span className="ml-auto text-primary">✓</span>}
           </button>
         ))}
 
@@ -70,9 +69,7 @@ export function SortButton({ preference, onChange }: SortButtonProps) {
             onClick={() => onChange({ direction: value })}
           >
             {label}
-            {preference.direction === value && (
-              <span className="ml-auto text-primary">✓</span>
-            )}
+            {preference.direction === value && <span className="ml-auto text-primary">✓</span>}
           </button>
         ))}
       </div>

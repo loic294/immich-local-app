@@ -211,8 +211,6 @@ export function PhotosPage({
         <AppTopBar
           session={session}
           onLogout={onLogout}
-          searchInput={searchInput}
-          onSearchChange={setSearchInput}
           selectedAssetIds={selectedAssetIds}
           selectedCount={selectedCount}
           fetchAlbumsForSelection={fetchAlbums}
