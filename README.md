@@ -1,5 +1,8 @@
 # immich-local-app
 
+<img width="3128" height="2186" alt="image" src="https://github.com/user-attachments/assets/ef15dfd3-600a-4a93-900b-85825c9bbb22" />
+
+
 ## Map Theme Configuration (Info Panel)
 
 The fullscreen info panel map uses MapTiler `dataviz-v4-dark` when a MapTiler API key is configured.
