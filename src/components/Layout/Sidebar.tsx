@@ -112,14 +112,16 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
       ? "btn btn-md btn-block w-full max-w-none btn-soft btn-primary justify-start text-base font-semibold"
       : "btn btn-md btn-block w-full max-w-none btn-ghost justify-start text-base font-semibold";
 
+  const mac = isMacPlatform();
+
   return (
     <aside className="hidden h-screen border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
       <div className="flex h-full min-h-0 w-full flex-col gap-3 p-3">
-        {isMacPlatform() && (
-          <div aria-hidden data-tauri-drag-region className="-mx-3 -mt-3 h-11 shrink-0" />
-        )}
-        <div className="flex h-10 items-center gap-2 px-2 text-3xl font-bold text-primary">
-          <img src={logoUrl} alt="" className="h-10" />
+        <div
+          data-tauri-drag-region
+          className={`flex h-10 items-center gap-2 text-3xl font-bold text-primary ${mac ? "pl-[78px] pr-2" : "px-2"}`}
+        >
+          <img src={logoUrl} alt="" className={`pointer-events-none ${mac ? "h-8" : "h-10"}`} />
         </div>
 
         <div className="min-h-0 flex-1 w-full overflow-y-auto pr-1">
