@@ -18,9 +18,9 @@ use commands::assets::{
     get_cached_asset_details, get_cached_asset_jump_target, get_cached_assets,
     get_cached_calendar_full_grid_layout, get_cached_full_grid_layout, get_cached_timeline_layout,
     get_calendar_assets_paged, get_cameras_in_scope, get_pending_mutation_count,
-    is_video_download_complete,
-    get_people_in_scope, get_person_thumbnail, get_timeline_months, refresh_asset,
-    update_asset_description, update_asset_favorite, update_asset_rating, update_asset_visibility,
+    get_people_in_scope, get_person_thumbnail, get_timeline_months, is_video_download_complete,
+    refresh_asset, update_asset_description, update_asset_favorite, update_asset_rating,
+    update_asset_visibility,
 };
 use commands::auth::{
     add_account_complete_oauth, add_account_oauth_url, add_account_with_key,
@@ -42,8 +42,8 @@ use commands::sync::{
     get_sync_status, refresh_album_assets, refresh_album_list, scan_saved_local_files,
     start_asset_sync,
 };
-use services::db::Database;
 use services::account_manager::AccountManager;
+use services::db::Database;
 use services::immich_client::ImmichClient;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -55,11 +55,7 @@ use tauri_plugin_deep_link::DeepLinkExt;
 /// videos, etc. so all on-disk app data lives under one place.
 #[cfg_attr(debug_assertions, allow(dead_code))]
 fn cache_logs_dir() -> Option<PathBuf> {
-    crate::util::home_dir().map(|home| {
-        home.join(".config")
-            .join("immich-local-app")
-            .join("logs")
-    })
+    crate::util::home_dir().map(|home| home.join(".config").join("immich-local-app").join("logs"))
 }
 
 /// Build the logging plugin.
@@ -246,6 +242,32 @@ pub fn main() {
             sync_cancel,
         })
         .invoke_handler(tauri::generate_handler![
+            commands::media::get_media_preferences,
+            commands::media::update_media_preferences,
+            commands::media::list_media_devices,
+            commands::media::scan_import_media,
+            commands::media::get_import_preview,
+            commands::media::import_media,
+            commands::media::get_media_uploads,
+            commands::media::retry_media_uploads,
+            commands::media::flush_media_uploads,
+            commands::media::begin_media_edit,
+            commands::media::get_changed_editor_jobs,
+            commands::media::export_media_edits,
+            commands::media::get_edit_versions,
+            commands::media::track_media_event,
+            commands::settings::get_feature_preferences,
+            commands::settings::update_feature_preferences,
+            commands::settings::get_storage_summary,
+            commands::settings::clear_disposable_cache,
+            commands::settings::get_video_quality_options,
+            commands::browsing::get_cached_people,
+            commands::browsing::refresh_people,
+            commands::browsing::get_cached_map_markers,
+            commands::browsing::get_cached_map_assets,
+            commands::browsing::get_cached_map_full_grid_layout,
+            commands::browsing::refresh_map_assets,
+            commands::time::shift_asset_times,
             authenticate,
             authenticate_with_password,
             restore_session,

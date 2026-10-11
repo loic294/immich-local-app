@@ -41,6 +41,59 @@ albums.
 Album photos use embedded assets on older servers or paginated, album-scoped
 metadata search on newer servers that omit assets from album details.
 
+**People** in the Library sidebar shows cached face thumbnails and photo counts.
+Choose a person to open the shared Photos timeline with its People filter already
+selected; the remaining filters and fullscreen controls work as in All Photos.
+
+**Map** clusters cached GPS-tagged photos into thumbnail markers. Select a marker
+or cluster to browse its photos on the right, or pan the map to browse the visible
+area. The map reads coordinates from SQLite and refreshes at most 100 photos in
+the current view, never the whole library. Without network access, the background
+map is unavailable but cached photo markers and photos remain usable. From the
+fullscreen info panel, choose **Open in map** to jump to that photo's location.
+Click the filename to reveal or hide its cached file path.
+
+**Search** accepts text and metadata terms such as `camera:sony`, `person:Alex`,
+`after:2025-01-01`, `type:video`, and `-tag:private`. Use the search options
+popover to build a query. Queries run against SQLite across Photos, Albums,
+Folders, and Calendar. **Update time** adjusts selected photos by an offset,
+optionally calculated from a reference photo in the same view. It changes
+Immich metadata and the local cache, never the original files, and queues
+changes while offline.
+
+**Import** scans a chosen folder or suggests newly connected removable media.
+Choose an album and select photos/videos in the virtualized grid; previously
+imported checksums are labelled. Originals are copied safely to the configured
+local `Albums/<album name>` folder and retained there. Offline uploads are
+durable, account-scoped, and replay when connectivity returns; failed uploads
+remain visible in the queue with a retry action. JPEG/PNG/WebP/TIFF thumbnails
+are decoded locally; RAW/HEIC previews use the macOS or Windows native codecs
+when installed, otherwise an explicit placeholder is shown.
+
+**Editing** opens the original image in RapidRAW (or the configured editor),
+downloading it first if needed. **Edit all photos** passes every cached image
+in the album to one GUI launch as file arguments; the editor must support
+that invocation. Sidecar changes trigger an export suggestion. The default
+CLI export produces a quality-100 JPEG with metadata, retained beside the
+original as `<name>-edited-YYYYMMDD.jpg`, then queues an upload. The newest
+edit becomes the stack primary in Immich and local browsing, including the
+original's albums; version thumbnails in Info open the other versions.
+Re-editing always uses the original. Editor executable, export arguments,
+and watched sidecars are configurable in Settings. Immich accepts XMP metadata
+sidecars, not RapidRAW `.rrdata`/`.xml` projects; those remain locally retained.
+
+**Settings** groups preferences into subpages. Storage & cache shows real disk
+usage and enforces a disposable-cache limit without deleting retained originals
+or pending uploads. A currently playing video is protected and any resulting
+over-limit state is explicitly shown. Video quality selects either the
+server-transcoded source or original source independently for streaming and
+offline downloads; available resolutions depend on server capabilities.
+
+**Privacy:** allowlisted generic page and feature events are sent to the
+project's Umami analytics endpoint by default. Photo names, paths, account
+details, server URLs, and credentials are never included. Disable analytics
+in Settings > Privacy to persist an opt-out and send one final disabled event.
+
 ## Technology
 
 - **Desktop:** [Tauri 2](https://v2.tauri.app/) with a Rust backend
@@ -89,4 +142,5 @@ VITE_MAPTILER_API_KEY=your_maptiler_api_key
 ```
 
 Restart the Vite/Tauri development process after changing environment
-variables. Without a key, the info panel falls back to an OpenStreetMap embed.
+variables. Without a key, the info panel falls back to an OpenStreetMap embed and
+the Map page uses OpenStreetMap tiles.

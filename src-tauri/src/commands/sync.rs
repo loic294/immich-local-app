@@ -142,20 +142,28 @@ async fn start_asset_sync_internal(
             None => false,
         };
         if !online {
-            log::warn!("[sync] account {} unreachable — skipping (offline)", account_id);
+            log::warn!(
+                "[sync] account {} unreachable — skipping (offline)",
+                account_id
+            );
             continue;
         }
         match client.get_asset_statistics().await {
             Ok(stats) => {
                 log::warn!(
                     "[sync] account {} reachable, {} assets",
-                    account_id, stats.total
+                    account_id,
+                    stats.total
                 );
                 total_assets += stats.total;
                 reachable.push((account_id, client));
             }
             Err(err) => {
-                log::warn!("[sync] failed to get statistics for account {}: {}", account_id, err);
+                log::warn!(
+                    "[sync] failed to get statistics for account {}: {}",
+                    account_id,
+                    err
+                );
             }
         }
     }
@@ -196,13 +204,10 @@ async fn start_asset_sync_internal(
 
     // Initialize or resume sync state in database
     let sync_state = if is_partial_sync {
-        state
-            .db
-            .resume_sync_state(total_assets)
-            .map_err(|err| {
-                log::warn!("Failed to resume sync state: {}", err);
-                format!("Failed to resume sync state: {}", err)
-            })?
+        state.db.resume_sync_state(total_assets).map_err(|err| {
+            log::warn!("Failed to resume sync state: {}", err);
+            format!("Failed to resume sync state: {}", err)
+        })?
     } else {
         state.db.init_sync_state(total_assets).map_err(|err| {
             log::warn!("Failed to initialize sync state: {}", err);
@@ -212,7 +217,8 @@ async fn start_asset_sync_internal(
 
     log::warn!(
         "Sync state ready (processed: {} / {})",
-        sync_state.processed_assets, sync_state.total_assets
+        sync_state.processed_assets,
+        sync_state.total_assets
     );
 
     let page_size = 100u32;
@@ -277,14 +283,26 @@ async fn sync_all_assets_background(
             match immich.get_all_people().await {
                 Ok(people) => {
                     if let Err(err) = db.upsert_people(account_id, &people) {
-                        log::warn!("[sync] failed to cache people for account {}: {}", account_id, err);
+                        log::warn!(
+                            "[sync] failed to cache people for account {}: {}",
+                            account_id,
+                            err
+                        );
                     }
                 }
-                Err(err) => log::warn!("[sync] failed to fetch people for account {}: {}", account_id, err),
+                Err(err) => log::warn!(
+                    "[sync] failed to fetch people for account {}: {}",
+                    account_id,
+                    err
+                ),
             }
 
             if let Err(err) = refresh_album_cache(account_id, immich.clone(), db.clone()).await {
-                log::warn!("[sync] failed to refresh album cache for account {}: {}", account_id, err);
+                log::warn!(
+                    "[sync] failed to refresh album cache for account {}: {}",
+                    account_id,
+                    err
+                );
             }
         }
 
@@ -306,13 +324,21 @@ async fn sync_all_assets_background(
                 return Ok(());
             }
 
-            log::warn!("[sync] account {} fetching page {} of assets", account_id, page);
+            log::warn!(
+                "[sync] account {} fetching page {} of assets",
+                account_id,
+                page
+            );
 
             let result = immich
                 .get_all_assets_paginated(page, page_size)
                 .await
                 .map_err(|err| {
-                    log::warn!("[sync] failed to fetch assets for account {}: {}", account_id, err);
+                    log::warn!(
+                        "[sync] failed to fetch assets for account {}: {}",
+                        account_id,
+                        err
+                    );
                     format!("Failed to fetch assets: {}", err)
                 })?;
 
@@ -343,13 +369,21 @@ async fn sync_all_assets_background(
             // Save assets to database, tagged with the owning account.
             db.upsert_assets_with_metadata(account_id, &extended_assets)
                 .map_err(|err| {
-                    log::warn!("[sync] failed to save assets for account {}: {}", account_id, err);
+                    log::warn!(
+                        "[sync] failed to save assets for account {}: {}",
+                        account_id,
+                        err
+                    );
                     format!("Failed to save assets: {}", err)
                 })?;
 
             db.replace_asset_people(account_id, &asset_people_links)
                 .map_err(|err| {
-                    log::warn!("[sync] failed to save asset-people links for account {}: {}", account_id, err);
+                    log::warn!(
+                        "[sync] failed to save asset-people links for account {}: {}",
+                        account_id,
+                        err
+                    );
                     format!("Failed to save asset-people links: {}", err)
                 })?;
 
@@ -464,7 +498,8 @@ async fn refresh_single_album(
     if let Err(err) = db.replace_asset_people(account_id, &asset_people_links) {
         log::warn!(
             "Failed to cache asset-people links for album {}: {}",
-            album_id, err
+            album_id,
+            err
         );
     }
 
@@ -476,7 +511,8 @@ async fn refresh_single_album(
     if let Err(err) = db.replace_album_assets(account_id, album_id, &asset_ids) {
         log::warn!(
             "Failed to cache album asset links for album {}: {}",
-            album_id, err
+            album_id,
+            err
         );
     }
 
@@ -578,7 +614,8 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
             Err(err) => {
                 log::warn!(
                     "[sync.refresh_album_list] fetch albums failed for account {}: {}",
-                    account_id, err
+                    account_id,
+                    err
                 );
                 failures.push(format!("account {account_id}: {err}"));
                 continue;
@@ -596,7 +633,10 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
         return Err("offline: server unreachable".to_string());
     }
     if !failures.is_empty() {
-        return Err(format!("album list refresh failed: {}", failures.join("; ")));
+        return Err(format!(
+            "album list refresh failed: {}",
+            failures.join("; ")
+        ));
     }
 
     log::warn!(
@@ -685,12 +725,16 @@ pub async fn scan_saved_local_files(state: tauri::State<'_, AppState>) -> Result
             )?;
             created_changes += 1;
         } else {
-            state
-                .db
-                .resolve_unresolved_local_saved_asset_change(&item.asset_id, &item.local_path, "deleted")?;
-            state
-                .db
-                .resolve_unresolved_local_saved_asset_change(&item.asset_id, &item.local_path, "modified")?;
+            state.db.resolve_unresolved_local_saved_asset_change(
+                &item.asset_id,
+                &item.local_path,
+                "deleted",
+            )?;
+            state.db.resolve_unresolved_local_saved_asset_change(
+                &item.asset_id,
+                &item.local_path,
+                "modified",
+            )?;
         }
     }
 
@@ -740,7 +784,10 @@ pub async fn apply_saved_local_file_changes(
         match change.change_kind.as_str() {
             "deleted" => {
                 // Archive in local cache immediately.
-                if let Err(err) = state.db.update_asset_visibility(&change.asset_id, "archive") {
+                if let Err(err) = state
+                    .db
+                    .update_asset_visibility(&change.asset_id, "archive")
+                {
                     failed_count += 1;
                     errors.push(format!(
                         "failed to update local visibility for asset {}: {}",
@@ -773,7 +820,8 @@ pub async fn apply_saved_local_file_changes(
                             failed_count += 1;
                             let err_lc = err.to_ascii_lowercase();
                             let reason = if err_lc.contains("asset.update access") {
-                                "asset update permission denied (shared/read-only asset)".to_string()
+                                "asset update permission denied (shared/read-only asset)"
+                                    .to_string()
                             } else {
                                 err.clone()
                             };
@@ -789,10 +837,12 @@ pub async fn apply_saved_local_file_changes(
                             "[sync.apply_saved_local_file_changes] offline while archiving asset_id={} queueing mutation",
                             change.asset_id
                         );
-                        if let Err(queue_err) = state
-                            .db
-                            .enqueue_mutation(&account_id, &change.asset_id, "visibility", &payload_json)
-                        {
+                        if let Err(queue_err) = state.db.enqueue_mutation(
+                            &account_id,
+                            &change.asset_id,
+                            "visibility",
+                            &payload_json,
+                        ) {
                             failed_count += 1;
                             errors.push(format!(
                                 "failed to archive asset {} offline and queue mutation: {} / {}",
@@ -804,7 +854,10 @@ pub async fn apply_saved_local_file_changes(
                 }
 
                 // Remove all tracked local copies for this asset from disk.
-                match state.db.list_local_saved_asset_paths_for_asset(&change.asset_id) {
+                match state
+                    .db
+                    .list_local_saved_asset_paths_for_asset(&change.asset_id)
+                {
                     Ok(paths) => {
                         for path in paths {
                             if let Err(err) = fs::remove_file(&path) {
@@ -827,7 +880,10 @@ pub async fn apply_saved_local_file_changes(
                     }
                 }
 
-                if let Err(err) = state.db.delete_local_saved_assets_for_asset(&change.asset_id) {
+                if let Err(err) = state
+                    .db
+                    .delete_local_saved_assets_for_asset(&change.asset_id)
+                {
                     failed_count += 1;
                     errors.push(format!(
                         "failed to clear tracked local copies for asset {}: {}",
@@ -841,10 +897,7 @@ pub async fn apply_saved_local_file_changes(
                     .resolve_local_saved_asset_changes_by_ids(&[change.id])
                 {
                     failed_count += 1;
-                    errors.push(format!(
-                        "failed to resolve change {}: {}",
-                        change.id, err
-                    ));
+                    errors.push(format!("failed to resolve change {}: {}", change.id, err));
                     continue;
                 }
 
@@ -919,7 +972,8 @@ pub async fn apply_saved_local_file_changes(
                             failed_count += 1;
                             let err_lc = err.to_ascii_lowercase();
                             let reason = if err_lc.contains("asset.update access") {
-                                "asset update permission denied (shared/read-only asset)".to_string()
+                                "asset update permission denied (shared/read-only asset)"
+                                    .to_string()
                             } else {
                                 err.clone()
                             };
@@ -930,16 +984,17 @@ pub async fn apply_saved_local_file_changes(
                             continue;
                         }
 
-                        let payload_json =
-                            json!({ "description": next_description }).to_string();
+                        let payload_json = json!({ "description": next_description }).to_string();
                         log::warn!(
                             "[sync.apply_saved_local_file_changes] offline while updating metadata note asset_id={} queueing mutation",
                             change.asset_id
                         );
-                        if let Err(queue_err) = state
-                            .db
-                            .enqueue_mutation(&account_id, &change.asset_id, "description", &payload_json)
-                        {
+                        if let Err(queue_err) = state.db.enqueue_mutation(
+                            &account_id,
+                            &change.asset_id,
+                            "description",
+                            &payload_json,
+                        ) {
                             failed_count += 1;
                             errors.push(format!(
                                 "failed to queue metadata-note mutation for asset {} offline: {} / {}",
@@ -955,10 +1010,7 @@ pub async fn apply_saved_local_file_changes(
                     .resolve_local_saved_asset_changes_by_ids(&[change.id])
                 {
                     failed_count += 1;
-                    errors.push(format!(
-                        "failed to resolve change {}: {}",
-                        change.id, err
-                    ));
+                    errors.push(format!("failed to resolve change {}: {}", change.id, err));
                     continue;
                 }
 
@@ -966,7 +1018,10 @@ pub async fn apply_saved_local_file_changes(
             }
             other => {
                 failed_count += 1;
-                errors.push(format!("unsupported change kind for {}: {}", change.id, other));
+                errors.push(format!(
+                    "unsupported change kind for {}: {}",
+                    change.id, other
+                ));
             }
         }
     }
@@ -1114,7 +1169,8 @@ pub async fn check_for_new_assets(
             Err(err) => {
                 log::warn!(
                     "[sync.check_for_new_assets] failed to get statistics for account {}: {}",
-                    account_id, err
+                    account_id,
+                    err
                 );
                 continue;
             }
@@ -1135,7 +1191,8 @@ pub async fn check_for_new_assets(
             Err(err) => {
                 log::warn!(
                     "[sync.check_for_new_assets] quick sync failed for account {}: {}",
-                    account_id, err
+                    account_id,
+                    err
                 );
                 let _ = state.db.fail_check();
                 return Err(err);
@@ -1214,7 +1271,9 @@ async fn quick_sync_one_account(
         let page_started_at = Instant::now();
         log::warn!(
             "[sync.check_for_new_assets] account {} fetching page={} page_size={}",
-            account_id, page, page_size
+            account_id,
+            page,
+            page_size
         );
 
         let result = immich
@@ -1249,10 +1308,9 @@ async fn quick_sync_one_account(
             }
         }
 
-        if let (Some(window_start), Some(oldest_on_page)) = (
-            overlap_window_start,
-            page_timestamps.iter().min().cloned(),
-        ) {
+        if let (Some(window_start), Some(oldest_on_page)) =
+            (overlap_window_start, page_timestamps.iter().min().cloned())
+        {
             if oldest_on_page <= window_start {
                 overlap_window_reached = true;
                 log::warn!(
@@ -1266,7 +1324,8 @@ async fn quick_sync_one_account(
 
         if let (Some(window_start), Some(window_end)) = (overlap_window_start, overlap_window_end) {
             for asset in &result.items {
-                let Some(created_at) = parse_asset_created_at_utc(asset.file_created_at.as_deref()) else {
+                let Some(created_at) = parse_asset_created_at_utc(asset.file_created_at.as_deref())
+                else {
                     continue;
                 };
 
@@ -1296,9 +1355,7 @@ async fn quick_sync_one_account(
         // newest assets come first, a page with zero new ids means we have
         // reached already-known territory and can stop early.
         let page_ids: Vec<String> = result.items.iter().map(|asset| asset.id.clone()).collect();
-        let new_on_page = db
-            .count_new_asset_ids(&page_ids)
-            .unwrap_or(page_ids.len());
+        let new_on_page = db.count_new_asset_ids(&page_ids).unwrap_or(page_ids.len());
         total_new_items += new_on_page;
 
         // Quick sync must stay cheap. Re-fetching full metadata for every asset
@@ -1308,9 +1365,7 @@ async fn quick_sync_one_account(
         // genuinely new OR fall inside the recent overlap window (so recent
         // edits to already-cached assets are still picked up). Already-cached
         // assets outside the window are left untouched.
-        let existing_ids = db
-            .get_existing_asset_ids(&page_ids)
-            .unwrap_or_default();
+        let existing_ids = db.get_existing_asset_ids(&page_ids).unwrap_or_default();
 
         let (assets_to_enrich, skipped_cached): (
             Vec<crate::services::immich_client::AssetSummary>,
@@ -1427,11 +1482,11 @@ async fn quick_sync_one_account(
                     prune_started_at.elapsed().as_millis()
                 );
             } else {
-                let deleted_count = db
-                    .delete_assets_and_links_by_ids(&stale_ids)
-                    .map_err(|err| {
-                        format!("Failed to prune deleted assets during quick sync: {}", err)
-                    })?;
+                let deleted_count =
+                    db.delete_assets_and_links_by_ids(&stale_ids)
+                        .map_err(|err| {
+                            format!("Failed to prune deleted assets during quick sync: {}", err)
+                        })?;
 
                 log::warn!(
                     "[sync.check_for_new_assets] pruned stale assets in overlap window stale_count={} deleted_rows={} duration_ms={}",
@@ -1510,17 +1565,18 @@ fn get_file_snapshot(path: &Path) -> (Option<i64>, Option<i64>) {
 }
 
 #[derive(Debug, Clone)]
-struct EnrichedAssetRecord {
-    asset: crate::services::db::AssetSummaryExtended,
-    person_ids: Vec<String>,
+pub(crate) struct EnrichedAssetRecord {
+    pub(crate) asset: crate::services::db::AssetSummaryExtended,
+    pub(crate) person_ids: Vec<String>,
 }
 
-fn to_enriched_asset_record(
+pub(crate) fn to_enriched_asset_record(
     asset: crate::services::immich_client::AssetSummary,
     metadata: Option<crate::services::immich_client::AssetMetadata>,
 ) -> EnrichedAssetRecord {
     EnrichedAssetRecord {
         asset: crate::services::db::AssetSummaryExtended {
+            stack: metadata.as_ref().and_then(|m| m.stack.clone()),
             id: asset.id,
             original_file_name: asset.original_file_name.clone(),
             description: metadata.as_ref().and_then(|m| m.description.clone()),

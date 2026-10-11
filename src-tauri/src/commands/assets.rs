@@ -32,7 +32,11 @@ fn is_visible_in_grid(asset: &AssetSummary) -> bool {
         return false;
     }
 
-    let visibility = asset.visibility.as_deref().unwrap_or_default().to_ascii_lowercase();
+    let visibility = asset
+        .visibility
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     visibility != "archive"
 }
 
@@ -231,7 +235,8 @@ pub async fn fetch_assets(
             Err(err) => {
                 log::warn!(
                     "[assets.fetch_assets] fetch failed for account {}: {}",
-                    account_id, err
+                    account_id,
+                    err
                 );
             }
         }
@@ -267,7 +272,8 @@ pub async fn fetch_assets_by_month(
             Err(err) => {
                 log::warn!(
                     "[assets.fetch_assets_by_month] fetch failed for account {}: {}",
-                    account_id, err
+                    account_id,
+                    err
                 );
             }
         }
@@ -321,7 +327,14 @@ pub async fn get_cached_assets(
     let sort = make_sort_params(sort_field, sort_direction);
     let (items, has_next_page) = state
         .db
-        .get_assets(page, page_size, search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
+        .get_assets(
+            page,
+            page_size,
+            search.as_deref(),
+            filter.as_deref(),
+            criteria.as_ref(),
+            Some(&sort),
+        )
         .map_err(|err| format!("cache read failed: {err}"))?;
 
     log::warn!(
@@ -355,7 +368,12 @@ pub async fn get_all_cached_assets(
     let sort = make_sort_params(sort_field, sort_direction);
     state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
+        .get_all_assets(
+            search.as_deref(),
+            filter.as_deref(),
+            criteria.as_ref(),
+            Some(&sort),
+        )
         .map_err(|err| format!("cache read failed: {err}"))
 }
 
@@ -372,7 +390,12 @@ pub async fn get_cached_asset_days(
     let sort = make_sort_params(sort_field, sort_direction);
     let result = state
         .db
-        .get_asset_days(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
+        .get_asset_days(
+            search.as_deref(),
+            filter.as_deref(),
+            criteria.as_ref(),
+            Some(&sort),
+        )
         .map_err(|err| format!("asset day query failed: {err}"))?;
 
     log::warn!(
@@ -443,7 +466,12 @@ pub async fn get_cached_timeline_layout(
     let sort = make_sort_params(sort_field, sort_direction);
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
+        .get_all_assets(
+            search.as_deref(),
+            filter.as_deref(),
+            criteria.as_ref(),
+            Some(&sort),
+        )
         .map_err(|err| format!("timeline layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
@@ -542,7 +570,12 @@ pub async fn get_cached_full_grid_layout(
     let sort = make_sort_params(sort_field, sort_direction);
     let all_assets = state
         .db
-        .get_all_assets(search.as_deref(), filter.as_deref(), criteria.as_ref(), Some(&sort))
+        .get_all_assets(
+            search.as_deref(),
+            filter.as_deref(),
+            criteria.as_ref(),
+            Some(&sort),
+        )
         .map_err(|err| format!("full grid layout cache read failed: {err}"))?;
 
     let layout_assets = all_assets
@@ -644,7 +677,8 @@ pub async fn get_asset_thumbnail(
     if elapsed_ms >= 150 {
         log::warn!(
             "[assets.get_asset_thumbnail] asset_id={} duration_ms={}",
-            asset_id, elapsed_ms
+            asset_id,
+            elapsed_ms
         );
     }
 
@@ -707,11 +741,7 @@ pub async fn get_person_thumbnail(
     let started_at = Instant::now();
     // Route the face-thumbnail load to the account that owns this person so
     // secondary-account faces load from the correct server session.
-    let account_id = state
-        .db
-        .get_person_account_id(&person_id)
-        .ok()
-        .flatten();
+    let account_id = state.db.get_person_account_id(&person_id).ok().flatten();
     let client = state.client_for(account_id.as_deref());
     let result = client
         .get_person_thumbnail_data_url(&person_id)
@@ -722,7 +752,8 @@ pub async fn get_person_thumbnail(
     if elapsed_ms >= 150 {
         log::warn!(
             "[assets.get_person_thumbnail] person_id={} duration_ms={}",
-            person_id, elapsed_ms
+            person_id,
+            elapsed_ms
         );
     }
 
@@ -861,7 +892,12 @@ pub async fn update_asset_description(
             let body = serde_json::json!({ "description": payload.description });
             state
                 .db
-                .enqueue_mutation(&account_id, &payload.asset_id, "description", &body.to_string())
+                .enqueue_mutation(
+                    &account_id,
+                    &payload.asset_id,
+                    "description",
+                    &body.to_string(),
+                )
                 .map_err(|e| format!("failed to queue description update: {e}"))?;
             Ok(())
         }
@@ -957,7 +993,12 @@ pub async fn update_asset_visibility(
             let body = serde_json::json!({ "visibility": payload.visibility });
             state
                 .db
-                .enqueue_mutation(&account_id, &payload.asset_id, "visibility", &body.to_string())
+                .enqueue_mutation(
+                    &account_id,
+                    &payload.asset_id,
+                    "visibility",
+                    &body.to_string(),
+                )
                 .map_err(|e| format!("failed to queue visibility update: {e}"))?;
             state
                 .db
@@ -1011,9 +1052,7 @@ pub async fn update_asset_rating(
 
 /// Number of asset mutations queued locally while offline, awaiting replay.
 #[tauri::command]
-pub async fn get_pending_mutation_count(
-    state: tauri::State<'_, AppState>,
-) -> Result<i64, String> {
+pub async fn get_pending_mutation_count(state: tauri::State<'_, AppState>) -> Result<i64, String> {
     state
         .db
         .count_pending_mutations()
@@ -1024,9 +1063,7 @@ pub async fn get_pending_mutation_count(
 /// Stops early and returns the remaining count if the server becomes
 /// unreachable again. Returns the number of mutations still pending afterwards.
 #[tauri::command]
-pub async fn flush_pending_mutations(
-    state: tauri::State<'_, AppState>,
-) -> Result<i64, String> {
+pub async fn flush_pending_mutations(state: tauri::State<'_, AppState>) -> Result<i64, String> {
     let pending = state
         .db
         .list_pending_mutations()
@@ -1080,11 +1117,24 @@ pub async fn flush_pending_mutations(
                     .map(Some)
             }
             "description" => {
-                let description = payload.get("description").and_then(serde_json::Value::as_str);
+                let description = payload
+                    .get("description")
+                    .and_then(serde_json::Value::as_str);
                 client
                     .update_asset_description(&mutation.asset_id, description)
                     .await
                     .map(Some)
+            }
+            "time" => {
+                // Absolute target timestamp computed when queued, so replay is
+                // idempotent. Metadata only; the cache was updated optimistically.
+                match crate::commands::time::time_replay_target(&payload) {
+                    Ok(date_time_original) => client
+                        .update_asset_date_time_original(&mutation.asset_id, &date_time_original)
+                        .await
+                        .map(|_| None),
+                    Err(err) => Err(err),
+                }
             }
             other => {
                 log::warn!(

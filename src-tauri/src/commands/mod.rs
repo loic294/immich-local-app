@@ -1,8 +1,11 @@
 pub mod albums;
 pub mod assets;
 pub mod auth;
+pub mod browsing;
 pub mod folders;
+pub mod media;
 pub mod memories;
 pub mod settings;
 pub mod shell;
 pub mod sync;
+pub mod time;

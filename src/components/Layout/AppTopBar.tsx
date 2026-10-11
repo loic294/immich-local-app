@@ -1,7 +1,7 @@
 import { X, Trash2, ArchiveRestore } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Session } from "../../hooks/useSession";
-import type { AlbumSummary, SortPreference } from "../../types";
+import type { AlbumSummary, SortPreference, ViewScope } from "../../types";
 import { Header } from "./Header";
 import { SelectionActions } from "./SelectionActions";
 import { useI18n } from "../../i18n";
@@ -27,6 +27,8 @@ interface AppTopBarProps {
   onUnarchiveSelected?: () => Promise<void>;
   /** Whether to show the Filter button (only on photo grid views). */
   showFilterButton?: boolean;
+  /** View the metadata search suggestions are scoped to. */
+  searchScope?: ViewScope;
   /** Whether any filter is currently active. */
   filterActive?: boolean;
   /** Whether the filter bar is currently open. */
@@ -54,6 +56,7 @@ export function AppTopBar({
   onArchiveSelected,
   onUnarchiveSelected,
   showFilterButton = false,
+  searchScope,
   filterActive = false,
   filterOpen = false,
   onToggleFilter,
@@ -234,6 +237,7 @@ export function AppTopBar({
       onLogout={onLogout}
       searchPlaceholder={searchPlaceholder}
       showFilterButton={showFilterButton}
+      searchScope={searchScope}
       filterActive={filterActive}
       filterOpen={filterOpen}
       onToggleFilter={onToggleFilter}

@@ -26,11 +26,31 @@ import { PhotosPage } from "./pages/PhotosPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { DeletedPage } from "./pages/DeletedPage";
+import { PeoplePage } from "./pages/PeoplePage";
+import { MapsPage } from "./pages/MapsPage";
+import { MediaWorkflow } from "./components/Media/MediaWorkflow";
+import type { MapFocus } from "./types/browsing";
 import { useI18n } from "./i18n";
 
 export function App() {
   const { t } = useI18n();
   const [activePage, setActivePage] = useState<AppPage>("photos");
+  const [mapFocus, setMapFocus] = useState<MapFocus | null>(null);
+  useEffect(() => {
+    const openMap = (event: Event) => {
+      const focus = (event as CustomEvent<MapFocus>).detail;
+      if (!focus || !Number.isFinite(focus.latitude) || !Number.isFinite(focus.longitude)) return;
+      console.log("[browsing.map] opening asset location", { assetId: focus.id });
+      setMapFocus(focus);
+      setActivePage("maps");
+    };
+    window.addEventListener("immich:open-map", openMap);
+    return () => window.removeEventListener("immich:open-map", openMap);
+  }, []);
+  const navigate = (page: AppPage) => {
+    setMapFocus(null);
+    setActivePage(page);
+  };
   const [showServerUrlScreen, setShowServerUrlScreen] = useState(false);
   const [applyProgressTotal, setApplyProgressTotal] = useState(0);
   const [applyProgressDone, setApplyProgressDone] = useState(0);
@@ -366,25 +386,38 @@ export function App() {
   const pageContent = (() => {
     switch (activePage) {
       case "albums":
-        return <AlbumsPage session={session} onNavigate={setActivePage} onLogout={logout} />;
+        return <AlbumsPage session={session} onNavigate={navigate} onLogout={logout} />;
+      case "people":
+        return <PeoplePage session={session} onNavigate={navigate} onLogout={logout} />;
+      case "maps":
+        return (
+          <MapsPage
+            key={mapFocus?.id ?? "maps"}
+            session={session}
+            onNavigate={navigate}
+            onLogout={logout}
+            focus={mapFocus}
+          />
+        );
       case "folders":
-        return <FoldersPage session={session} onNavigate={setActivePage} onLogout={logout} />;
+        return <FoldersPage session={session} onNavigate={navigate} onLogout={logout} />;
       case "calendar":
-        return <CalendarPage session={session} onNavigate={setActivePage} onLogout={logout} />;
+        return <CalendarPage session={session} onNavigate={navigate} onLogout={logout} />;
       case "settings":
-        return <SettingsPage onNavigate={setActivePage} onLogout={logout} />;
+        return <SettingsPage onNavigate={navigate} onLogout={logout} />;
       case "favorites":
-        return <FavoritesPage session={session} onNavigate={setActivePage} onLogout={logout} />;
+        return <FavoritesPage session={session} onNavigate={navigate} onLogout={logout} />;
       case "deleted":
-        return <DeletedPage session={session} onNavigate={setActivePage} onLogout={logout} />;
+        return <DeletedPage session={session} onNavigate={navigate} onLogout={logout} />;
       default:
-        return <PhotosPage session={session} onNavigate={setActivePage} onLogout={logout} />;
+        return <PhotosPage session={session} onNavigate={navigate} onLogout={logout} />;
     }
   })();
 
   return (
     <ConnectionProvider value={{ isOnline, pendingCount }}>
       {pageContent}
+      <MediaWorkflow enabled={!!session && !isRestoringSession} page={activePage} />
       <UpdateNotifier update={appUpdate} />
       <LocalSavedFileChangesModal
         open={showLocalFileChangesModal}

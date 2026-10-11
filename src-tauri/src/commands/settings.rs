@@ -1,7 +1,56 @@
+use crate::services::storage::{self, FeaturePreferences, StorageSummary};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+
+#[tauri::command]
+pub async fn get_feature_preferences(
+    state: tauri::State<'_, AppState>,
+) -> Result<FeaturePreferences, String> {
+    state.db.get_feature_preferences()
+}
+
+#[tauri::command]
+pub async fn update_feature_preferences(
+    preferences: FeaturePreferences,
+    state: tauri::State<'_, AppState>,
+) -> Result<FeaturePreferences, String> {
+    let previous_limit = state.db.get_feature_preferences()?.max_cache_bytes;
+    let saved = state.db.update_feature_preferences(&preferences)?;
+    if previous_limit != saved.max_cache_bytes {
+        storage::evict(&state.db, saved.max_cache_bytes, None, true).map_err(|error| {
+            log::error!("[storage.evict] limit enforcement failed: {error}");
+            format!("Cache limit saved, but cleanup failed: {error}")
+        })?;
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn get_storage_summary(
+    state: tauri::State<'_, AppState>,
+) -> Result<StorageSummary, String> {
+    storage::summary(&state.db).map_err(|error| {
+        log::error!("[storage.measure] failed: {error}");
+        error
+    })
+}
+
+#[tauri::command]
+pub async fn clear_disposable_cache(state: tauri::State<'_, AppState>) -> Result<u64, String> {
+    storage::evict(&state.db, 0, None, false).map_err(|error| {
+        log::error!("[storage.evict] manual clear failed: {error}");
+        error
+    })
+}
+
+#[tauri::command]
+pub async fn get_video_quality_options(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    state.immich.get_video_quality_options().await
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

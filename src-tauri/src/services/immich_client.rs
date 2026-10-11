@@ -81,6 +81,8 @@ pub struct AssetSummary {
 #[serde(rename_all = "camelCase")]
 pub struct AssetMetadata {
     #[serde(default)]
+    pub stack: Option<AssetStack>,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub original_path: Option<String>,
@@ -106,6 +108,13 @@ pub struct AssetMetadata {
     pub exif_info_json: Option<String>,
     #[serde(default)]
     pub person_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetStack {
+    pub primary_asset_id: String,
+    pub assets: Vec<AssetSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,9 +215,9 @@ pub struct AuthSession {
 }
 
 pub struct ImmichClient {
-    client: reqwest::Client,
+    pub(crate) client: reqwest::Client,
     cookie_jar: Arc<reqwest::cookie::Jar>,
-    session: Mutex<Option<AuthSession>>,
+    pub(crate) session: Mutex<Option<AuthSession>>,
     playback_downloads: Arc<Mutex<HashSet<String>>>,
     cached_album: Mutex<Option<(String, Vec<AssetSummary>)>>,
     cached_folder: Mutex<Option<(String, Vec<AssetSummary>)>>,
@@ -507,11 +516,7 @@ impl ImmichClient {
             "redirectUri": redirect_uri,
         });
 
-        log::info!(
-            "[oauth:start] POST {} with body {}",
-            authorize_url,
-            params
-        );
+        log::info!("[oauth:start] POST {} with body {}", authorize_url, params);
 
         let response = self
             .client
@@ -541,7 +546,10 @@ impl ImmichClient {
             .and_then(|value| value.get("url").and_then(Value::as_str).map(str::to_string))
             .ok_or_else(|| "OAuth response missing url".to_string())?;
 
-        log::info!("[oauth:start] parsed authorization url: {}", authorization_url);
+        log::info!(
+            "[oauth:start] parsed authorization url: {}",
+            authorization_url
+        );
 
         Ok(authorization_url)
     }
@@ -627,10 +635,8 @@ impl ImmichClient {
         // the in-memory OAuth session as well.
         if let Some(session) = guard.as_ref() {
             if let Ok(url) = reqwest::Url::parse(&normalize_base(&session.server_url)) {
-                self.cookie_jar.add_cookie_str(
-                    "immich_access_token=; Path=/; Max-Age=0",
-                    &url,
-                );
+                self.cookie_jar
+                    .add_cookie_str("immich_access_token=; Path=/; Max-Age=0", &url);
             }
         }
         *guard = None;
@@ -879,7 +885,46 @@ impl ImmichClient {
 
     pub async fn get_asset_metadata(&self, asset_id: &str) -> Result<AssetMetadata, String> {
         let value = self.get_asset_value(asset_id).await?;
-        Ok(parse_asset_metadata_from_value(&value))
+        let mut metadata = parse_asset_metadata_from_value(&value);
+        if let Some(id) = value
+            .get("stack")
+            .and_then(|s| s.get("id"))
+            .and_then(Value::as_str)
+        {
+            let session = self
+                .session
+                .lock()
+                .await
+                .clone()
+                .ok_or("Not authenticated")?;
+            let response = self
+                .client
+                .get(format!(
+                    "{}/api/stacks/{id}",
+                    normalize_base(&session.server_url)
+                ))
+                .header(IMMICH_API_KEY_HEADER, &session.access_token)
+                .send()
+                .await
+                .map_err(|e| format!("Stack {id} refresh failed: {e}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Stack {id} refresh rejected (HTTP {})",
+                    response.status()
+                ));
+            }
+            let stack: Value = response.json().await.map_err(|e| e.to_string())?;
+            let primary = stack
+                .get("primaryAssetId")
+                .and_then(Value::as_str)
+                .ok_or("Stack missing primaryAssetId")?;
+            let assets = parse_asset_array(stack.get("assets").ok_or("Stack missing assets")?)?;
+            metadata.stack = Some(AssetStack {
+                primary_asset_id: primary.into(),
+                assets,
+            });
+        }
+        Ok(metadata)
     }
 
     async fn get_asset_value(&self, asset_id: &str) -> Result<Value, String> {
@@ -1156,7 +1201,10 @@ impl ImmichClient {
         Err(last_error)
     }
 
-    pub async fn create_share_link_for_assets(&self, asset_ids: &[String]) -> Result<String, String> {
+    pub async fn create_share_link_for_assets(
+        &self,
+        asset_ids: &[String],
+    ) -> Result<String, String> {
         if asset_ids.is_empty() {
             return Err("no assets selected".to_string());
         }
@@ -1220,7 +1268,8 @@ impl ImmichClient {
         let url = format!("{}/api/albums/{}/users", session.server_url, album_id);
         log::warn!(
             "[album-share.can-manage] start album_id={} endpoint={}",
-            album_id, url
+            album_id,
+            url
         );
 
         let response = self
@@ -1237,7 +1286,8 @@ impl ImmichClient {
         if status.is_success() {
             log::warn!(
                 "[album-share.can-manage] success album_id={} status={}",
-                album_id, status
+                album_id,
+                status
             );
             return Ok(true);
         }
@@ -1245,7 +1295,8 @@ impl ImmichClient {
         if status.as_u16() == 401 || status.as_u16() == 403 {
             log::warn!(
                 "[album-share.can-manage] forbidden album_id={} status={}",
-                album_id, status
+                album_id,
+                status
             );
             return Ok(false);
         }
@@ -1294,7 +1345,8 @@ impl ImmichClient {
             {
                 log::warn!(
                     "[album-share.link] existing album_id={} status={}",
-                    album_id, list_status
+                    album_id,
+                    list_status
                 );
                 return Ok(existing);
             }
@@ -1321,14 +1373,13 @@ impl ImmichClient {
             .map_err(|err| err.to_string())?;
 
         if fallback_status.is_success() {
-            if let Some(existing) = parse_first_share_url_from_payload(
-                &fallback_body,
-                &session.server_url,
-                album_id,
-            )? {
+            if let Some(existing) =
+                parse_first_share_url_from_payload(&fallback_body, &session.server_url, album_id)?
+            {
                 log::warn!(
                     "[album-share.link] existing album_id={} status={} via=fallback-unfiltered",
-                    album_id, fallback_status
+                    album_id,
+                    fallback_status
                 );
                 return Ok(existing);
             }
@@ -1364,7 +1415,8 @@ impl ImmichClient {
 
         log::warn!(
             "[album-share.link] created album_id={} status={}",
-            album_id, status
+            album_id,
+            status
         );
 
         parse_share_url_from_payload(&body, &session.server_url)
@@ -1452,7 +1504,10 @@ impl ImmichClient {
         Ok(existing)
     }
 
-    pub async fn get_album_share_users(&self, album_id: &str) -> Result<Vec<AlbumShareUser>, String> {
+    pub async fn get_album_share_users(
+        &self,
+        album_id: &str,
+    ) -> Result<Vec<AlbumShareUser>, String> {
         let session = self
             .session
             .lock()
@@ -1466,7 +1521,10 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        log::warn!("[album-share.users] start album_id={} action=list", album_id);
+        log::warn!(
+            "[album-share.users] start album_id={} action=list",
+            album_id
+        );
 
         let users_url = format!("{}/api/albums/{}/users", session.server_url, album_id);
         let users_response = self
@@ -1499,7 +1557,10 @@ impl ImmichClient {
             .await
             .map_err(|err| err.to_string())?;
         let details_status = details_response.status();
-        let details_body = details_response.text().await.map_err(|err| err.to_string())?;
+        let details_body = details_response
+            .text()
+            .await
+            .map_err(|err| err.to_string())?;
 
         if details_status.is_success() {
             let users = parse_album_share_users_payload(&details_body)?;
@@ -1592,7 +1653,9 @@ impl ImmichClient {
 
         log::warn!(
             "[album-share.users] start album_id={} action=add user_id={} role={}",
-            album_id, user_id, role
+            album_id,
+            user_id,
+            role
         );
 
         let mut last_error = String::new();
@@ -1612,7 +1675,9 @@ impl ImmichClient {
             if status.is_success() {
                 log::warn!(
                     "[album-share.users] success album_id={} action=add user_id={} status={}",
-                    album_id, user_id, status
+                    album_id,
+                    user_id,
+                    status
                 );
                 return Ok(());
             }
@@ -1628,7 +1693,11 @@ impl ImmichClient {
         Err(last_error)
     }
 
-    pub async fn remove_user_from_album(&self, album_id: &str, user_id: &str) -> Result<(), String> {
+    pub async fn remove_user_from_album(
+        &self,
+        album_id: &str,
+        user_id: &str,
+    ) -> Result<(), String> {
         let session = self
             .session
             .lock()
@@ -1644,16 +1713,23 @@ impl ImmichClient {
 
         log::warn!(
             "[album-share.users] start album_id={} action=remove user_id={}",
-            album_id, user_id
+            album_id,
+            user_id
         );
 
         let delete_variants = vec![
             (
-                format!("{}/api/albums/{}/users/{}", session.server_url, album_id, user_id),
+                format!(
+                    "{}/api/albums/{}/users/{}",
+                    session.server_url, album_id, user_id
+                ),
                 None,
             ),
             (
-                format!("{}/api/albums/{}/user/{}", session.server_url, album_id, user_id),
+                format!(
+                    "{}/api/albums/{}/user/{}",
+                    session.server_url, album_id, user_id
+                ),
                 None,
             ),
             (
@@ -1676,7 +1752,9 @@ impl ImmichClient {
             if status.is_success() {
                 log::warn!(
                     "[album-share.users] success album_id={} action=remove user_id={} status={}",
-                    album_id, user_id, status
+                    album_id,
+                    user_id,
+                    status
                 );
                 return Ok(());
             }
@@ -1881,7 +1959,9 @@ impl ImmichClient {
                 .send()
                 .await
                 .map_err(|err| {
-                    log::error!("[albums.assets] album_id={album_id} page={page} request failed: {err}");
+                    log::error!(
+                        "[albums.assets] album_id={album_id} page={page} request failed: {err}"
+                    );
                     err.to_string()
                 })?;
             let status = response.status();
@@ -1897,17 +1977,27 @@ impl ImmichClient {
             let count = result.items.len();
             let has_next = result.has_next_page || count >= page_size as usize;
             let before = assets.len();
-            assets.extend(result.items.into_iter().filter(|asset| seen.insert(asset.id.clone())));
+            assets.extend(
+                result
+                    .items
+                    .into_iter()
+                    .filter(|asset| seen.insert(asset.id.clone())),
+            );
             log::info!("[albums.assets] album_id={album_id} page={page} fetched={count}");
             if count == 0 || !has_next {
                 break;
             }
             if assets.len() == before {
-                return Err(format!("album asset pagination made no progress for album {album_id}"));
+                return Err(format!(
+                    "album asset pagination made no progress for album {album_id}"
+                ));
             }
             page += 1;
         }
-        log::info!("[albums.assets] album_id={album_id} complete asset_count={}", assets.len());
+        log::info!(
+            "[albums.assets] album_id={album_id} complete asset_count={}",
+            assets.len()
+        );
         Ok(assets)
     }
 
@@ -1966,7 +2056,10 @@ impl ImmichClient {
                 // Offline / not authenticated: fall back to the cached profile
                 // image so the avatar still renders.
                 if let Some(cached) = read_cached_thumbnail(&cache_dir, &cache_key)? {
-                    log::info!("[profile-image] served cached image (no session) user={}", user_id);
+                    log::info!(
+                        "[profile-image] served cached image (no session) user={}",
+                        user_id
+                    );
                     return Ok(Some(cached));
                 }
                 return Err("not authenticated".to_string());
@@ -2030,6 +2123,7 @@ impl ImmichClient {
                 err
             );
         }
+        crate::services::storage::enforce_cache_limit(&output);
 
         Ok(Some(to_data_url(&content_type, bytes.as_ref())))
     }
@@ -2089,6 +2183,7 @@ impl ImmichClient {
         let ext = extension_from_mime(&content_type);
         let output = cache_dir.join(format!("{}.{}", asset_id, ext));
         fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
+        crate::services::storage::enforce_cache_limit(&output);
 
         Ok(to_data_url(&content_type, bytes.as_ref()))
     }
@@ -2146,6 +2241,7 @@ impl ImmichClient {
         let ext = extension_from_mime(&content_type);
         let output = cache_dir.join(format!("{}.{}", person_id, ext));
         fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
+        crate::services::storage::enforce_cache_limit(&output);
 
         Ok(to_data_url(&content_type, bytes.as_ref()))
     }
@@ -2205,6 +2301,7 @@ impl ImmichClient {
         let ext = extension_from_mime(&content_type);
         let output = cache_dir.join(format!("{}.{}", asset_id, ext));
         fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
+        crate::services::storage::enforce_cache_limit(&output);
 
         Ok(output.to_string_lossy().to_string())
     }
@@ -2214,6 +2311,12 @@ impl ImmichClient {
         asset_id: &str,
         app: Option<tauri::AppHandle>,
     ) -> Result<String, String> {
+        let quality = crate::services::storage::persisted_preferences()?.streaming_video_quality;
+        let cache_id = if quality == crate::services::storage::VideoQuality::Original {
+            format!("{asset_id}.original")
+        } else {
+            asset_id.to_string()
+        };
         let session = self
             .session
             .lock()
@@ -2227,7 +2330,7 @@ impl ImmichClient {
         // A fully-downloaded video is marked with a sibling `.done` file. If that
         // marker exists, the cached file is complete: report completion so the UI
         // clears the downloading badge immediately.
-        if let Some(cached_path) = read_complete_video_path(&cache_dir, asset_id)? {
+        if let Some(cached_path) = read_complete_video_path(&cache_dir, &cache_id)? {
             if let Some(app) = &app {
                 let _ = app.emit(
                     "video_download_progress",
@@ -2243,15 +2346,18 @@ impl ImmichClient {
             return Ok(cached_path);
         }
 
-        let output_path = cache_dir.join(format!("{}.mp4", asset_id));
-        let done_marker = cache_dir.join(format!("{}.mp4.done", asset_id));
+        if !self.ping(&session.server_url).await {
+            return Err("offline: Video is not cached in the selected playback quality".into());
+        }
+        let output_path = cache_dir.join(format!("{}.mp4", cache_id));
+        let done_marker = cache_dir.join(format!("{}.mp4.done", cache_id));
 
         // Acquire the per-asset download guard. If another task is already
         // downloading this video, wait for it to finish and reuse its fully
         // cached file instead of starting a second download.
         let owns_download = {
             let mut downloads = self.playback_downloads.lock().await;
-            downloads.insert(asset_id.to_string())
+            downloads.insert(cache_id.clone())
         };
 
         if !owns_download {
@@ -2259,7 +2365,7 @@ impl ImmichClient {
             // request timeout). We never hand back a partial file.
             for _ in 0..3000 {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                if let Some(cached_path) = read_complete_video_path(&cache_dir, asset_id)? {
+                if let Some(cached_path) = read_complete_video_path(&cache_dir, &cache_id)? {
                     if let Some(app) = &app {
                         let _ = app.emit(
                             "video_download_progress",
@@ -2277,7 +2383,7 @@ impl ImmichClient {
 
                 let still_downloading = {
                     let downloads = self.playback_downloads.lock().await;
-                    downloads.contains(asset_id)
+                    downloads.contains(&cache_id)
                 };
                 if !still_downloading {
                     break;
@@ -2287,7 +2393,7 @@ impl ImmichClient {
             // The other download finished without producing a complete file (it
             // failed) or timed out; take ownership and download it ourselves.
             let mut downloads = self.playback_downloads.lock().await;
-            downloads.insert(asset_id.to_string());
+            downloads.insert(cache_id.clone());
         }
 
         // Download the ENTIRE file before returning. The webview media element
@@ -2299,17 +2405,17 @@ impl ImmichClient {
             .download_playback_to_cache(
                 &session.access_token,
                 &session.server_url,
-                &cache_dir,
                 &output_path,
                 &done_marker,
                 asset_id,
                 &app,
+                quality,
             )
             .await;
 
         {
             let mut downloads = self.playback_downloads.lock().await;
-            downloads.remove(asset_id);
+            downloads.remove(&cache_id);
         }
 
         result
@@ -2324,18 +2430,24 @@ impl ImmichClient {
         &self,
         access_token: &str,
         server_url: &str,
-        cache_dir: &Path,
         output_path: &Path,
         done_marker: &Path,
         asset_id: &str,
         app: &Option<tauri::AppHandle>,
+        quality: crate::services::storage::VideoQuality,
     ) -> Result<String, String> {
         let mut headers = HeaderMap::new();
         let header_value = HeaderValue::from_str(access_token)
             .map_err(|err| format!("invalid access token header: {err}"))?;
         headers.insert(IMMICH_API_KEY_HEADER, header_value);
 
-        let url = format!("{}/api/assets/{}/video/playback", server_url, asset_id);
+        let endpoint = if quality == crate::services::storage::VideoQuality::Original {
+            "original"
+        } else {
+            "video/playback"
+        };
+        log::info!("[video.quality] playback asset={asset_id} quality={quality:?}");
+        let url = format!("{}/api/assets/{}/{}", server_url, asset_id, endpoint);
 
         // Override the short default client timeout — large videos can take well
         // over 30s to download in full.
@@ -2359,7 +2471,7 @@ impl ImmichClient {
 
         // Clear any stale markers/partials before a fresh download.
         let _ = fs::remove_file(done_marker);
-        let temp_path = cache_dir.join(format!("{}.mp4.part", asset_id));
+        let temp_path = output_path.with_extension("mp4.part");
         let mut file = tokio::fs::File::create(&temp_path)
             .await
             .map_err(|err| format!("failed to create playback cache file: {err}"))?;
@@ -2409,6 +2521,7 @@ impl ImmichClient {
         let _ = fs::File::create(done_marker);
 
         emit_video_progress(app, asset_id, downloaded, total_bytes, true);
+        crate::services::storage::enforce_cache_limit(output_path);
 
         Ok(output_path.to_string_lossy().to_string())
     }
@@ -2425,7 +2538,26 @@ impl ImmichClient {
         &self,
         asset_id: &str,
         destination_path: &Path,
+        on_progress: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(u64, Option<u64>),
+    {
+        self.download_asset_to_path(
+            asset_id,
+            destination_path,
+            on_progress,
+            crate::services::storage::VideoQuality::Original,
+        )
+        .await
+    }
+
+    pub async fn download_asset_to_path<F>(
+        &self,
+        asset_id: &str,
+        destination_path: &Path,
         mut on_progress: F,
+        quality: crate::services::storage::VideoQuality,
     ) -> Result<(), String>
     where
         F: FnMut(u64, Option<u64>),
@@ -2443,15 +2575,26 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        let endpoints = [
-            format!("{}/api/assets/{}/original", session.server_url, asset_id),
-            format!("{}/api/asset/{}/original", session.server_url, asset_id),
-            format!(
-                "{}/api/assets/{}/download-original",
+        if !self.ping(&session.server_url).await {
+            return Err("offline: Downloads require a server connection".into());
+        }
+        log::info!("[video.quality] download asset={asset_id} quality={quality:?}");
+        let endpoints = if quality == crate::services::storage::VideoQuality::Server {
+            vec![format!(
+                "{}/api/assets/{}/video/playback",
                 session.server_url, asset_id
-            ),
-            format!("{}/api/assets/{}/download", session.server_url, asset_id),
-        ];
+            )]
+        } else {
+            vec![
+                format!("{}/api/assets/{}/original", session.server_url, asset_id),
+                format!("{}/api/asset/{}/original", session.server_url, asset_id),
+                format!(
+                    "{}/api/assets/{}/download-original",
+                    session.server_url, asset_id
+                ),
+                format!("{}/api/assets/{}/download", session.server_url, asset_id),
+            ]
+        };
 
         let mut last_error: Option<String> = None;
 
@@ -2522,8 +2665,10 @@ impl ImmichClient {
             if !wrote_any {
                 let _ = tokio::fs::remove_file(destination_path).await;
                 if last_error.is_none() {
-                    last_error =
-                        Some(format!("download original returned empty body from {}", url));
+                    last_error = Some(format!(
+                        "download original returned empty body from {}",
+                        url
+                    ));
                 }
                 continue;
             }
@@ -2535,12 +2680,14 @@ impl ImmichClient {
             return Ok(());
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            "download original failed for all attempted endpoints".to_string()
-        }))
+        Err(last_error
+            .unwrap_or_else(|| "download original failed for all attempted endpoints".to_string()))
     }
 
-    pub async fn get_cached_thumbnail_path(&self, asset_id: &str) -> Result<Option<String>, String> {
+    pub async fn get_cached_thumbnail_path(
+        &self,
+        asset_id: &str,
+    ) -> Result<Option<String>, String> {
         let cache_dir = thumbnail_cache_dir()?;
         fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
         Ok(read_cached_thumbnail_path(&cache_dir, asset_id)
@@ -2550,7 +2697,33 @@ impl ImmichClient {
     pub async fn get_cached_video_path(&self, asset_id: &str) -> Result<Option<String>, String> {
         let cache_dir = video_cache_dir()?;
         fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
-        read_complete_video_path(&cache_dir, asset_id)
+        let quality = crate::services::storage::persisted_preferences()?.streaming_video_quality;
+        let cache_id = if quality == crate::services::storage::VideoQuality::Original {
+            format!("{asset_id}.original")
+        } else {
+            asset_id.to_string()
+        };
+        read_complete_video_path(&cache_dir, &cache_id)
+    }
+
+    pub async fn get_video_quality_options(&self) -> Result<serde_json::Value, String> {
+        let session = self.session.lock().await.clone();
+        let online = match session {
+            Some(session) => self.ping(&session.server_url).await,
+            None => false,
+        };
+        Ok(serde_json::json!({
+            "online": online,
+            "options": [
+                {"value": "server", "label": "Immich playback (server-transcoded when available)"},
+                {"value": "original", "label": "Original file"}
+            ],
+            "message": if online {
+                "Immich normal playback does not accept a requested resolution. Playback uses the server's existing transcode, or the original when no transcode is available. Original quality downloads the source file; codec support depends on your device."
+            } else {
+                "Offline: preferences can still be saved. Video downloads require connectivity; playback uses files already cached in the selected quality. Fixed resolutions are unavailable through Immich normal playback."
+            }
+        }))
     }
 
     pub async fn update_asset_favorite(
@@ -3070,11 +3243,15 @@ fn parse_album_summary(mut value: Value) -> Result<AlbumSummary, String> {
         .filter(|owner| owner.get("id").and_then(Value::as_str).is_some())
         .cloned()
         .or_else(|| {
-            value.get("albumUsers")?.as_array()?.iter().find_map(|entry| {
-                (entry.get("role").and_then(Value::as_str) == Some("owner"))
-                    .then(|| entry.get("user").cloned())
-                    .flatten()
-            })
+            value
+                .get("albumUsers")?
+                .as_array()?
+                .iter()
+                .find_map(|entry| {
+                    (entry.get("role").and_then(Value::as_str) == Some("owner"))
+                        .then(|| entry.get("user").cloned())
+                        .flatten()
+                })
         });
     if let Some(owner) = owner {
         if value.get("ownerId").and_then(Value::as_str).is_none() {
@@ -3114,21 +3291,32 @@ mod album_response_tests {
             let parsed = parse_album_list(&payload.to_string()).unwrap();
             assert_eq!(parsed.len(), 1);
             assert_eq!(parsed[0].owner_id, "owner-1");
-            assert_eq!(parsed[0].owner.as_ref().unwrap().name.as_deref(), Some("Owner"));
+            assert_eq!(
+                parsed[0].owner.as_ref().unwrap().name.as_deref(),
+                Some("Owner")
+            );
         }
         for payload in [
             album.clone(),
             serde_json::json!({ "album": album.clone() }),
             serde_json::json!({ "items": [album] }),
         ] {
-            assert_eq!(parse_album_from_payload(&payload.to_string()).unwrap().owner_id, "owner-1");
+            assert_eq!(
+                parse_album_from_payload(&payload.to_string())
+                    .unwrap()
+                    .owner_id,
+                "owner-1"
+            );
         }
     }
 
     #[test]
     fn preserves_legacy_ownership() {
         let payload = r#"{"id":"album-1","albumName":"Legacy","ownerId":"legacy-owner"}"#;
-        assert_eq!(parse_album_from_payload(payload).unwrap().owner_id, "legacy-owner");
+        assert_eq!(
+            parse_album_from_payload(payload).unwrap().owner_id,
+            "legacy-owner"
+        );
         let mut album = modern_album();
         album["ownerId"] = Value::String("legacy-owner".to_string());
         assert_eq!(parse_album_summary(album).unwrap().owner_id, "legacy-owner");
@@ -3137,8 +3325,12 @@ mod album_response_tests {
     #[test]
     fn rejects_missing_ownership_instead_of_guessing() {
         let payload = r#"{"id":"album-1","albumName":"Invalid","albumUsers":[]}"#;
-        assert!(parse_album_from_payload(payload).unwrap_err().contains("ownerId"));
-        assert!(parse_album_list(&format!("[{payload}]")).unwrap_err().contains("ownerId"));
+        assert!(parse_album_from_payload(payload)
+            .unwrap_err()
+            .contains("ownerId"));
+        assert!(parse_album_list(&format!("[{payload}]"))
+            .unwrap_err()
+            .contains("ownerId"));
     }
 
     #[test]
@@ -3259,7 +3451,6 @@ fn is_share_candidate_for_album(value: &Value, album_id: &str) -> bool {
 }
 
 fn parse_share_url_from_value(value: &Value, base_url: &str) -> Result<String, String> {
-
     let key = value
         .get("key")
         .and_then(Value::as_str)
@@ -3384,10 +3575,7 @@ fn parse_user_candidates_payload(payload: &str) -> Result<Vec<AlbumUserCandidate
             continue;
         };
 
-        let name = user
-            .get("name")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let name = user.get("name").and_then(Value::as_str).map(str::to_string);
         let email = user
             .get("email")
             .and_then(Value::as_str)
@@ -3672,6 +3860,7 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
     let (people, person_ids) = extract_people_data(people_items);
 
     AssetMetadata {
+        stack: None,
         description: value
             .get("description")
             .and_then(Value::as_str)

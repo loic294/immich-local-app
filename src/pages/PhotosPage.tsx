@@ -24,7 +24,7 @@ import { useAssetFilters } from "../hooks/useAssetFilters";
 import { useSortPreference } from "../hooks/useSortPreference";
 import { FilterBar } from "../components/Filters/FilterBar";
 import { useRef } from "react";
-import type { AssetFilter, ViewScope } from "../types";
+import { criteriaWithQuery, type AssetFilter, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
 
 interface PhotosPageProps {
@@ -34,6 +34,7 @@ interface PhotosPageProps {
   activePage?: AppPage;
   assetFilter?: AssetFilter;
   searchLabel?: string;
+  initialPersonId?: string;
 }
 
 export function PhotosPage({
@@ -43,6 +44,7 @@ export function PhotosPage({
   activePage = "photos",
   assetFilter = "all",
   searchLabel,
+  initialPersonId,
 }: PhotosPageProps) {
   const { t } = useI18n();
   const effectiveSearchLabel = searchLabel ?? t("photos.searchLabel");
@@ -63,7 +65,17 @@ export function PhotosPage({
   const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}:${archiveRefreshNonce}`;
 
   const filters = useAssetFilters(`photos:${assetFilter}`);
+  useEffect(() => {
+    if (initialPersonId) {
+      filters.update({ personId: initialPersonId });
+      filters.setOpen(true);
+    }
+  }, [initialPersonId, filters.update, filters.setOpen]);
   const filterPayload = filters.payload;
+  const fixTimeCriteria = useMemo(
+    () => criteriaWithQuery(filterPayload, searchTerm),
+    [filterPayload, searchTerm],
+  );
   const filterScope = useMemo<ViewScope>(
     () => ({ kind: "all", filter: assetFilter }),
     [assetFilter],
@@ -258,6 +270,7 @@ export function PhotosPage({
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
           showFilterButton
+          searchScope={filterScope}
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
           onToggleFilter={filters.toggleOpen}
@@ -332,6 +345,8 @@ export function PhotosPage({
             <PhotoGrid
               assets={assets}
               hideArchivedAssets={assetFilter !== "archived"}
+              viewScope={filterScope}
+              viewCriteria={fixTimeCriteria}
               onSelectedCountChange={setSelectedCount}
               onSelectedIdsChange={setSelectedAssetIds}
               selectionCommand={selectionCommand}

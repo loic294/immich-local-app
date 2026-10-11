@@ -1,4 +1,10 @@
-import type { AssetSummary, GridLayoutResponse, TimelineLayoutResponse } from "../../types";
+import type {
+  AssetFilterCriteria,
+  AssetSummary,
+  GridLayoutResponse,
+  TimelineLayoutResponse,
+  ViewScope,
+} from "../../types";
 
 export type SelectionCommand = {
   type: "clear" | "select-all";
@@ -22,6 +28,10 @@ export type PhotoGridProps = {
   onSelectedCountChange?: (count: number) => void;
   onSelectedIdsChange?: (ids: string[]) => void;
   selectionCommand?: SelectionCommand;
+  /** Current view, used as the reference source of the Fix time dialog. */
+  viewScope?: ViewScope;
+  /** Current view criteria (filters + metadata query) for the Fix time reference panel. */
+  viewCriteria?: AssetFilterCriteria | null;
 };
 
 export type VirtualEntry =

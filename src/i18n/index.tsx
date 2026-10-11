@@ -29,6 +29,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
     nav: {
       photos: "Photos",
       albums: "Albums",
+      people: "People",
+      maps: "Map",
       calendar: "Calendar",
       folders: "Folders",
       favorites: "Favorites",
@@ -491,6 +493,8 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
     nav: {
       photos: "Photos",
       albums: "Albums",
+      people: "Personnes",
+      maps: "Carte",
       calendar: "Calendrier",
       folders: "Dossiers",
       favorites: "Favoris",

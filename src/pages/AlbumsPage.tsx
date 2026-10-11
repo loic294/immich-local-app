@@ -10,13 +10,14 @@ import { PageBackButton } from "../components/Layout/PageBackButton";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { FilterBar } from "../components/Filters/FilterBar";
+import { EditAllPhotosButton } from "../components/Albums/EditAllPhotosButton";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
 import { useAssetFilters } from "../hooks/useAssetFilters";
 import { useSortPreference } from "../hooks/useSortPreference";
 import { useConnectionContext } from "../hooks/connectionContext";
 import type { Session } from "../hooks/useSession";
-import type { AlbumSummary, ViewScope } from "../types";
+import { criteriaWithQuery, type AlbumSummary, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
 import {
   addAssetsToAlbum,
@@ -68,7 +69,17 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const { isOnline } = useConnectionContext();
 
   const filters = useAssetFilters(`album:${selectedAlbumId ?? ""}`);
-  const filterPayload = filters.payload;
+  // Album list: the search box filters album names. Inside an album it is a
+  // metadata query applied in SQLite (debounced) through the criteria payload.
+  const [albumSearchTerm, setAlbumSearchTerm] = useState("");
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setAlbumSearchTerm(searchInput.trim()), 300);
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
+  const filterPayload = useMemo(
+    () => criteriaWithQuery(filters.payload, selectedAlbumId ? albumSearchTerm : null),
+    [albumSearchTerm, filters.payload, selectedAlbumId],
+  );
   const filterScope = useMemo<ViewScope>(
     () => ({ kind: "album", albumId: selectedAlbumId }),
     [selectedAlbumId],
@@ -101,8 +112,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [selectedAlbumId, albumRefreshNonce, filterPayload, sortPreference],
   );
-  const albumLoadFullLayout =
-    selectedAlbumId && searchInput.trim().length === 0 ? albumGridFullLayout : undefined;
+  const albumLoadFullLayout = selectedAlbumId ? albumGridFullLayout : undefined;
 
   const albumsQuery = useAlbums(true);
   const selectedAlbum = useMemo(
@@ -215,15 +225,10 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     };
   }, [selectedAlbumId]);
 
-  const filteredAlbumAssets = useMemo(() => {
-    const term = searchInput.trim().toLowerCase();
-    const assets = albumAssetsQuery.data?.pages.flatMap((page) => page.items) ?? [];
-    if (!term) {
-      return assets;
-    }
-
-    return assets.filter((asset) => asset.originalFileName.toLowerCase().includes(term));
-  }, [albumAssetsQuery.data?.pages, searchInput]);
+  const filteredAlbumAssets = useMemo(
+    () => albumAssetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [albumAssetsQuery.data?.pages],
+  );
 
   const filteredAlbums = useMemo(() => {
     const allAlbums = albumsQuery.data ?? [];
@@ -533,6 +538,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           }}
           searchPlaceholder={selectedAlbumId ? t("albums.searchInAlbum") : t("albums.searchAlbums")}
           showFilterButton={selectedAlbumId !== null}
+          searchScope={selectedAlbumId ? filterScope : undefined}
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
           onToggleFilter={filters.toggleOpen}
@@ -581,6 +587,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
+                  <EditAllPhotosButton albumId={selectedAlbum.id} />
                   {!isAlbumSavedLocally ? (
                     <button
                       type="button"
@@ -689,6 +696,8 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                   maxHeight={photoGridHeight}
                   onLoadMore={() => albumAssetsQuery.fetchNextPage().then(() => undefined)}
                   loadFullLayout={albumLoadFullLayout}
+                  viewScope={filterScope}
+                  viewCriteria={filterPayload}
                 />
               )}
 

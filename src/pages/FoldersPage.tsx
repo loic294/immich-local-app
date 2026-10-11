@@ -18,7 +18,7 @@ import {
   updateAssetVisibility,
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
-import type { ViewScope } from "../types";
+import { criteriaWithQuery, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
 
 interface FoldersPageProps {
@@ -27,11 +27,7 @@ interface FoldersPageProps {
   onLogout: () => void;
 }
 
-export function FoldersPage({
-  session,
-  onNavigate,
-  onLogout,
-}: FoldersPageProps) {
+export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps) {
   const { t } = useI18n();
   const [currentPath, setCurrentPath] = useState("/");
   const [searchInput, setSearchInput] = useState("");
@@ -46,7 +42,17 @@ export function FoldersPage({
   const folderPathsQuery = useFolderPaths(true);
 
   const filters = useAssetFilters(`folder:${currentPath}`);
-  const filterPayload = filters.payload;
+  const [searchTerm, setSearchTerm] = useState("");
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setSearchTerm(searchInput.trim()), 300);
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
+  // Metadata search runs in SQLite through the same criteria as the filters,
+  // so the paged list and the full grid layout stay aligned.
+  const filterPayload = useMemo(
+    () => criteriaWithQuery(filters.payload, searchTerm),
+    [filters.payload, searchTerm],
+  );
   const filterScope = useMemo<ViewScope>(
     () => ({ kind: "folder", path: currentPath }),
     [currentPath],
@@ -67,10 +73,7 @@ export function FoldersPage({
       return;
     }
 
-    if (
-      currentPath !== "/" &&
-      !paths.some((path) => path.startsWith(currentPath))
-    ) {
+    if (currentPath !== "/" && !paths.some((path) => path.startsWith(currentPath))) {
       setCurrentPath("/");
     }
   }, [currentPath, paths]);
@@ -87,10 +90,7 @@ export function FoldersPage({
     [assetsQuery.data?.pages],
   );
 
-  const subfolders = useMemo(
-    () => getDirectChildFolders(paths, currentPath),
-    [currentPath, paths],
-  );
+  const subfolders = useMemo(() => getDirectChildFolders(paths, currentPath), [currentPath, paths]);
 
   const breadcrumbs = useMemo(
     () => getBreadcrumbs(currentPath, t("folders.root")),
@@ -99,16 +99,15 @@ export function FoldersPage({
   const hasSubfolders = subfolders.length > 0;
   const hasFolderAssets = allAssets.length > 0;
   const shouldShowPhotoGrid =
-    assetsQuery.isLoading || assetsQuery.isFetchingNextPage || hasFolderAssets;
+    assetsQuery.isLoading ||
+    assetsQuery.isFetchingNextPage ||
+    hasFolderAssets ||
+    searchTerm.length > 0 ||
+    filters.isActive;
 
   const loadFolderFullLayout = useCallback(
     (containerWidth: number) =>
-      getCachedFolderFullGridLayout(
-        currentPath,
-        containerWidth,
-        filterPayload,
-        sortPreference,
-      ),
+      getCachedFolderFullGridLayout(currentPath, containerWidth, filterPayload, sortPreference),
     [currentPath, filterPayload, sortPreference],
   );
 
@@ -132,15 +131,9 @@ export function FoldersPage({
       }
 
       const container = contentRef.current;
-      const folderHeader = container.querySelector(
-        '[data-test="folder-header"]',
-      ) as HTMLElement;
-      const subfoldersSection = container.querySelector(
-        '[data-test="subfolders"]',
-      ) as HTMLElement;
-      const errorAlert = container.querySelector(
-        '[data-test="error-alert"]',
-      ) as HTMLElement;
+      const folderHeader = container.querySelector('[data-test="folder-header"]') as HTMLElement;
+      const subfoldersSection = container.querySelector('[data-test="subfolders"]') as HTMLElement;
+      const errorAlert = container.querySelector('[data-test="error-alert"]') as HTMLElement;
 
       const padding = 16;
       let usedHeight = padding;
@@ -208,14 +201,10 @@ export function FoldersPage({
               await addAssetsToAlbum(albumId, selectedAssetIds);
             }
           }}
-          onCreateShareLinkForSelected={async () =>
-            createShareLinkForAssets(selectedAssetIds)
-          }
+          onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
           onArchiveSelected={async () => {
             await Promise.all(
-              selectedAssetIds.map((assetId) =>
-                updateAssetVisibility(assetId, "archive"),
-              ),
+              selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
             );
             await assetsQuery.refetch();
           }}
@@ -227,6 +216,7 @@ export function FoldersPage({
           }}
           searchPlaceholder={t("folders.searchPlaceholder")}
           showFilterButton={shouldShowPhotoGrid}
+          searchScope={filterScope}
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
           onToggleFilter={filters.toggleOpen}
@@ -234,8 +224,7 @@ export function FoldersPage({
           sortPreference={sortPreference}
           onSortChange={(patch) => {
             if (patch.field !== undefined) setSortField(patch.field);
-            if (patch.direction !== undefined)
-              setSortDirection(patch.direction);
+            if (patch.direction !== undefined) setSortDirection(patch.direction);
           }}
         />
 
@@ -250,23 +239,15 @@ export function FoldersPage({
           />
         )}
 
-        <section
-          ref={contentRef}
-          className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4"
-        >
-          <div
-            data-test="folder-header"
-            className="shrink-0 flex flex-col gap-2"
-          >
+        <section ref={contentRef} className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4">
+          <div data-test="folder-header" className="shrink-0 flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <PageBackButton
                 ariaLabel={t("folders.backAria")}
                 disabled={currentPath === "/"}
                 onClick={() => setCurrentPath(getParentPath(currentPath))}
               />
-              <h1 className="m-0 text-2xl font-bold text-base-content">
-                {t("folders.title")}
-              </h1>
+              <h1 className="m-0 text-2xl font-bold text-base-content">{t("folders.title")}</h1>
             </div>
 
             <div className="flex items-center gap-1 text-xs text-base-content/70">
@@ -326,8 +307,7 @@ export function FoldersPage({
               className="shrink-0 alert alert-error alert-soft text-sm"
             >
               <span>
-                {(assetsQuery.error as Error | null)?.message ??
-                  t("folders.loadFolderFailed")}
+                {(assetsQuery.error as Error | null)?.message ?? t("folders.loadFolderFailed")}
               </span>
             </div>
           ) : shouldShowPhotoGrid ? (
@@ -340,17 +320,14 @@ export function FoldersPage({
               isFetching={assetsQuery.isFetchingNextPage}
               hasNextPage={Boolean(assetsQuery.hasNextPage)}
               maxHeight={photoGridHeight}
-              onLoadMore={() =>
-                assetsQuery.fetchNextPage().then(() => undefined)
-              }
+              onLoadMore={() => assetsQuery.fetchNextPage().then(() => undefined)}
               loadFullLayout={loadFolderFullLayout}
+              viewScope={filterScope}
+              viewCriteria={filterPayload}
             />
           ) : null}
 
-          {!assetsQuery.isLoading &&
-          !assetsQuery.isError &&
-          !hasSubfolders &&
-          !hasFolderAssets ? (
+          {!assetsQuery.isLoading && !assetsQuery.isError && !hasSubfolders && !hasFolderAssets ? (
             <div className="rounded-xl bg-base-100 px-3 py-4 text-sm text-base-content/60 ring-1 ring-base-300/80">
               {t("folders.emptyFolder")}
             </div>
@@ -395,8 +372,7 @@ function getDirectChildFolders(paths: string[], parentPath: string) {
       continue;
     }
 
-    const childPath =
-      parentPath === "/" ? `/${firstSegment}` : `${parentPath}/${firstSegment}`;
+    const childPath = parentPath === "/" ? `/${firstSegment}` : `${parentPath}/${firstSegment}`;
 
     if (!lookup.has(childPath)) {
       lookup.set(childPath, {

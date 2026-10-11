@@ -195,6 +195,8 @@ export type AssetFilterCriteria = {
   camera: string | null;
   personId: string | null;
   accountId: string | null;
+  /** Structured metadata search query (e.g. `beach camera:sony after:2023`), parsed in Rust. */
+  query?: string | null;
 };
 
 export const DEFAULT_FILTER_CRITERIA: AssetFilterCriteria = {
@@ -206,6 +208,7 @@ export const DEFAULT_FILTER_CRITERIA: AssetFilterCriteria = {
   camera: null,
   personId: null,
   accountId: null,
+  query: null,
 };
 
 /** The dimension by which assets are sorted. */
@@ -234,7 +237,8 @@ export function isFilterActive(criteria: AssetFilterCriteria): boolean {
     criteria.mediaType != null ||
     (criteria.camera != null && criteria.camera !== "") ||
     (criteria.personId != null && criteria.personId !== "") ||
-    (criteria.accountId != null && criteria.accountId !== "")
+    (criteria.accountId != null && criteria.accountId !== "") ||
+    (criteria.query != null && criteria.query.trim() !== "")
   );
 }
 
@@ -244,6 +248,21 @@ export function isFilterActive(criteria: AssetFilterCriteria): boolean {
  */
 export function criteriaPayload(criteria: AssetFilterCriteria): AssetFilterCriteria | null {
   return isFilterActive(criteria) ? criteria : null;
+}
+
+/**
+ * Merge a metadata search query into a criteria payload so bounded views
+ * (album/folder/month) filter in SQLite exactly like the paged/full layouts.
+ */
+export function criteriaWithQuery(
+  payload: AssetFilterCriteria | null,
+  query: string | null | undefined,
+): AssetFilterCriteria | null {
+  const trimmed = query?.trim() ?? "";
+  if (!trimmed) {
+    return payload;
+  }
+  return { ...(payload ?? DEFAULT_FILTER_CRITERIA), query: trimmed };
 }
 
 /** The kind of photo grid view a filter is scoped to. */

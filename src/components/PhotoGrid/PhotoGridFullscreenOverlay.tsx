@@ -19,6 +19,8 @@ import { ZoomControl } from "./ZoomControl";
 import { isVideoAsset } from "./photoGridUtils";
 import { useAssetState } from "../../hooks/useAssetState";
 import { AssetStatusBadge } from "./AssetStatusBadge";
+import { requestMediaEdit } from "../../api/media";
+import { useMediaLabels } from "../../i18n/media";
 
 interface PhotoGridFullscreenOverlayProps {
   activeAsset: AssetSummary;
@@ -88,6 +90,7 @@ export function PhotoGridFullscreenOverlay({
   onUpdateDescription,
 }: PhotoGridFullscreenOverlayProps) {
   const { t } = useI18n();
+  const mediaLabels = useMediaLabels();
   const [isDownloading, setIsDownloading] = React.useState(false);
   const downloadProgressRef = React.useRef<number>(0);
   const [downloadProgress, setDownloadProgress] = React.useState<number | null>(null);
@@ -224,6 +227,18 @@ export function PhotoGridFullscreenOverlay({
           </>
         ) : null}
 
+        {!isVideoAsset(activeAsset) && (
+          <button
+            type="button"
+            className="btn btn-sm border border-white/15 bg-zinc-900 text-white"
+            onClick={(event) => {
+              event.stopPropagation();
+              requestMediaEdit([activeAsset.id]);
+            }}
+          >
+            {mediaLabels.edit}
+          </button>
+        )}
         <div className="h-4 border-l border-white/25" />
         <SelectionActions
           selectedAssetIds={[activeAsset.id]}

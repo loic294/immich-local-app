@@ -84,11 +84,14 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
-        run: npm i
+        run: npm ci
 
       - name: Apply computed version
         shell: bash
         run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
+
+      - name: Test backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0

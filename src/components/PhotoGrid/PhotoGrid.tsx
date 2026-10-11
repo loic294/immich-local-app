@@ -42,6 +42,8 @@ import {
 } from "./photoGridUtils";
 import { usePhotoGridSelection } from "./usePhotoGridSelection";
 import { usePhotoGridVirtualLayout } from "./usePhotoGridVirtualLayout";
+import { usePhotoGridExternalEvents } from "./usePhotoGridExternalEvents";
+import { FixTimeHost } from "../FixTime/FixTimeHost";
 
 export function PhotoGrid({
   assets,
@@ -60,6 +62,8 @@ export function PhotoGrid({
   onSelectedCountChange,
   onSelectedIdsChange,
   selectionCommand,
+  viewScope,
+  viewCriteria,
 }: PhotoGridProps) {
   const { t } = useI18n();
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -408,6 +412,23 @@ export function PhotoGrid({
     [assetOverrides, assets, hideArchivedAssets],
   );
 
+  const { extraLightboxAsset, setExtraLightboxAsset, layoutRefreshNonce } =
+    usePhotoGridExternalEvents(displayAssets, (assetId, candidates) => {
+      const index = candidates.findIndex((asset) => asset.id === assetId);
+      if (index >= 0) {
+        showAssetAtIndex(index, true);
+      }
+    });
+  // Lightbox navigation list: the grid assets plus an out-of-page stack version, if one was opened.
+  const lightboxAssets = useMemo(
+    () =>
+      extraLightboxAsset && !displayAssets.some((asset) => asset.id === extraLightboxAsset.id)
+        ? [...displayAssets, extraLightboxAsset]
+        : displayAssets,
+    [displayAssets, extraLightboxAsset],
+  );
+  const isViewingExtraAsset = lightboxAssets.length > displayAssets.length;
+
   // Full-layout mode only reloads when its effect dependencies change. Track
   // the currently hidden archived/visibility IDs so archive apply actions
   // trigger a layout reload instead of leaving stale rows visible.
@@ -499,7 +520,7 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [loadTimelineLayout, viewportWidth]);
+  }, [layoutRefreshNonce, loadTimelineLayout, viewportWidth]);
 
   useEffect(() => {
     latestVirtualEntriesRef.current = virtualEntries;
@@ -540,7 +561,7 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [hiddenArchivedAssetIdsKey, loadFullLayout, viewportWidth]);
+  }, [hiddenArchivedAssetIdsKey, layoutRefreshNonce, loadFullLayout, viewportWidth]);
 
   // Scroll-position-based load triggers used in full layout mode
   // (IntersectionObserver sentinels are disabled in this mode)
@@ -887,8 +908,8 @@ export function PhotoGrid({
     };
   }, [displayAssets, viewportWidth]);
 
-  const hasActive = activeIndex !== null && activeIndex >= 0 && activeIndex < displayAssets.length;
-  const activeAsset = hasActive && activeIndex !== null ? displayAssets[activeIndex] : null;
+  const hasActive = activeIndex !== null && activeIndex >= 0 && activeIndex < lightboxAssets.length;
+  const activeAsset = hasActive && activeIndex !== null ? lightboxAssets[activeIndex] : null;
 
   useEffect(() => {
     if (activeAsset) {
@@ -1162,7 +1183,7 @@ export function PhotoGrid({
     return () => {
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeIndex, displayAssets.length, hasActive]);
+  }, [activeIndex, lightboxAssets.length, hasActive]);
 
   useEffect(() => {
     if (!activeAsset) {
@@ -1236,6 +1257,7 @@ export function PhotoGrid({
 
   const closeLightbox = () => {
     setActiveIndex(null);
+    setExtraLightboxAsset(null);
     resetFullscreenPlayback(false);
   };
 
@@ -1252,12 +1274,12 @@ export function PhotoGrid({
       return;
     }
 
-    if (activeIndex < displayAssets.length - 1) {
+    if (activeIndex < lightboxAssets.length - 1) {
       showAssetAtIndex(activeIndex + 1, true);
       return;
     }
 
-    if (hasNextPage) {
+    if (hasNextPage && !isViewingExtraAsset) {
       pendingFullscreenAdvanceRef.current = true;
       requestFullscreenLoadMore();
     }
@@ -1269,7 +1291,7 @@ export function PhotoGrid({
       return;
     }
 
-    if (!hasNextPage) {
+    if (!hasNextPage || isViewingExtraAsset) {
       return;
     }
 
@@ -1277,7 +1299,14 @@ export function PhotoGrid({
     if (remaining <= 2) {
       requestFullscreenLoadMore();
     }
-  }, [activeIndex, displayAssets.length, hasNextPage, isFetching, pendingJumpDateKey]);
+  }, [
+    activeIndex,
+    displayAssets.length,
+    hasNextPage,
+    isFetching,
+    isViewingExtraAsset,
+    pendingJumpDateKey,
+  ]);
 
   useEffect(() => {
     if (!pendingFullscreenAdvanceRef.current || activeIndex === null) {
@@ -1653,8 +1682,8 @@ export function PhotoGrid({
         <PhotoGridFullscreenOverlay
           activeAsset={activeAsset}
           activeIndex={activeIndex}
-          displayAssets={displayAssets}
-          hasNextPage={hasNextPage}
+          displayAssets={lightboxAssets}
+          hasNextPage={hasNextPage && !isViewingExtraAsset}
           activeSrc={activeSrc}
           activeStillSrc={activeStillSrc}
           activeFullsizeStillSrc={activeFullsizeStillSrc}
@@ -1692,6 +1721,8 @@ export function PhotoGrid({
           }}
         />
       ) : null}
+
+      <FixTimeHost viewScope={viewScope} criteria={viewCriteria} />
 
       <DatePickerModal
         isOpen={showDatePicker}

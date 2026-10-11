@@ -5,7 +5,9 @@ import {
   Heart,
   Image,
   Images,
+  Map,
   Settings,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { SyncStatusCard } from "./SyncStatusCard";
@@ -14,6 +16,7 @@ import { useConnectionContext } from "../../hooks/connectionContext";
 import { useSettings } from "../../hooks/useSettings";
 import { useI18n } from "../../i18n";
 import logoUrl from "../../assets/logo_with_title.svg";
+import { useBrowsingI18n } from "../../i18n/browsing";
 
 interface SidebarProps {
   activePage: AppPage;
@@ -25,6 +28,8 @@ export type AppPage =
   | "favorites"
   | "deleted"
   | "albums"
+  | "people"
+  | "maps"
   | "folders"
   | "calendar"
   | "settings";
@@ -33,6 +38,8 @@ export type AppPage =
 export type MenuItemKey =
   | "photos"
   | "albums"
+  | "people"
+  | "maps"
   | "calendar"
   | "folders"
   | "favorites"
@@ -54,6 +61,8 @@ type MenuItemDef = {
 export const MENU_ITEMS: MenuItemDef[] = [
   { key: "photos", labelKey: "nav.photos", icon: Image, group: "main" },
   { key: "albums", labelKey: "nav.albums", icon: Images, group: "main" },
+  { key: "people", labelKey: "nav.people", icon: UsersRound, group: "library" },
+  { key: "maps", labelKey: "nav.maps", icon: Map, group: "library" },
   {
     key: "calendar",
     labelKey: "nav.calendar",
@@ -72,19 +81,15 @@ export const MENU_ITEMS: MenuItemDef[] = [
 
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const { t } = useI18n();
+  const bt = useBrowsingI18n();
   const { isOnline, pendingCount } = useConnectionContext();
   const settingsQuery = useSettings();
   // Until settings load, show every item so navigation is never empty.
   const visibleKeys = settingsQuery.data?.menuItems;
-  const isVisible = (key: MenuItemKey) =>
-    visibleKeys ? visibleKeys.includes(key) : true;
+  const isVisible = (key: MenuItemKey) => (visibleKeys ? visibleKeys.includes(key) : true);
 
-  const mainItems = MENU_ITEMS.filter(
-    (item) => item.group === "main" && isVisible(item.key),
-  );
-  const libraryItems = MENU_ITEMS.filter(
-    (item) => item.group === "library" && isVisible(item.key),
-  );
+  const mainItems = MENU_ITEMS.filter((item) => item.group === "main" && isVisible(item.key));
+  const libraryItems = MENU_ITEMS.filter((item) => item.group === "library" && isVisible(item.key));
 
   const navClass = (page: AppPage) =>
     page === activePage
@@ -109,7 +114,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
                   onClick={() => onNavigate?.(key)}
                 >
                   <Icon size={16} className="shrink-0" />
-                  <span>{t(labelKey)}</span>
+                  <span>{key === "people" || key === "maps" ? bt(key) : t(labelKey)}</span>
                 </button>
               ))}
             </nav>
@@ -129,7 +134,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
                     onClick={() => onNavigate?.(key)}
                   >
                     <Icon size={16} className="shrink-0" />
-                    <span>{t(labelKey)}</span>
+                    <span>{key === "people" || key === "maps" ? bt(key) : t(labelKey)}</span>
                   </button>
                 ))}
               </nav>
@@ -148,11 +153,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
               <span>{t("nav.settings")}</span>
             </button>
           </nav>
-          {isOnline === false ? (
-            <OfflineBanner pendingCount={pendingCount} />
-          ) : (
-            <SyncStatusCard />
-          )}
+          {isOnline === false ? <OfflineBanner pendingCount={pendingCount} /> : <SyncStatusCard />}
         </div>
       </div>
     </aside>

@@ -1,4 +1,3 @@
-import { useCallback } from "react";
 import type { AssetStateStatus } from "../../hooks/useAssetState";
 import { getStatusBadgeContent } from "./assetStatusBadge.utils";
 import { useI18n } from "../../i18n";
@@ -39,11 +38,11 @@ export function AssetStatusBadge({
   const Icon = badgeContent.icon;
   const isClickable = badgeContent.isClickable;
 
-  const handleClick = useCallback(() => {
+  const handleClick = () => {
     if (isClickable && onDownloadClick) {
       onDownloadClick();
     }
-  }, [isClickable, onDownloadClick]);
+  };
 
   return (
     <button

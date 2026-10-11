@@ -33,10 +33,7 @@ export function CanvasImageViewer({
   const touchStartXRef = useRef<number | null>(null);
 
   // Calculate distance between two touch points
-  const getTouchDistance = (
-    touch1: React.Touch,
-    touch2: React.Touch,
-  ): number => {
+  const getTouchDistance = (touch1: React.Touch, touch2: React.Touch): number => {
     const dx = touch1.clientX - touch2.clientX;
     const dy = touch1.clientY - touch2.clientY;
     return Math.sqrt(dx * dx + dy * dy);
@@ -44,6 +41,7 @@ export function CanvasImageViewer({
 
   // Load image
   useEffect(() => {
+    if (!src) return;
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
@@ -54,6 +52,10 @@ export function CanvasImageViewer({
       console.error("Failed to load image in canvas viewer");
     };
     img.src = src;
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+    };
   }, [src]);
 
   useEffect(() => {
@@ -174,8 +176,7 @@ export function CanvasImageViewer({
       const distance = getTouchDistance(e.touches[0], e.touches[1]);
       touchDistanceRef.current = distance;
       touchZoomStartRef.current = zoom;
-      touchStartXRef.current =
-        (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      touchStartXRef.current = (e.touches[0].clientX + e.touches[1].clientX) / 2;
       setIsDragging(true);
     }
   };
@@ -192,10 +193,7 @@ export function CanvasImageViewer({
 
       // Convert distance change to zoom change (adjust sensitivity as needed)
       const zoomDelta = (distanceDelta / 100) * 50;
-      const newZoom = Math.max(
-        5,
-        Math.min(800, touchZoomStartRef.current + zoomDelta),
-      );
+      const newZoom = Math.max(5, Math.min(800, touchZoomStartRef.current + zoomDelta));
 
       onZoomChange(newZoom);
     }
@@ -205,8 +203,7 @@ export function CanvasImageViewer({
     if (e.touches.length < 2) {
       // Two-finger swipe detection
       if (touchStartXRef.current !== null && e.changedTouches.length >= 2) {
-        const endX =
-          (e.changedTouches[0].clientX + e.changedTouches[1].clientX) / 2;
+        const endX = (e.changedTouches[0].clientX + e.changedTouches[1].clientX) / 2;
         const swipeDelta = touchStartXRef.current - endX;
 
         // If swipe is significant (at least 50px)

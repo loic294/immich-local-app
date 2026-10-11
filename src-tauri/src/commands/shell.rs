@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::services::storage::VideoQuality;
 use crate::AppState;
 use serde::Serialize;
-use tauri::Manager;
 use tauri::Emitter;
+use tauri::Manager;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -133,7 +134,10 @@ pub async fn copy_assets_to_local_folder_internal(
         let details = match state.db.get_asset_details(&asset_id) {
             Ok(Some(value)) => value,
             Ok(None) => {
-                log::info!("[local-copy] asset not found in cache asset_id={}", asset_id);
+                log::info!(
+                    "[local-copy] asset not found in cache asset_id={}",
+                    asset_id
+                );
                 failed_count += 1;
                 // Emit progress
                 if let Some(ref app) = app {
@@ -153,7 +157,8 @@ pub async fn copy_assets_to_local_folder_internal(
             Err(err) => {
                 log::info!(
                     "[local-copy] failed to read cached details asset_id={} error={}",
-                    asset_id, err
+                    asset_id,
+                    err
                 );
                 failed_count += 1;
                 // Emit progress
@@ -177,20 +182,52 @@ pub async fn copy_assets_to_local_folder_internal(
         // and the file is still present on disk, reuse it instead of downloading
         // again. This deduplicates repeated save requests (e.g. the download
         // badge copying then auto-zooming, which triggers a second copy).
+        let is_video = matches!(
+            infer_cache_kind(details.r#type.as_deref(), details.duration.as_deref()),
+            CacheKind::Video
+        );
+        let video_quality = if is_video {
+            match state.db.get_feature_preferences() {
+                Ok(preferences) => preferences.offline_video_quality,
+                Err(err) => {
+                    log::warn!(
+                        "[local-copy] could not read offline video quality asset_id={} err={}; using original",
+                        details.id,
+                        err
+                    );
+                    VideoQuality::Original
+                }
+            }
+        } else {
+            VideoQuality::Original
+        };
+        let wants_transcoded = video_quality == VideoQuality::Server;
+        let tracked_kind = if wants_transcoded {
+            crate::services::storage::transcoded_source_kind(source_kind)
+        } else {
+            source_kind.to_string()
+        };
+        // Only reuse a copy of the same fidelity: a server-transcoded video must
+        // never satisfy a request for the original (and vice versa).
         let already_saved = state
             .db
-            .list_local_saved_asset_paths_for_asset(&details.id)
+            .list_local_saved_asset_sources(&details.id)
             .unwrap_or_default()
             .into_iter()
-            .find(|saved_path| {
+            .find(|(saved_path, saved_kind)| {
                 let saved = Path::new(saved_path);
-                saved.is_file() && saved.parent() == Some(destination.as_path())
-            });
+                saved.is_file()
+                    && saved.parent() == Some(destination.as_path())
+                    && crate::services::storage::is_original_source_kind(saved_kind)
+                        != wants_transcoded
+            })
+            .map(|(saved_path, _)| saved_path);
 
         if let Some(saved_path) = already_saved {
             log::info!(
                 "[local-copy] reusing existing local copy asset_id={} path={}",
-                details.id, saved_path
+                details.id,
+                saved_path
             );
             // Reserve the name so a different asset in this batch doesn't collide.
             if let Some(name) = Path::new(&saved_path)
@@ -221,50 +258,62 @@ pub async fn copy_assets_to_local_folder_internal(
         // server and written directly into the user's local folder.
 
         log::info!(
-            "[local-copy] attempting server original download asset_id={}",
-            details.id
+            "[local-copy] attempting server download asset_id={} video={} quality={:?}",
+            details.id,
+            is_video,
+            video_quality
         );
         let (_account_id, client) = state.account_and_client_for_asset(&details.id);
-        let dest_path =
-            resolve_destination_path(&details.original_file_name, &destination, &mut used_names);
+        let destination_name = if wants_transcoded {
+            transcoded_file_name(&details.original_file_name)
+        } else {
+            details.original_file_name.clone()
+        };
+        let dest_path = resolve_destination_path(&destination_name, &destination, &mut used_names);
         let progress_app = app.clone();
         let progress_asset_id = details.id.clone();
         match client
-            .download_asset_original_to_path(&details.id, &dest_path, |downloaded, total| {
-                if let Some(ref app) = progress_app {
-                    let percent = total.and_then(|total| {
-                        if total == 0 {
-                            None
-                        } else {
-                            Some(((downloaded.min(total) * 100) / total) as u32)
-                        }
-                    });
-                    let _ = app.emit(
-                        "asset_download_progress",
-                        AssetDownloadProgress {
-                            asset_id: progress_asset_id.clone(),
-                            downloaded_bytes: downloaded,
-                            total_bytes: total,
-                            percent,
-                        },
-                    );
-                }
-            })
+            .download_asset_to_path(
+                &details.id,
+                &dest_path,
+                |downloaded, total| {
+                    if let Some(ref app) = progress_app {
+                        let percent = total.and_then(|total| {
+                            if total == 0 {
+                                None
+                            } else {
+                                Some(((downloaded.min(total) * 100) / total) as u32)
+                            }
+                        });
+                        let _ = app.emit(
+                            "asset_download_progress",
+                            AssetDownloadProgress {
+                                asset_id: progress_asset_id.clone(),
+                                downloaded_bytes: downloaded,
+                                total_bytes: total,
+                                percent,
+                            },
+                        );
+                    }
+                },
+                video_quality,
+            )
             .await
         {
             Ok(()) => {
                 log::info!(
-                    "[local-copy] downloaded original from server to local folder asset_id={} path={}",
+                    "[local-copy] downloaded from server to local folder asset_id={} path={} source_kind={}",
                     details.id,
-                    dest_path.to_string_lossy()
+                    dest_path.to_string_lossy(),
+                    tracked_kind
                 );
                 let (mtime_ms, size_bytes) = get_file_snapshot(&dest_path);
                 if let Err(err) = state.db.upsert_local_saved_asset(
                     &details.id,
                     album_id,
                     &dest_path.to_string_lossy(),
-                    &details.original_file_name,
-                    source_kind,
+                    &destination_name,
+                    &tracked_kind,
                     mtime_ms,
                     size_bytes,
                 ) {
@@ -275,11 +324,12 @@ pub async fn copy_assets_to_local_folder_internal(
                         err
                     );
                 }
-                if let Err(err) =
-                    state
-                        .db
-                        .mark_asset_local_versions(&details.id, false, false, true)
-                {
+                if let Err(err) = state.db.mark_asset_local_versions(
+                    &details.id,
+                    false,
+                    wants_transcoded,
+                    !wants_transcoded,
+                ) {
                     log::warn!(
                         "[local-copy] failed to mark local versions asset_id={} err={}",
                         details.id,
@@ -313,8 +363,9 @@ pub async fn copy_assets_to_local_folder_internal(
                         .unwrap_or_default(),
                 );
                 log::info!(
-                    "[local-copy] server original download failed asset_id={} error={}",
-                    details.id, err
+                    "[local-copy] server download failed asset_id={} error={}",
+                    details.id,
+                    err
                 );
             }
         }
@@ -332,7 +383,8 @@ pub async fn copy_assets_to_local_folder_internal(
             Err(err) => {
                 log::info!(
                     "[local-copy] cache check failed asset_id={} error={}",
-                    details.id, err
+                    details.id,
+                    err
                 );
                 None
             }
@@ -382,7 +434,7 @@ pub async fn copy_assets_to_local_folder_internal(
                         album_id,
                         &copied_path.to_string_lossy(),
                         &fallback.original_file_name,
-                        source_kind,
+                        &crate::services::storage::cached_source_kind(source_kind),
                         mtime_ms,
                         size_bytes,
                     ) {
@@ -468,7 +520,10 @@ pub async fn copy_assets_to_clipboard(
     let mut paths: Vec<String> = Vec::with_capacity(asset_ids.len());
 
     for asset_id in asset_ids {
-        log::info!("[clipboard] resolving thumbnail path for asset_id={}", asset_id);
+        log::info!(
+            "[clipboard] resolving thumbnail path for asset_id={}",
+            asset_id
+        );
         let (_account_id, client) = state.account_and_client_for_asset(&asset_id);
         let thumbnail_path = client
             .get_asset_thumbnail_file_path(&asset_id)
@@ -476,7 +531,8 @@ pub async fn copy_assets_to_clipboard(
             .map_err(|err| {
                 log::info!(
                     "[clipboard] failed to resolve thumbnail path for asset_id={}: {}",
-                    asset_id, err
+                    asset_id,
+                    err
                 );
                 format!("failed to load thumbnail for {asset_id}: {err}")
             })?;
@@ -484,7 +540,8 @@ pub async fn copy_assets_to_clipboard(
         let asset = client.get_asset(&asset_id).await.map_err(|err| {
             log::info!(
                 "[clipboard] failed to resolve asset details for asset_id={}: {}",
-                asset_id, err
+                asset_id,
+                err
             );
             format!("failed to load asset details for {asset_id}: {err}")
         })?;
@@ -612,6 +669,17 @@ fn resolve_destination_path(
 
     let unique_name = make_unique_name(&base_name, used_names);
     destination_dir.join(unique_name)
+}
+
+/// Server-transcoded playback is always MP4, so keep the original stem and use
+/// an `.mp4` extension that cannot be mistaken for the original file.
+fn transcoded_file_name(original_file_name: &str) -> String {
+    let stem = Path::new(original_file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("video");
+    format!("{stem}.transcoded.mp4")
 }
 
 fn infer_cache_kind(asset_type: Option<&str>, duration: Option<&str>) -> CacheKind {

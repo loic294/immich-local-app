@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::commands::settings::{MyPhotosRule, Settings};
 use crate::services::immich_client::AssetSummary;
 
+#[path = "metadata_search.rs"]
+pub(crate) mod metadata_search;
+
 /// Boxed SQL parameters used when a query is assembled dynamically (e.g. the
 /// optional [`AssetFilterCriteria`] fragment). Binding order matches the
 /// positional `?N` placeholders in the assembled SQL.
@@ -38,6 +41,9 @@ pub struct AssetFilterCriteria {
     pub person_id: Option<String>,
     /// Account id to scope the result set to a single account's assets.
     pub account_id: Option<String>,
+    /// Structured metadata search (see `metadata_search`), e.g.
+    /// `camera:sony after:2023 -tag:work beach`.
+    pub query: Option<String>,
 }
 
 impl AssetFilterCriteria {
@@ -47,10 +53,36 @@ impl AssetFilterCriteria {
         self.rating.is_none()
             && self.favorite_only != Some(true)
             && self.my_photos_only != Some(true)
-            && self.media_type.as_deref().map(str::trim).unwrap_or("").is_empty()
-            && self.camera.as_deref().map(str::trim).unwrap_or("").is_empty()
-            && self.person_id.as_deref().map(str::trim).unwrap_or("").is_empty()
-            && self.account_id.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && self
+                .media_type
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            && self
+                .camera
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            && self
+                .person_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            && self
+                .account_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            && self
+                .query
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
     }
 }
 
@@ -167,7 +199,10 @@ fn scope_asset_ids_query(scope: &ViewScope) -> (String, DynParams) {
         }
         _ => {
             let filter_clause = asset_filter_where_clause(scope.filter.as_deref());
-            format!("SELECT id AS asset_id FROM assets WHERE ({})", filter_clause)
+            format!(
+                "SELECT id AS asset_id FROM assets WHERE ({})",
+                filter_clause
+            )
         }
     };
     (sql, params)
@@ -226,7 +261,10 @@ fn load_my_photos_rules(conn: &Connection) -> Vec<MyPhotosRule> {
     let mut stmt = match conn.prepare("SELECT value FROM settings WHERE key = ?1") {
         Ok(stmt) => stmt,
         Err(err) => {
-            log::warn!("[my-photos.rules] failed to prepare settings query: {}", err);
+            log::warn!(
+                "[my-photos.rules] failed to prepare settings query: {}",
+                err
+            );
             return Vec::new();
         }
     };
@@ -262,11 +300,7 @@ fn rule_matches_asset(rule: &MyPhotosRule, camera: &str, day: &str, today: &str)
         return day <= today;
     }
 
-    let Some(end_day) = rule
-        .end_date
-        .as_deref()
-        .and_then(normalize_date_only)
-    else {
+    let Some(end_day) = rule.end_date.as_deref().and_then(normalize_date_only) else {
         return false;
     };
 
@@ -299,10 +333,10 @@ fn criteria_filter(
 ) -> (String, DynParams) {
     let mut params: DynParams = Vec::new();
     let Some(criteria) = criteria.filter(|c| !c.is_empty()) else {
-        return (String::new(), params);
+        return (format!(" AND {id_column} IN (SELECT id FROM assets WHERE COALESCE(is_stack_secondary,0)=0)"), params);
     };
 
-    let mut conditions: Vec<String> = Vec::new();
+    let mut conditions: Vec<String> = vec!["COALESCE(is_stack_secondary,0)=0".into()];
     let mut next_index = start_index;
 
     if let Some(rating) = criteria.rating {
@@ -360,7 +394,10 @@ fn criteria_filter(
             if rule.end_date_current {
                 clause.push_str(" AND substr(file_created_at, 1, 10) <= date('now', 'localtime'))");
             } else if let Some(end_day) = end_day {
-                clause.push_str(&format!(" AND substr(file_created_at, 1, 10) <= ?{})", next_index));
+                clause.push_str(&format!(
+                    " AND substr(file_created_at, 1, 10) <= ?{})",
+                    next_index
+                ));
                 params.push(Box::new(end_day));
                 next_index += 1;
             }
@@ -370,9 +407,7 @@ fn criteria_filter(
         }
 
         if rule_conditions.is_empty() {
-            log::warn!(
-                "[my-photos.filter] active but no valid rules found; forcing empty result"
-            );
+            log::warn!("[my-photos.filter] active but no valid rules found; forcing empty result");
             conditions.push("0=1".to_string());
         } else {
             log::warn!(
@@ -385,9 +420,11 @@ fn criteria_filter(
 
     match criteria.media_type.as_deref().map(str::trim) {
         Some("video") => conditions.push(video_predicate()),
-        Some("raw") => {
-            conditions.push(format!("(NOT {} AND {})", video_predicate(), raw_predicate()))
-        }
+        Some("raw") => conditions.push(format!(
+            "(NOT {} AND {})",
+            video_predicate(),
+            raw_predicate()
+        )),
         Some("photo") => conditions.push(format!(
             "(NOT {} AND NOT {})",
             video_predicate(),
@@ -432,6 +469,20 @@ fn criteria_filter(
         }
     }
 
+    if let Some(query) = criteria.query.as_deref().map(str::trim) {
+        if !query.is_empty() {
+            let (query_conditions, query_params) = metadata_search::metadata_query_conditions(
+                query,
+                next_index,
+                &video_predicate(),
+                &raw_predicate(),
+            );
+            next_index += query_params.len();
+            conditions.extend(query_conditions);
+            params.extend(query_params);
+        }
+    }
+
     let _ = next_index;
 
     if conditions.is_empty() {
@@ -451,7 +502,14 @@ fn criteria_filter(
 /// reachable. Keep these keys in sync with the frontend `AppPage` values.
 pub fn default_menu_items() -> Vec<String> {
     [
-        "photos", "albums", "calendar", "folders", "favorites", "deleted",
+        "photos",
+        "albums",
+        "calendar",
+        "folders",
+        "people",
+        "maps",
+        "favorites",
+        "deleted",
     ]
     .iter()
     .map(|item| item.to_string())
@@ -460,6 +518,49 @@ pub fn default_menu_items() -> Vec<String> {
 
 fn default_menu_items_json() -> String {
     serde_json::to_string(&default_menu_items()).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn migrate_browsing_menu(conn: &Connection) -> Result<(), String> {
+    let migrated: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key='browsing_menu_migrated')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if migrated {
+        return Ok(());
+    }
+    let raw: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='menu_items'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut items: Vec<String> = serde_json::from_str(&raw)
+        .map_err(|error| format!("Cannot migrate navigation preferences: {error}"))?;
+    for name in ["people", "maps"] {
+        if !items.iter().any(|item| item == name) {
+            items.push(name.into());
+        }
+    }
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    tx.execute(
+        "UPDATE settings SET value=?1 WHERE key='menu_items'",
+        [serde_json::to_string(&items).map_err(|error| error.to_string())?],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute(
+        "INSERT INTO settings(key,value) VALUES('browsing_menu_migrated','true')",
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
+    log::info!("[browsing:menu] added People and Maps to existing navigation");
+    Ok(())
 }
 
 fn normalize_locale(raw: &str) -> String {
@@ -546,6 +647,8 @@ pub struct LocalSavedAssetChange {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetSummaryExtended {
+    #[serde(default)]
+    pub stack: Option<crate::services::immich_client::AssetStack>,
     pub id: String,
     pub original_file_name: String,
     pub description: Option<String>,
@@ -640,6 +743,13 @@ pub struct Database {
 }
 
 impl Database {
+    #[cfg(test)]
+    pub(crate) fn test_database(path: PathBuf) -> Result<Self, String> {
+        let db = Self { db_path: path };
+        db.init()?;
+        Ok(db)
+    }
+
     pub fn new() -> Result<Self, String> {
         let mut app_dir = dirs_home().ok_or_else(|| "cannot resolve home directory".to_string())?;
         app_dir.push(".config");
@@ -873,6 +983,7 @@ impl Database {
             ("thumbnail_local", "BOOLEAN DEFAULT 0"),
             ("preview_local", "BOOLEAN DEFAULT 0"),
             ("full_resolution_local", "BOOLEAN DEFAULT 0"),
+            ("is_stack_secondary", "BOOLEAN DEFAULT 0"),
         ];
 
         for (col_name, col_type) in required_columns {
@@ -953,6 +1064,7 @@ impl Database {
             params![default_menu_items_json()],
         )
         .map_err(|err| err.to_string())?;
+        migrate_browsing_menu(&conn)?;
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('my_photos_rules', '[]')",
             [],
@@ -1000,8 +1112,7 @@ impl Database {
             .unwrap_or(false);
 
         if !has_column {
-            let sql =
-                format!("ALTER TABLE {table} ADD COLUMN account_id TEXT NOT NULL DEFAULT ''");
+            let sql = format!("ALTER TABLE {table} ADD COLUMN account_id TEXT NOT NULL DEFAULT ''");
             if let Err(err) = conn.execute(&sql, []) {
                 log::warn!("[accounts] failed to add account_id to {table}: {err}");
             } else {
@@ -1044,7 +1155,6 @@ impl Database {
         }
         Ok(())
     }
-
 
     pub fn save_auth_credentials(&self, server_url: &str, api_key: &str) -> Result<(), String> {
         let conn = self.open()?;
@@ -1139,8 +1249,11 @@ impl Database {
         .map_err(|err| err.to_string())?;
 
         // Reset AUTOINCREMENT for pending mutation ids.
-        tx.execute("DELETE FROM sqlite_sequence WHERE name = 'pending_mutations'", [])
-            .map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM sqlite_sequence WHERE name = 'pending_mutations'",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
 
         tx.commit().map_err(|err| err.to_string())
     }
@@ -1309,7 +1422,10 @@ impl Database {
 
     pub fn get_account(&self, id: &str) -> Result<Option<Account>, String> {
         let conn = self.open()?;
-        let sql = format!("SELECT {} FROM accounts WHERE id = ?1", Self::ACCOUNT_COLUMNS);
+        let sql = format!(
+            "SELECT {} FROM accounts WHERE id = ?1",
+            Self::ACCOUNT_COLUMNS
+        );
         let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
         stmt.query_row(params![id], Self::row_to_account)
             .map(Some)
@@ -1356,8 +1472,10 @@ impl Database {
 
     pub fn count_accounts(&self) -> Result<i64, String> {
         let conn = self.open()?;
-        conn.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get::<_, i64>(0))
-            .map_err(|err| err.to_string())
+        conn.query_row("SELECT COUNT(*) FROM accounts", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|err| err.to_string())
     }
 
     /// Mark `id` as the only primary account.
@@ -1878,7 +1996,7 @@ impl Database {
         Ok(())
     }
 
-    fn open(&self) -> Result<Connection, String> {
+    pub(crate) fn open(&self) -> Result<Connection, String> {
         Connection::open(&self.db_path).map_err(|err| err.to_string())
     }
 
@@ -2015,10 +2133,9 @@ impl Database {
             .map_err(|err| err.to_string())?;
 
         let rows = stmt
-            .query_map(
-                params![account_id, window_start, window_end],
-                |row| row.get::<_, String>(0),
-            )
+            .query_map(params![account_id, window_start, window_end], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|err| err.to_string())?;
 
         let mut ids = Vec::new();
@@ -2041,18 +2158,24 @@ impl Database {
             .collect::<Vec<_>>()
             .join(",");
 
-        let delete_asset_people_sql =
-            format!("DELETE FROM asset_people WHERE asset_id IN ({})", placeholders);
+        let delete_asset_people_sql = format!(
+            "DELETE FROM asset_people WHERE asset_id IN ({})",
+            placeholders
+        );
         tx.execute(&delete_asset_people_sql, params_from_iter(ids.iter()))
             .map_err(|err| err.to_string())?;
 
-        let delete_album_assets_sql =
-            format!("DELETE FROM album_assets WHERE asset_id IN ({})", placeholders);
+        let delete_album_assets_sql = format!(
+            "DELETE FROM album_assets WHERE asset_id IN ({})",
+            placeholders
+        );
         tx.execute(&delete_album_assets_sql, params_from_iter(ids.iter()))
             .map_err(|err| err.to_string())?;
 
-        let delete_pending_mutations_sql =
-            format!("DELETE FROM pending_mutations WHERE asset_id IN ({})", placeholders);
+        let delete_pending_mutations_sql = format!(
+            "DELETE FROM pending_mutations WHERE asset_id IN ({})",
+            placeholders
+        );
         tx.execute(&delete_pending_mutations_sql, params_from_iter(ids.iter()))
             .map_err(|err| err.to_string())?;
 
@@ -2136,7 +2259,13 @@ impl Database {
             .map_err(|err| err.to_string())?;
         }
 
-        tx.commit().map_err(|err| err.to_string())
+        tx.commit().map_err(|err| err.to_string())?;
+        for asset in assets {
+            if let Some(stack) = &asset.stack {
+                self.sync_asset_stack(account_id, stack)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn update_asset_description(
@@ -2154,11 +2283,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_asset_favorite(
-        &self,
-        asset_id: &str,
-        is_favorite: bool,
-    ) -> Result<(), String> {
+    pub fn update_asset_favorite(&self, asset_id: &str, is_favorite: bool) -> Result<(), String> {
         let conn = self.open()?;
         conn.execute(
             "UPDATE assets SET is_favorite = ?2, updated_at = strftime('%s', 'now') WHERE id = ?1",
@@ -2169,11 +2294,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_asset_visibility(
-        &self,
-        asset_id: &str,
-        visibility: &str,
-    ) -> Result<(), String> {
+    pub fn update_asset_visibility(&self, asset_id: &str, visibility: &str) -> Result<(), String> {
         let is_archived = visibility.eq_ignore_ascii_case("archive");
         let conn = self.open()?;
         conn.execute(
@@ -2250,7 +2371,11 @@ impl Database {
         let offset = i64::from(page) * i64::from(page_size);
 
         let limit = i64::from(page_size) + 1;
-        let search_pattern = search_pattern(search);
+        // The search box uses the structured metadata query syntax, applied
+        // through criteria so paged queries and full layouts stay aligned.
+        let merged_criteria = criteria_with_search(search, criteria);
+        let criteria = merged_criteria.as_ref().or(criteria);
+        let search_pattern: Option<String> = None;
         let filter_clause = asset_filter_where_clause(filter);
         let default_sort = SortParams::default();
         let sort = sort.unwrap_or(&default_sort);
@@ -2294,8 +2419,11 @@ impl Database {
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
-            let mut bind: DynParams =
-                vec![Box::new(limit), Box::new(offset), Box::new(pattern.to_string())];
+            let mut bind: DynParams = vec![
+                Box::new(limit),
+                Box::new(offset),
+                Box::new(pattern.to_string()),
+            ];
             bind.extend(criteria_params);
 
             let rows = stmt
@@ -2368,7 +2496,11 @@ impl Database {
         sort: Option<&SortParams>,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
-        let search_pattern = search_pattern(search);
+        // The search box uses the structured metadata query syntax, applied
+        // through criteria so paged queries and full layouts stay aligned.
+        let merged_criteria = criteria_with_search(search, criteria);
+        let criteria = merged_criteria.as_ref().or(criteria);
+        let search_pattern: Option<String> = None;
         let filter_clause = asset_filter_where_clause(filter);
         let default_sort = SortParams::default();
         let sort = sort.unwrap_or(&default_sort);
@@ -2467,24 +2599,28 @@ impl Database {
         Ok(items)
     }
 
-        pub fn get_asset_days(
-                &self,
-                search: Option<&str>,
-                filter: Option<&str>,
-                criteria: Option<&AssetFilterCriteria>,
-                sort: Option<&SortParams>,
-        ) -> Result<Vec<String>, String> {
+    pub fn get_asset_days(
+        &self,
+        search: Option<&str>,
+        filter: Option<&str>,
+        criteria: Option<&AssetFilterCriteria>,
+        sort: Option<&SortParams>,
+    ) -> Result<Vec<String>, String> {
         let conn = self.open()?;
-        let search_pattern = search_pattern(search);
-                let filter_clause = asset_filter_where_clause(filter);
+        // The search box uses the structured metadata query syntax, applied
+        // through criteria so paged queries and full layouts stay aligned.
+        let merged_criteria = criteria_with_search(search, criteria);
+        let criteria = merged_criteria.as_ref().or(criteria);
+        let search_pattern: Option<String> = None;
+        let filter_clause = asset_filter_where_clause(filter);
         let default_sort = SortParams::default();
         let sort = sort.unwrap_or(&default_sort);
         let day_order = sort.day_key_order();
 
         let days = if let Some(pattern) = search_pattern.as_deref() {
-                        // Criteria placeholders start after ?1=pattern.
-                        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
-                        let query = format!(
+            // Criteria placeholders start after ?1=pattern.
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
+            let query = format!(
                                 "
                                         SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
                                         FROM assets
@@ -2503,9 +2639,7 @@ impl Database {
                                         ",
                                 filter_clause, criteria_sql, day_order
                         );
-            let mut stmt = conn
-                                .prepare(&query)
-                .map_err(|err| err.to_string())?;
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
             let mut bind: DynParams = vec![Box::new(pattern.to_string())];
             bind.extend(criteria_params);
@@ -2534,9 +2668,7 @@ impl Database {
                     ",
                 filter_clause, criteria_sql, day_order
             );
-            let mut stmt = conn
-                .prepare(&query)
-                .map_err(|err| err.to_string())?;
+            let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
             let rows = stmt
                 .query_map(params_from_iter(criteria_params.iter()), |row| {
@@ -2654,7 +2786,11 @@ impl Database {
         criteria: Option<&AssetFilterCriteria>,
     ) -> Result<Option<u32>, String> {
         let conn = self.open()?;
-        let search_pattern = search_pattern(search);
+        // The search box uses the structured metadata query syntax, applied
+        // through criteria so paged queries and full layouts stay aligned.
+        let merged_criteria = criteria_with_search(search, criteria);
+        let criteria = merged_criteria.as_ref().or(criteria);
+        let search_pattern: Option<String> = None;
         let filter_clause = asset_filter_where_clause(filter);
 
         let exists = if let Some(pattern) = search_pattern.as_deref() {
@@ -2680,8 +2816,10 @@ impl Database {
                 ",
                 filter_clause, criteria_sql
             );
-            let mut bind: DynParams =
-                vec![Box::new(date_key.to_string()), Box::new(pattern.to_string())];
+            let mut bind: DynParams = vec![
+                Box::new(date_key.to_string()),
+                Box::new(pattern.to_string()),
+            ];
             bind.extend(criteria_params);
             conn.query_row(&query, params_from_iter(bind.iter()), |row| {
                 row.get::<_, i32>(0)
@@ -2734,8 +2872,10 @@ impl Database {
                                 ",
                 filter_clause, criteria_sql
             );
-            let mut bind: DynParams =
-                vec![Box::new(date_key.to_string()), Box::new(pattern.to_string())];
+            let mut bind: DynParams = vec![
+                Box::new(date_key.to_string()),
+                Box::new(pattern.to_string()),
+            ];
             bind.extend(criteria_params);
             conn.query_row(&query, params_from_iter(bind.iter()), |row| {
                 row.get::<_, i64>(0)
@@ -3383,8 +3523,7 @@ impl Database {
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
-            let mut bind: DynParams =
-                vec![Box::new(like_pattern), Box::new(remaining_start)];
+            let mut bind: DynParams = vec![Box::new(like_pattern), Box::new(remaining_start)];
             bind.extend(criteria_params);
 
             let rows = stmt
@@ -3442,8 +3581,7 @@ impl Database {
         );
         let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
-        let mut bind: DynParams =
-            vec![Box::new(month_key), Box::new(limit), Box::new(offset)];
+        let mut bind: DynParams = vec![Box::new(month_key), Box::new(limit), Box::new(offset)];
         bind.extend(criteria_params);
 
         let rows = stmt
@@ -3940,6 +4078,7 @@ fn map_asset_summary_extended(
     row: &rusqlite::Row<'_>,
 ) -> Result<AssetSummaryExtended, rusqlite::Error> {
     Ok(AssetSummaryExtended {
+        stack: None,
         id: row.get(0)?,
         original_file_name: row.get(1)?,
         description: row.get(2)?,
@@ -3971,13 +4110,22 @@ fn map_asset_summary_extended(
     })
 }
 
-fn search_pattern(search: Option<&str>) -> Option<String> {
+/// Folds the free-form search box value into the criteria `query` so it is
+/// parsed by the structured metadata search in `criteria_filter`.
+fn criteria_with_search(
+    search: Option<&str>,
+    criteria: Option<&AssetFilterCriteria>,
+) -> Option<AssetFilterCriteria> {
     let term = search?.trim();
     if term.is_empty() {
         return None;
     }
-
-    Some(format!("%{}%", term))
+    let mut merged = criteria.cloned().unwrap_or_default();
+    merged.query = Some(match merged.query.as_deref().map(str::trim) {
+        Some(existing) if !existing.is_empty() => format!("{} {}", existing, term),
+        _ => term.to_string(),
+    });
+    Some(merged)
 }
 
 fn asset_filter_where_clause(filter: Option<&str>) -> &'static str {

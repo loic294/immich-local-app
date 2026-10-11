@@ -1,4 +1,11 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  clearDisposableCache,
+  getFeaturePreferences,
+  getStorageSummary,
+  getVideoQualityOptions,
+  updateFeaturePreferences,
+} from "../api/storage";
 import { getSettings } from "../api/tauri";
 import type { Settings } from "../types";
 
@@ -22,4 +29,36 @@ export function useSettings() {
 export function useInvalidateSettings() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
+}
+
+export function useStorageSettings() {
+  const client = useQueryClient();
+  const preferences = useQuery({
+    queryKey: ["storage-preferences"],
+    queryFn: getFeaturePreferences,
+  });
+  const storage = useQuery({
+    queryKey: ["storage-summary"],
+    queryFn: getStorageSummary,
+    staleTime: 0,
+  });
+  const videoOptions = useQuery({
+    queryKey: ["video-quality-options"],
+    queryFn: getVideoQualityOptions,
+    retry: false,
+  });
+  const refresh = () => client.invalidateQueries({ queryKey: ["storage-summary"] });
+  const save = useMutation({
+    mutationFn: updateFeaturePreferences,
+    onSuccess: async (value) => {
+      client.setQueryData(["storage-preferences"], value);
+    },
+    // A cleanup failure happens after the limit is saved, so always re-read both.
+    onSettled: async () => {
+      await client.invalidateQueries({ queryKey: ["storage-preferences"] });
+      await refresh();
+    },
+  });
+  const clear = useMutation({ mutationFn: clearDisposableCache, onSettled: refresh });
+  return { preferences, storage, videoOptions, save, clear };
 }

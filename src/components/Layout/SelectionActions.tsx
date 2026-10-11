@@ -1,4 +1,4 @@
-import { Check, Copy, Folder, Link, Plus, BookImage } from "lucide-react";
+import { Check, Clock, Copy, Folder, Link, Plus, BookImage } from "lucide-react";
 import { useRef, useState, type MouseEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -15,6 +15,8 @@ import {
 } from "../../api/tauri";
 import type { AlbumSummary } from "../../types";
 import { useI18n } from "../../i18n";
+import { requestFixTime } from "../../api/time";
+import { useSearchTimeI18n } from "../../i18n/searchTime";
 
 type SelectionActionsProps = {
   selectedAssetIds: string[];
@@ -74,6 +76,7 @@ export function SelectionActions({
 
   const { t } = useI18n();
   const canRunSelectionAction = selectedAssetIds.length > 0;
+  const tTime = useSearchTimeI18n();
 
   const getLocalCopyProgress = (
     currentStep: number,
@@ -100,6 +103,12 @@ export function SelectionActions({
 
   const addButtonClass =
     variant === "preview" ? "btn btn-sm btn-outline" : "btn btn-sm btn-outline";
+  // Time correction is local-first (SQLite + offline mutation queue), so it is
+  // only gated on having a selection, never on connectivity or album loading.
+  const updateTimeButtonClass =
+    variant === "preview"
+      ? "btn btn-sm border border-white/15 bg-zinc-900 text-white hover:bg-zinc-800"
+      : addButtonClass;
   const shareButtonClass =
     variant === "preview" ? "btn btn-sm btn-primary" : "btn btn-sm btn-primary";
   const shareMenuClass =
@@ -492,6 +501,20 @@ export function SelectionActions({
       >
         <BookImage size={16} />
         {t("selectionActions.addToAlbum")}
+      </button>
+
+      <button
+        type="button"
+        className={updateTimeButtonClass}
+        data-test="selection-update-time"
+        aria-label={tTime("updateTime")}
+        disabled={!canRunSelectionAction}
+        onClick={(event) => {
+          triggerAction(event, () => requestFixTime(selectedAssetIds));
+        }}
+      >
+        <Clock size={16} />
+        {tTime("updateTime")}
       </button>
 
       <details
