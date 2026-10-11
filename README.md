@@ -114,7 +114,7 @@ for macOS and Windows setup.
 ```sh
 git clone https://github.com/loic294/immich-local-app.git
 cd immich-local-app
-npm install
+npm ci
 npm run tauri dev
 ```
 
