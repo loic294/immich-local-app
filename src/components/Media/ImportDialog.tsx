@@ -3,10 +3,17 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createAlbumWithAssets, getCachedAlbums } from "../../api/tauri";
-import { getMediaPreferences, importMedia, scanImportMedia, trackFeature } from "../../api/media";
+import {
+  getMediaPreferences,
+  importMedia,
+  scanImportMedia,
+  trackFeature,
+  listMediaDevices,
+} from "../../api/media";
 import { useMediaLabels } from "../../i18n/media";
 import { useConnectionContext } from "../../hooks/connectionContext";
 import { ImportTile } from "./ImportTile";
+import { AlbumPicker } from "../Albums/AlbumPicker";
 
 interface ImportDialogProps {
   initialRoot: string | null;
@@ -25,6 +32,12 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastClicked = useRef<string | null>(null);
+  const devices = useQuery({
+    queryKey: ["media-devices"],
+    queryFn: listMediaDevices,
+    retry: false,
+  });
   const [columns, setColumns] = useState(6);
   const [viewportWidth, setViewportWidth] = useState(900);
   const preferences = useQuery({ queryKey: ["media-preferences"], queryFn: getMediaPreferences });
@@ -61,6 +74,7 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
   }, [rowHeight, rows]);
   useEffect(() => {
     setSelected(new Set());
+    lastClicked.current = null;
     setMessage(null);
   }, [root, kind]);
   const action = async (fn: () => Promise<void>) => {
@@ -106,9 +120,6 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
       <div className="modal-box flex h-[92vh] w-[96vw] max-w-none flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="mr-auto text-xl font-semibold">{labels.importTitle}</h2>
-          <button className="btn btn-sm" disabled={busy} onClick={() => void pickFolder()}>
-            {labels.browse}
-          </button>
           <select
             className="select select-sm"
             value={kind}
@@ -120,36 +131,17 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
             <option value="photo">{labels.photos}</option>
             <option value="video">{labels.videos}</option>
           </select>
-          <select
-            className="select select-sm max-w-64"
-            value={albumId}
-            onChange={(e) => setAlbumId(e.target.value)}
-            aria-label={labels.album}
-            disabled={busy}
-          >
-            <option value="">
-              {preferences.data?.importRequiresAlbum ? labels.album : labels.unsorted}
-            </option>
-            {albums.data
-              ?.filter((a) => !a.isReadOnly)
-              .map((a) => (
-                <option value={a.id} key={a.id}>
-                  {a.albumName}
-                </option>
-              ))}
-          </select>
-          <button
-            className="btn btn-primary"
-            disabled={
-              busy ||
-              !selected.size ||
-              !preferences.data ||
-              (preferences.data.importRequiresAlbum && !albumId)
-            }
-            onClick={() => void runImport()}
-          >
-            {busy ? labels.busy : `${labels.import} (${selected.size})`}
-          </button>
+          <div className="w-64 max-w-full">
+            <AlbumPicker
+              albums={albums.data?.filter((album) => !album.isReadOnly) ?? []}
+              value={albumId}
+              onChange={setAlbumId}
+              loading={albums.isLoading}
+              disabled={busy}
+              emptyLabel={preferences.data?.importRequiresAlbum ? labels.album : labels.unsorted}
+              allowEmpty={!preferences.data?.importRequiresAlbum}
+            />
+          </div>
           <button className="btn btn-ghost" disabled={busy} onClick={onClose}>
             {labels.close}
           </button>
@@ -185,7 +177,6 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
             {labels.clear}
           </button>
         </div>
-        <p className="text-sm text-base-content/65">{labels.sourceSafe}</p>
         {root && (
           <p className="truncate text-xs" title={root}>
             {root}
@@ -201,9 +192,38 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
             {message}
           </p>
         )}
+        {!root && (
+          <div className="flex min-h-40 flex-1 flex-col items-center justify-center gap-4">
+            <button className="btn btn-primary" disabled={busy} onClick={() => void pickFolder()}>
+              {labels.browse}
+            </button>
+            {devices.isLoading && (
+              <span className="loading loading-spinner" aria-label={labels.busy} />
+            )}
+            {devices.isError && (
+              <p role="alert" className="text-error">
+                {labels.deviceError}
+              </p>
+            )}
+            {!!devices.data?.length && (
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-sm text-base-content/65">{labels.devices}</p>
+                {devices.data.map((device) => (
+                  <button
+                    key={device}
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setRoot(device)}
+                  >
+                    {device}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div
           ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto"
+          className={`min-h-0 overflow-y-auto ${root ? "flex-1" : "h-0"}`}
           onScroll={(e) => {
             const node = e.currentTarget;
             if (
@@ -229,14 +249,26 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
                     key={file.path}
                     file={file}
                     checked={selected.has(file.path)}
-                    onToggle={() =>
+                    disabled={busy}
+                    onToggle={(event) => {
+                      const anchor = lastClicked.current;
                       setSelected((previous) => {
                         const next = new Set(previous);
-                        if (next.has(file.path)) next.delete(file.path);
+                        const from = loaded.findIndex((item) => item.path === anchor);
+                        const to = loaded.findIndex((item) => item.path === file.path);
+                        if (event.shiftKey && from >= 0) {
+                          for (const item of loaded.slice(
+                            Math.min(from, to),
+                            Math.max(from, to) + 1,
+                          )) {
+                            if (!item.alreadyImported) next.add(item.path);
+                          }
+                        } else if (next.has(file.path)) next.delete(file.path);
                         else next.add(file.path);
                         return next;
-                      })
-                    }
+                      });
+                      lastClicked.current = file.path;
+                    }}
                   />
                 ))}
               </div>
@@ -257,6 +289,29 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
             </button>
           )}
         </div>
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-4">
+          <p className="max-w-2xl text-sm text-base-content/65">{labels.sourceSafe}</p>
+          <div
+            className={`ml-auto ${preferences.data?.importRequiresAlbum && !albumId ? "tooltip tooltip-left" : ""}`}
+            data-tip={
+              preferences.data?.importRequiresAlbum && !albumId ? labels.albumRequired : undefined
+            }
+            tabIndex={preferences.data?.importRequiresAlbum && !albumId ? 0 : undefined}
+          >
+            <button
+              className="btn btn-primary"
+              disabled={
+                busy ||
+                !selected.size ||
+                !preferences.data ||
+                (preferences.data.importRequiresAlbum && !albumId)
+              }
+              onClick={() => void runImport()}
+            >
+              {busy ? labels.busy : `${labels.import} (${selected.size})`}
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
   );

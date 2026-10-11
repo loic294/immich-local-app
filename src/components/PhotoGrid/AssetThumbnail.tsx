@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { Check, CirclePlay, Film, Heart } from "lucide-react";
+import { Check, CirclePlay, Film, Heart, Layers3 } from "lucide-react";
 import { getAssetPlayback, getAssetThumbnail, isThumbnailCached } from "../../api/tauri";
 import { useI18n } from "../../i18n";
 import type { AssetSummary } from "../../types";
@@ -442,6 +442,16 @@ export function AssetThumbnail({
           }}
         />
       )}
+
+      {asset.stackCount && asset.stackCount > 1 ? (
+        <div
+          className="absolute bottom-1 left-1 z-10 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] text-white"
+          aria-label={t("photoGrid.versionStackCount", { count: asset.stackCount })}
+          title={t("photoGrid.versionStackCount", { count: asset.stackCount })}
+        >
+          <Layers3 size={12} /> <span>{asset.stackCount}</span>
+        </div>
+      ) : null}
 
       {isVideo ? (
         <div className="absolute right-1 top-1 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] text-white">

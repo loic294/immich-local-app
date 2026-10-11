@@ -1,5 +1,17 @@
+import { WindowHeader } from "../components/Layout/WindowHeader";
 import { useEffect, useState } from "react";
-import { FolderOpen, LogOut, ArrowLeft, RefreshCcw, Check, Download, X } from "lucide-react";
+import {
+  FolderOpen,
+  LogOut,
+  ArrowLeft,
+  RefreshCcw,
+  Check,
+  Download,
+  X,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
+} from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   getCamerasInScope,
@@ -10,11 +22,12 @@ import {
   updateSettings,
 } from "../api/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { MyPhotosRule, Settings } from "../types";
+import type { MenuItemPreference, MyPhotosRule, Settings } from "../types";
 import type { AppPage } from "../components/Layout/Sidebar";
 import { MENU_ITEMS, type MenuItemKey } from "../components/Layout/Sidebar";
 import { DaisyCalendarPicker } from "../components/Settings/DaisyCalendarPicker";
 import { StorageSettings } from "../components/Settings/StorageSettings";
+import { AccountsBaseDirectorySettings } from "../components/Settings/AccountsBaseDirectorySettings";
 import { MediaSettings } from "../components/Media/MediaSettings";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { useAppUpdate } from "../hooks/useAppUpdate";
@@ -30,15 +43,15 @@ interface SettingsPageProps {
 export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [section, setSection] = useState("general");
   const sections = [
-    ["general", "General"],
-    ["navigation", "Navigation"],
-    ["sync", "Sync"],
-    ["storage", "Storage & cache"],
-    ["video", "Video quality"],
-    ["editing", "Editing & imports"],
-    ["privacy", "Privacy"],
-    ["account", "Accounts"],
-    ["updates", "Updates & about"],
+    ["general", "settings.sectionGeneral"],
+    ["navigation", "settings.sectionNavigation"],
+    ["sync", "settings.sectionSync"],
+    ["storage", "settings.sectionStorage"],
+    ["video", "settings.sectionVideo"],
+    ["editing", "settings.sectionEditing"],
+    ["privacy", "settings.sectionPrivacy"],
+    ["account", "settings.sectionAccounts"],
+    ["updates", "settings.sectionUpdatesAbout"],
   ];
   const { locale, setLocale, t } = useI18n();
   const accounts = useAccounts();
@@ -123,28 +136,13 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     }
   };
 
-  const handleToggleMenuItem = async (key: MenuItemKey) => {
+  const saveMenuItems = async (nextMenuItems: MenuItemPreference[]) => {
     if (!settings) return;
-
-    const current = settings.menuItems ?? [];
-    const isCurrentlyVisible = current.includes(key);
-    // Preserve the canonical order from MENU_ITEMS so the sidebar stays stable.
-    const nextMenuItems = isCurrentlyVisible
-      ? current.filter((item) => item !== key)
-      : MENU_ITEMS.filter((item) => item.key === key || current.includes(item.key)).map(
-          (item) => item.key,
-        );
-
     const previous = settings;
-    // Optimistic update so the toggle feels instant.
     setSettings({ ...settings, menuItems: nextMenuItems });
-
     try {
       setIsSaving(true);
-      const updated = await updateSettings({
-        ...previous,
-        menuItems: nextMenuItems,
-      });
+      const updated = await updateSettings({ ...previous, menuItems: nextMenuItems });
       setSettings(updated);
       await invalidateSettings();
     } catch (error) {
@@ -153,6 +151,40 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const currentMenuItems = settings?.menuItems ?? [];
+  const enabledMenuItems = currentMenuItems.filter((preference) =>
+    MENU_ITEMS.some((item) => item.key === preference.key),
+  );
+
+  const handleToggleMenuItem = async (key: MenuItemKey, enabled: boolean) => {
+    const item = MENU_ITEMS.find((candidate) => candidate.key === key);
+    if (!item) return;
+    const next = enabled
+      ? [...enabledMenuItems, { key, group: item.group }]
+      : enabledMenuItems.filter((preference) => preference.key !== key);
+    await saveMenuItems(next);
+  };
+
+  const handleMoveMenuItem = async (key: MenuItemKey, group: "main" | "library") => {
+    await saveMenuItems(
+      enabledMenuItems.map((preference) =>
+        preference.key === key ? { ...preference, group } : preference,
+      ),
+    );
+  };
+
+  const handleReorderMenuItem = async (key: MenuItemKey, targetKey: MenuItemKey) => {
+    if (key === targetKey) return;
+    const next = [...enabledMenuItems];
+    const sourceIndex = next.findIndex((preference) => preference.key === key);
+    const targetIndex = next.findIndex((preference) => preference.key === targetKey);
+    if (sourceIndex < 0 || targetIndex < 0 || next[sourceIndex].group !== next[targetIndex].group)
+      return;
+    const [moved] = next.splice(sourceIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    await saveMenuItems(next);
   };
 
   const handleSaveLocalFolderPath = async () => {
@@ -347,6 +379,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-base-100">
+        <WindowHeader floating />
         <span className="loading loading-spinner loading-lg"></span>
       </div>
     );
@@ -354,6 +387,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
 
   return (
     <div className="h-screen overflow-y-auto bg-base-100">
+      <WindowHeader floating />
       <div className="mx-auto max-w-6xl px-4 pb-12 pt-24">
         <div className="mb-8">
           <button
@@ -371,10 +405,10 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
         <div className="flex flex-col gap-6 md:flex-row">
           <nav
             className="md:sticky md:top-4 md:w-56 md:shrink-0 md:self-start"
-            aria-label="Settings sections"
+            aria-label={t("settings.sectionsAria")}
           >
             <ul className="menu rounded-lg bg-base-200">
-              {sections.map(([key, label]) => (
+              {sections.map(([key, labelKey]) => (
                 <li key={key}>
                   <button
                     type="button"
@@ -382,7 +416,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                     aria-current={section === key ? "page" : undefined}
                     onClick={() => setSection(key)}
                   >
-                    {label}
+                    {t(labelKey)}
                   </button>
                 </li>
               ))}
@@ -567,25 +601,194 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                 <p className="text-sm text-base-content/70 mb-2">
                   {t("settings.navigationDescription")}
                 </p>
-                <div className="flex flex-col">
-                  {MENU_ITEMS.map(({ key, labelKey, icon: Icon }) => {
-                    const checked = settings?.menuItems?.includes(key) ?? false;
+                <div className="space-y-5">
+                  {(["main", "library"] as const).map((group) => {
+                    const groupItems = enabledMenuItems.filter(
+                      (preference) => preference.group === group,
+                    );
                     return (
+                      <section
+                        key={group}
+                        className="space-y-1 rounded-box border border-base-300 p-3"
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          const dragged = event.dataTransfer.getData(
+                            "text/menu-item",
+                          ) as MenuItemKey;
+                          const target = event.currentTarget.getAttribute(
+                            "data-drop-key",
+                          ) as MenuItemKey | null;
+                          if (target) void handleReorderMenuItem(dragged, target);
+                          else if (dragged && groupItems.length)
+                            void handleReorderMenuItem(
+                              dragged,
+                              groupItems[groupItems.length - 1].key as MenuItemKey,
+                            );
+                        }}
+                      >
+                        <h3 className="px-2 text-sm font-semibold">
+                          {t(
+                            group === "main"
+                              ? "settings.navigationMain"
+                              : "settings.navigationLibrary",
+                          )}
+                        </h3>
+                        {groupItems.map((preference, index) => {
+                          const item = MENU_ITEMS.find(
+                            (candidate) => candidate.key === preference.key,
+                          );
+                          if (!item) return null;
+                          const Icon = item.icon;
+                          return (
+                            <div
+                              key={item.key}
+                              className="flex flex-wrap items-center gap-2 rounded-lg px-2 py-1 hover:bg-base-200"
+                              draggable={!isSaving}
+                              onDragStart={(event) =>
+                                event.dataTransfer.setData("text/menu-item", item.key)
+                              }
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const dragged = event.dataTransfer.getData(
+                                  "text/menu-item",
+                                ) as MenuItemKey;
+                                void handleReorderMenuItem(dragged, item.key);
+                              }}
+                              data-drop-key={item.key}
+                            >
+                              <GripVertical
+                                size={16}
+                                className="shrink-0 text-base-content/40"
+                                aria-hidden="true"
+                              />
+                              <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                                <input
+                                  type="checkbox"
+                                  className="checkbox checkbox-primary"
+                                  checked
+                                  onChange={(event) =>
+                                    void handleToggleMenuItem(item.key, event.currentTarget.checked)
+                                  }
+                                  disabled={isSaving}
+                                />
+                                <Icon size={16} className="shrink-0 text-base-content/70" />
+                                <span className="label-text">{t(item.labelKey)}</span>
+                              </label>
+                              <select
+                                className="select select-sm w-52 shrink-0 pr-8"
+                                aria-label={t("settings.moveMenuItem", { item: t(item.labelKey) })}
+                                value={group}
+                                disabled={isSaving}
+                                onChange={(event) =>
+                                  void handleMoveMenuItem(
+                                    item.key,
+                                    event.currentTarget.value as "main" | "library",
+                                  )
+                                }
+                              >
+                                <option value="main">{t("settings.navigationMain")}</option>
+                                <option value="library">{t("settings.navigationLibrary")}</option>
+                              </select>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-xs btn-square"
+                                aria-label={t("settings.moveMenuItemUp", {
+                                  item: t(item.labelKey),
+                                })}
+                                disabled={isSaving || index === 0}
+                                onClick={() =>
+                                  void handleReorderMenuItem(
+                                    item.key,
+                                    groupItems[index - 1]?.key as MenuItemKey,
+                                  )
+                                }
+                              >
+                                <ArrowUp size={15} />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-xs btn-square"
+                                aria-label={t("settings.moveMenuItemDown", {
+                                  item: t(item.labelKey),
+                                })}
+                                disabled={isSaving || index === groupItems.length - 1}
+                                onClick={() =>
+                                  void handleReorderMenuItem(
+                                    groupItems[index + 1]?.key as MenuItemKey,
+                                    item.key,
+                                  )
+                                }
+                              >
+                                <ArrowDown size={15} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                        {groupItems.length === 0 && (
+                          <p className="px-2 py-2 text-sm text-base-content/60">
+                            {t("settings.navigationEmpty")}
+                          </p>
+                        )}
+                      </section>
+                    );
+                  })}
+                  <div className="space-y-1">
+                    <h3 className="px-2 text-sm font-semibold">{t("settings.navigationHidden")}</h3>
+                    {MENU_ITEMS.filter(
+                      (item) => !enabledMenuItems.some((preference) => preference.key === item.key),
+                    ).map(({ key, labelKey, icon: Icon }) => (
                       <label key={key} className="label cursor-pointer justify-start gap-3">
                         <input
                           type="checkbox"
                           className="checkbox checkbox-primary"
-                          checked={checked}
-                          onChange={() => {
-                            void handleToggleMenuItem(key);
-                          }}
+                          checked={false}
+                          onChange={(event) =>
+                            void handleToggleMenuItem(key, event.currentTarget.checked)
+                          }
                           disabled={isSaving || !settings}
                         />
                         <Icon size={16} className="shrink-0 text-base-content/70" />
                         <span className="label-text">{t(labelKey)}</span>
                       </label>
-                    );
-                  })}
+                    ))}
+                  </div>
+                  <fieldset className="fieldset max-w-sm">
+                    <legend className="fieldset-legend">{t("settings.recentAlbumsLimit")}</legend>
+                    <select
+                      className="select w-full"
+                      value={settings?.recentAlbumsLimit ?? 5}
+                      disabled={!settings || isSaving}
+                      onChange={async (event) => {
+                        if (!settings) return;
+                        const previous = settings;
+                        const next = {
+                          ...settings,
+                          recentAlbumsLimit: Number(event.currentTarget.value),
+                        };
+                        setSettings(next);
+                        try {
+                          setIsSaving(true);
+                          const updated = await updateSettings(next);
+                          setSettings(updated);
+                          await invalidateSettings();
+                        } catch (error) {
+                          console.error("Failed to update recent albums preference:", error);
+                          setSettings(previous);
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                    >
+                      {[3, 5, 10, 20].map((count) => (
+                        <option key={count} value={count}>
+                          {t("settings.recentAlbumsCount", { count })}
+                        </option>
+                      ))}
+                    </select>
+                  </fieldset>
                 </div>
               </div>
             </div>
@@ -748,8 +951,6 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               className="card mb-6 border border-base-300 bg-base-100 shadow-sm"
             >
               <div className="card-body">
-                <h2 className="card-title">{t("settings.sectionCache")}</h2>
-
                 <div className="form-control mb-4">
                   <label className="label">
                     <span className="label-text font-medium">{t("settings.localFolderLabel")}</span>
@@ -900,6 +1101,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                       })}
                     </ul>
                     <p className="mt-2 text-xs text-base-content/60">{t("account.restartHint")}</p>
+                    <AccountsBaseDirectorySettings accounts={accounts.accounts} />
                   </div>
                 ) : null}
 

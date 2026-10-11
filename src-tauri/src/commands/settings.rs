@@ -63,14 +63,22 @@ pub struct MyPhotosRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MenuItemPreference {
+    pub key: String,
+    pub group: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub locale: String,
     pub live_photo_autoplay: bool,
     pub thumbnail_cache_path: String,
     pub video_cache_path: String,
     pub user_local_folder_path: String,
-    pub menu_items: Vec<String>,
+    pub menu_items: Vec<MenuItemPreference>,
     pub my_photos_rules: Vec<MyPhotosRule>,
+    pub recent_albums_limit: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

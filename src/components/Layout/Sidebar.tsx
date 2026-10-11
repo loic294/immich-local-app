@@ -8,9 +8,13 @@ import {
   Map,
   Settings,
   UsersRound,
+  Upload,
   type LucideIcon,
 } from "lucide-react";
+import { requestMediaImport } from "../../api/media";
+import { useMediaLabels } from "../../i18n/media";
 import { SyncStatusCard } from "./SyncStatusCard";
+import { RecentAlbumsSection } from "../Albums/RecentAlbumsSection";
 import { OfflineBanner } from "./OfflineBanner";
 import { useConnectionContext } from "../../hooks/connectionContext";
 import { useSettings } from "../../hooks/useSettings";
@@ -81,15 +85,26 @@ export const MENU_ITEMS: MenuItemDef[] = [
 
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const { t } = useI18n();
+  const mediaLabels = useMediaLabels();
   const bt = useBrowsingI18n();
   const { isOnline, pendingCount } = useConnectionContext();
   const settingsQuery = useSettings();
   // Until settings load, show every item so navigation is never empty.
-  const visibleKeys = settingsQuery.data?.menuItems;
-  const isVisible = (key: MenuItemKey) => (visibleKeys ? visibleKeys.includes(key) : true);
+  const savedItems = settingsQuery.data?.menuItems;
+  const orderedItems = savedItems
+    ? savedItems.flatMap((preference) => {
+        const item = MENU_ITEMS.find((candidate) => candidate.key === preference.key);
+        return item ? [{ ...item, group: preference.group }] : [];
+      })
+    : MENU_ITEMS;
+  const mainItems = orderedItems.filter((item) => item.group === "main");
+  const libraryItems = orderedItems.filter((item) => item.group === "library");
 
-  const mainItems = MENU_ITEMS.filter((item) => item.group === "main" && isVisible(item.key));
-  const libraryItems = MENU_ITEMS.filter((item) => item.group === "library" && isVisible(item.key));
+  const openRecentAlbum = (albumId: string) => {
+    sessionStorage.setItem("immich:open-recent-album", albumId);
+    window.dispatchEvent(new CustomEvent("immich:open-album", { detail: albumId }));
+    onNavigate?.("albums");
+  };
 
   const navClass = (page: AppPage) =>
     page === activePage
@@ -120,6 +135,11 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
             </nav>
           ) : null}
 
+          <RecentAlbumsSection
+            limit={settingsQuery.data?.recentAlbumsLimit ?? 5}
+            onOpenAlbum={openRecentAlbum}
+          />
+
           {libraryItems.length > 0 ? (
             <>
               <div className="mt-3 w-full px-2 text-sm font-semibold uppercase tracking-wide text-base-content/50">
@@ -144,6 +164,14 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
 
         <div className="shrink-0 w-full space-y-3 px-2 pb-2">
           <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
+            <button
+              className="btn btn-md btn-block w-full max-w-none btn-ghost justify-start text-base font-semibold"
+              type="button"
+              onClick={requestMediaImport}
+            >
+              <Upload size={16} className="shrink-0" />
+              <span>{mediaLabels.import}</span>
+            </button>
             <button
               className={navClass("settings")}
               type="button"

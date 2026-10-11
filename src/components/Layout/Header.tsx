@@ -1,3 +1,4 @@
+import { WindowHeader } from "./WindowHeader";
 import { Funnel, LogOut, Plus, Star, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -119,8 +120,8 @@ export function Header({
   }, [userId]);
 
   return (
-    <header className="navbar border-b border-base-300 bg-base-100 px-3 sm:px-4">
-      <div className="navbar-start gap-4">
+    <WindowHeader>
+      <div className="flex min-w-0 items-center gap-4">
         <MetadataSearchBar
           value={searchInput}
           onChange={onSearchChange}
@@ -145,7 +146,7 @@ export function Header({
         )}
       </div>
 
-      <div className="navbar-end gap-2">
+      <div className="order-2 flex shrink-0 items-center gap-2">
         <details className="dropdown dropdown-end">
           <summary
             className="btn btn-ghost btn-circle list-none"
@@ -274,6 +275,6 @@ export function Header({
           }}
         />
       ) : null}
-    </header>
+    </WindowHeader>
   );
 }

@@ -125,7 +125,9 @@ pub async fn update_media_preferences(
     );
     if previous.telemetry_enabled && !preferences.telemetry_enabled {
         // This is the final event; preference is already persisted so every other event stops.
-        send_telemetry("telemetry-disabled").await?;
+        if let Err(error) = send_telemetry("telemetry-disabled", None).await {
+            log::warn!("[telemetry] final disabled event unavailable: {error}");
+        }
     }
     Ok(preferences)
 }
@@ -360,6 +362,7 @@ pub async fn import_media(
         .join("Albums")
         .join(safe_component(&album_name));
     let db = state.db.clone();
+    let progress_app = app.clone();
     let copied = tokio::task::spawn_blocking(move || {
         let mut count = 0;
         for source in paths {
@@ -398,7 +401,11 @@ pub async fn import_media(
                 ));
             }
             count += 1;
-            app.emit("media:progress", count)
+            if count == 1 {
+                kick_media_uploads(progress_app.clone());
+            }
+            progress_app
+                .emit("media:progress", count)
                 .map_err(|e| format!("Import progress notification failed: {e}"))?;
         }
         Ok(count)
@@ -406,6 +413,7 @@ pub async fn import_media(
     .await
     .map_err(|e| e.to_string())??;
     log::info!("[media:import] originals retained and queued count={copied}");
+    kick_media_uploads(app);
     Ok(copied)
 }
 
@@ -417,7 +425,7 @@ pub async fn get_media_uploads(
 }
 
 #[tauri::command]
-pub async fn retry_media_uploads(state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn retry_media_uploads(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
     state.db.init_media()?;
     state
         .db
@@ -427,35 +435,84 @@ pub async fn retry_media_uploads(state: tauri::State<'_, AppState>) -> Result<()
             [],
         )
         .map_err(|e| e.to_string())?;
+    log::info!("[media:upload] failed jobs reset; queue retry requested");
+    kick_media_uploads(app);
     Ok(())
+}
+
+fn kick_media_uploads(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        if let Err(error) = process_media_uploads(&state).await {
+            log::warn!("[media:upload] background flush deferred: {error}");
+        }
+    });
 }
 
 #[tauri::command]
 pub async fn flush_media_uploads(state: tauri::State<'_, AppState>) -> Result<u32, String> {
+    process_media_uploads(&state).await
+}
+
+async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     let _guard = LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
+    log::info!("[media:upload] processing queue");
+    state.db.recover_media_uploads()?;
     let mut done = 0;
-    for job in state.db.media_uploads()? {
-        if job.state != "queued" {
-            continue;
+    let mut deferred = HashSet::new();
+    loop {
+        let jobs: Vec<_> = state
+            .db
+            .media_uploads()?
+            .into_iter()
+            .filter(|job| job.state == "queued" && !deferred.contains(&job.id))
+            .collect();
+        if jobs.is_empty() {
+            break;
         }
-        let client = state
-            .accounts
-            .client(&job.account_id)
-            .ok_or("Upload account is not signed in")?;
-        let session = client
-            .session
-            .lock()
-            .await
-            .clone()
-            .ok_or("Upload account is not authenticated")?;
-        if !client.ping(&session.server_url).await {
-            continue;
-        }
-        let result:Result<(),String>=async {
+        for job in jobs {
+            if job.state != "queued" {
+                continue;
+            }
+            let Some(client) = state.accounts.client(&job.account_id) else {
+                log::error!(
+                    "[media:upload] missing account job={} account={}",
+                    job.id,
+                    job.account_id
+                );
+                state.db.set_media_upload_state(
+                    &job.id,
+                    "failed",
+                    Some("Upload account is not signed in"),
+                )?;
+                continue;
+            };
+            let Some(session) = client.session.lock().await.clone() else {
+                state.db.set_media_upload_state(
+                    &job.id,
+                    "failed",
+                    Some("Upload account is not authenticated"),
+                )?;
+                continue;
+            };
+            if !client.ping(&session.server_url).await {
+                log::warn!(
+                    "[media:upload] offline; retaining queued job={} account={}",
+                    job.id,
+                    job.account_id
+                );
+                deferred.insert(job.id.clone());
+                continue;
+            }
+            state
+                .db
+                .set_media_upload_state(&job.id, "uploading", None)?;
+            log::info!("[media:upload] uploading job={}", job.id);
+            let result:Result<(),String>=async {
             let id=match job.server_asset_id.clone() {
                 Some(id)=>id,
                 None=>{
@@ -489,11 +546,17 @@ pub async fn flush_media_uploads(state: tauri::State<'_, AppState>) -> Result<u3
                     "INSERT OR IGNORE INTO album_assets(album_id,asset_id,account_id) VALUES(?1,?2,?3)",
                     params![album,id,job.account_id],
                 ).map_err(|e|e.to_string())?;
+                if let Err(error) = state.db.record_recent_album(album) {
+                    log::warn!("[media:upload] could not record recent album={} job={}: {}", album, job.id, error);
+                }
             }
             if let Some(original)=&job.original_asset_id {
                 for album in state.db.media_album_ids(original)? {
                     if !job.album_ids.contains(&album) {
                         client.add_assets_to_album(&album,&[id.clone()]).await?;
+                    }
+                    if let Err(error) = state.db.record_recent_album(&album) {
+                        log::warn!("[media:upload] could not record recent album={} job={}: {}", album, job.id, error);
                     }
                 }
                 let mut ids=vec![id.clone()];
@@ -508,27 +571,37 @@ pub async fn flush_media_uploads(state: tauri::State<'_, AppState>) -> Result<u3
                 params![chrono::Utc::now().to_rfc3339(),job.id]).map_err(|e|e.to_string())?;
             Ok(())
         }.await;
-        match result {
-            Ok(()) => {
-                done += 1;
-                log::info!("[media:upload] completed job={}", job.id);
-            }
-            Err(error) => {
-                if !client.ping(&session.server_url).await {
-                    log::warn!("[media:upload] connection lost job={}", job.id);
-                    break;
+            match result {
+                Ok(()) => {
+                    done += 1;
+                    log::info!("[media:upload] completed job={}", job.id);
                 }
-                log::error!("[media:upload] failed job={} error={error}", job.id);
-                state
-                    .db
-                    .open()?
-                    .execute(
-                        "UPDATE media_uploads SET state='failed',error=?1 WHERE id=?2",
-                        params![error, job.id],
-                    )
-                    .map_err(|e| e.to_string())?;
+                Err(error) => {
+                    if !client.ping(&session.server_url).await {
+                        log::warn!("[media:upload] connection lost job={}", job.id);
+                        state.db.set_media_upload_state(&job.id, "queued", None)?;
+                        deferred.insert(job.id.clone());
+                        continue;
+                    }
+                    log::error!("[media:upload] failed job={} error={error}", job.id);
+                    state
+                        .db
+                        .open()?
+                        .execute(
+                            "UPDATE media_uploads SET state='failed',error=?1 WHERE id=?2",
+                            params![error, job.id],
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
+    }
+    log::info!(
+        "[media:upload] flush finished completed={done} deferred={}",
+        deferred.len()
+    );
+    if done == 0 && !deferred.is_empty() {
+        return Err("offline: uploads retained locally for retry".into());
     }
     Ok(done)
 }
@@ -670,6 +743,7 @@ pub async fn get_changed_editor_jobs(
 pub async fn export_media_edits(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<u32, String> {
     let preferences = state.db.media_preferences()?;
     let jobs = state.db.editor_jobs()?;
@@ -726,6 +800,17 @@ pub async fn export_media_edits(
         if !output.is_file() || std::fs::metadata(&output).map_err(|e| e.to_string())?.len() == 0 {
             return Err("Editor did not produce a non-empty JPEG".into());
         }
+        match tokio::task::spawn_blocking({
+            let source = input.to_path_buf();
+            let destination = output.clone();
+            move || crate::services::media::copy_jpeg_metadata(&source, &destination)
+        })
+        .await
+        {
+            Ok(Ok(())) => log::info!("[media:export] original EXIF/XMP metadata copied original={id}"),
+            Ok(Err(error)) => log::warn!("[media:export] metadata copy failed original={id}; continuing export: {error}"),
+            Err(error) => log::warn!("[media:export] metadata copy task failed original={id}; continuing export: {error}"),
+        }
         let hash_path = output.clone();
         let checksum = tokio::task::spawn_blocking(move || file_hash(&hash_path))
             .await
@@ -748,8 +833,36 @@ pub async fn export_media_edits(
         })?;
         count += 1;
         log::info!("[media:export] JPEG retained and queued original={id}");
+        kick_media_uploads(app.clone());
     }
     Ok(count)
+}
+
+#[tauri::command]
+pub async fn delete_edit_version(
+    asset_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    if !state.db.is_deletable_edit_version(&asset_id)? {
+        return Err("Only a non-primary edited version can be deleted".into());
+    }
+    let (account_id, client) = state.account_and_client_for_asset(&asset_id);
+    if account_id.is_empty() {
+        return Err("offline: Cannot identify the account for this version".into());
+    }
+    let account = state.db.get_account(&account_id)?.ok_or("Unknown account")?;
+    if client.ping(&account.server_url).await {
+        client.trash_asset(&asset_id).await?;
+        state.db.remove_edit_version_from_cache(&asset_id)?;
+        log::info!("[media:version-delete] moved version to Immich trash asset={asset_id}");
+        Ok(false)
+    } else {
+        let payload = serde_json::json!({ "ids": [asset_id] });
+        state.db.enqueue_mutation(&account_id, &asset_id, "delete_version", &payload.to_string())?;
+        state.db.remove_edit_version_from_cache(&asset_id)?;
+        log::info!("[media:version-delete] queued offline trash asset={asset_id}");
+        Ok(true)
+    }
 }
 
 #[tauri::command]
@@ -794,24 +907,67 @@ fn telemetry_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-async fn send_telemetry(event: &str) -> Result<(), String> {
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TelemetryContext {
+    user_agent: String,
+    language: String,
+    screen: String,
+    hostname: String,
+}
+
+fn browser_user_agent(provided: &str) -> String {
+    if provided.starts_with("Mozilla/5.0") && !provided.contains(['\r', '\n']) {
+        return provided.to_string();
+    }
+    if cfg!(target_os = "windows") {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36".into()
+    } else {
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15".into()
+    }
+}
+
+async fn send_telemetry(event: &str, context: Option<TelemetryContext>) -> Result<(), String> {
+    let context = context.unwrap_or_default();
     let response = reqwest::Client::new()
         .post("https://analytics.loicbellemarealford.ca/api/send")
-        .header(reqwest::header::USER_AGENT, "ImmichLocalApp/1.0")
+        .header(reqwest::header::USER_AGENT, browser_user_agent(&context.user_agent))
         .timeout(std::time::Duration::from_secs(5))
         .json(&serde_json::json!({
             "type":"event","payload":{"website":"d905c3e7-0c82-42fc-9e06-c30f478bda13",
-            "hostname":"immich-local-app","url":"/desktop","name":event,
-            "language":"en","screen":"0x0"}
+            "hostname": if context.hostname.is_empty() { "immich-local-app" } else { &context.hostname },
+            "url":"/desktop","name":event,
+            "language": if context.language.is_empty() { "en-CA" } else { &context.language },
+            "screen":context.screen}
         }))
-        .send()
+        .send().await.map_err(|e| format!("Telemetry delivery unavailable: {e}"))?;
+    let status = response.status();
+    let body = response
+        .text()
         .await
-        .map_err(|e| format!("Telemetry delivery unavailable: {e}"))?;
-    if !response.status().is_success() {
+        .map_err(|e| format!("Cannot read analytics response: {e}"))?;
+    // Successful responses may contain a session-cache token: never log that token.
+    let mut diagnostic =
+        serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::Value::Null);
+    if let Some(object) = diagnostic.as_object_mut() {
+        for key in ["cache", "session", "token"] {
+            if object.contains_key(key) {
+                object.insert(key.into(), "[redacted]".into());
+            }
+        }
+    }
+    log::info!(
+        "[telemetry] event={event} status={} body={diagnostic}",
+        status.as_u16()
+    );
+    if !status.is_success() {
         return Err(format!(
             "Analytics rejected event (HTTP {})",
-            response.status().as_u16()
+            status.as_u16()
         ));
+    }
+    if diagnostic.get("beep").is_some() {
+        return Err("Analytics rejected event as bot traffic".into());
     }
     Ok(())
 }
@@ -819,6 +975,7 @@ async fn send_telemetry(event: &str) -> Result<(), String> {
 #[tauri::command]
 pub async fn track_media_event(
     event: String,
+    context: Option<TelemetryContext>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let _telemetry_guard = telemetry_lock().lock().await;
@@ -828,7 +985,7 @@ pub async fn track_media_event(
     if !state.db.media_preferences()?.telemetry_enabled {
         return Ok(());
     }
-    send_telemetry(&event).await.map_err(|error| {
+    send_telemetry(&event, context).await.map_err(|error| {
         log::warn!("[telemetry] {error}");
         error
     })
@@ -837,6 +994,67 @@ pub async fn track_media_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn queue_rechecks_late_jobs_and_recovers_offline_uploads() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use crate::services::{db::Database, account_manager::AccountManager, immich_client::{ImmichClient, AuthSession}};
+        let folder = std::env::current_dir().unwrap().join(format!("media-queue-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let db = Arc::new(Database::test_database(folder.join("db.sqlite")).unwrap());
+        let job = |id: &str, account: &str| UploadJob {
+            id: id.into(), account_id: account.into(), local_path: folder.join("missing.jpg").to_string_lossy().into_owned(),
+            checksum: id.into(), album_ids: vec![], original_asset_id: None, server_asset_id: None, state: "queued".into(), error: None,
+        };
+        db.queue_media(&job("first", "account")).unwrap();
+        let late_job = job("late", "removed-account");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server_db = db.clone();
+        let server = tokio::spawn(async move {
+            for request in 0..3 {
+                let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept()).await.unwrap().unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).await.unwrap();
+                    bytes.push(byte[0]);
+                }
+                if request == 0 { server_db.queue_media(&late_job).unwrap(); }
+                if request == 1 { assert_eq!(server_db.media_uploads().unwrap()[0].state, "uploading"); }
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            }
+        });
+        let client = Arc::new(ImmichClient::new());
+        *client.session.lock().await = Some(AuthSession { server_url: url, access_token: "fixture".into(), refresh_token: None, user_id: "fixture".into(), user_name: None });
+        let accounts = Arc::new(AccountManager::new());
+        accounts.insert("account".into(), client.clone());
+        let state = AppState { db: db.clone(), immich: client, accounts, sync_cancel: Arc::new(AtomicBool::new(false)) };
+        let (first, competing) = tokio::join!(process_media_uploads(&state), process_media_uploads(&state));
+        assert_eq!(first.unwrap(), 0);
+        assert_eq!(competing.unwrap(), 0);
+        server.await.unwrap();
+        let jobs = db.media_uploads().unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|job| job.state == "failed"));
+        db.queue_media(&job("offline", "account")).unwrap();
+        db.set_media_upload_state("offline", "uploading", None).unwrap();
+        assert!(process_media_uploads(&state).await.unwrap_err().starts_with("offline:"));
+        assert_eq!(db.media_uploads().unwrap()[2].state, "queued");
+        drop(state); drop(db);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn telemetry_uses_browser_agents_and_preserves_webview_identity() {
+        let agent =
+            "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36";
+        assert_eq!(browser_user_agent(agent), agent);
+        assert!(browser_user_agent("ImmichLocalApp/1.0").starts_with("Mozilla/5.0"));
+        assert!(!browser_user_agent("Mozilla/5.0\r\nInjected").contains('\n'));
+        assert!(!MediaPreferences::default().session_replay_enabled);
+        assert!(MediaPreferences::default().telemetry_enabled);
+    }
     #[test]
     fn path_components_cannot_escape_destination() {
         assert_eq!(safe_component("../album\\name"), "_album_name");
@@ -850,7 +1068,9 @@ mod tests {
     }
     #[test]
     fn retained_copies_never_overwrite_and_sidecar_changes_are_detected() {
-        let folder = std::env::temp_dir().join(format!("immich-copy-{}", uuid::Uuid::new_v4()));
+        let folder = std::env::current_dir()
+            .unwrap()
+            .join(format!("immich-copy-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&folder).unwrap();
         let source = folder.join("camera.jpg");
         std::fs::write(&source, b"original").unwrap();

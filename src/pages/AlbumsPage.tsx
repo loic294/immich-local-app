@@ -30,6 +30,7 @@ import {
   openFolderInFileExplorer,
   openUrl,
   refreshAlbumAssets,
+  recordRecentAlbum,
   saveAlbumLocally,
   updateAssetVisibility,
 } from "../api/tauri";
@@ -46,7 +47,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const { locale, t } = useI18n();
   const [searchInput, setSearchInput] = useState("");
   const [filter, setFilter] = useState<AlbumFilter>("all");
-  const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
+  const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(() => {
+    const pendingAlbum = sessionStorage.getItem("immich:open-recent-album");
+    if (pendingAlbum) sessionStorage.removeItem("immich:open-recent-album");
+    return pendingAlbum;
+  });
   const [selectedCount, setSelectedCount] = useState(0);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [selectionCommand, setSelectionCommand] = useState<{
@@ -126,6 +131,28 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     filterPayload,
     sortPreference,
   );
+
+  useEffect(() => {
+    const onOpenAlbum = (event: Event) => {
+      const albumId = (event as CustomEvent<string>).detail;
+      if (albumId) {
+        sessionStorage.removeItem("immich:open-recent-album");
+        setSelectedAlbumId(albumId);
+      }
+    };
+    window.addEventListener("immich:open-album", onOpenAlbum);
+    return () => window.removeEventListener("immich:open-album", onOpenAlbum);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAlbumId) return;
+    void recordRecentAlbum(selectedAlbumId).catch((error) => {
+      console.warn("[recent-albums] failed to record opened album", {
+        albumId: selectedAlbumId,
+        error,
+      });
+    });
+  }, [selectedAlbumId]);
 
   // Local-first lazy sync: when an album is opened, render from the local cache
   // immediately and refresh that single album from the server in the background.

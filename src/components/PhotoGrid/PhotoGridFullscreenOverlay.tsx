@@ -1,7 +1,15 @@
 import type { CSSProperties, RefObject } from "react";
 import React from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowLeft, ChevronLeft, ChevronRight, CirclePlay, Info } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  CirclePlay,
+  Info,
+  MoreHorizontal,
+  Clock,
+} from "lucide-react";
 import { SelectionActions } from "../Layout/SelectionActions";
 import { useI18n } from "../../i18n";
 import type { AssetCacheDetails, AssetSummary } from "../../types";
@@ -20,6 +28,8 @@ import { isVideoAsset } from "./photoGridUtils";
 import { useAssetState } from "../../hooks/useAssetState";
 import { AssetStatusBadge } from "./AssetStatusBadge";
 import { requestMediaEdit } from "../../api/media";
+import { requestFixTime } from "../../api/time";
+import { useSearchTimeI18n } from "../../i18n/searchTime";
 import { useMediaLabels } from "../../i18n/media";
 
 interface PhotoGridFullscreenOverlayProps {
@@ -90,6 +100,7 @@ export function PhotoGridFullscreenOverlay({
   onUpdateDescription,
 }: PhotoGridFullscreenOverlayProps) {
   const { t } = useI18n();
+  const timeLabels = useSearchTimeI18n();
   const mediaLabels = useMediaLabels();
   const [isDownloading, setIsDownloading] = React.useState(false);
   const downloadProgressRef = React.useRef<number>(0);
@@ -197,7 +208,7 @@ export function PhotoGridFullscreenOverlay({
       </div>
 
       <div
-        className="pointer-events-auto absolute top-4 left-1/2 z-40 max-w-[min(70vw,48rem)] -translate-x-1/2 rounded-xl px-4 py-1.5 text-sm font-medium text-white/95 select-text"
+        className="pointer-events-auto absolute left-[max(20rem,27vw)] right-[min(48vw,40rem)] top-4 z-40 truncate rounded-xl px-4 py-1.5 text-left text-sm font-medium text-white/95 select-text"
         onClick={(event) => event.stopPropagation()}
       >
         {activeAsset.originalFileName}
@@ -248,7 +259,24 @@ export function PhotoGridFullscreenOverlay({
           stopPropagation
           disableCopy={isVideoAsset(activeAsset)}
           onCopyProgress={setShareProgress}
+          showTimeButton={false}
         />
+
+        <details className="dropdown dropdown-end" onClick={(event) => event.stopPropagation()}>
+          <summary
+            className="btn btn-circle btn-sm border border-white/15 bg-zinc-900 text-white"
+            aria-label={t("photoGrid.moreActionsAria")}
+          >
+            <MoreHorizontal size={18} />
+          </summary>
+          <ul className="menu dropdown-content z-[10010] mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-1 text-base-content shadow-xl">
+            <li>
+              <button type="button" onClick={() => requestFixTime([activeAsset.id])}>
+                <Clock size={14} /> {timeLabels("updateTime")}
+              </button>
+            </li>
+          </ul>
+        </details>
 
         <button
           type="button"

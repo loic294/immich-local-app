@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
-import { CirclePlay, Film } from "lucide-react";
+import { CirclePlay, Film, Layers3 } from "lucide-react";
 import { getAssetThumbnail } from "../../api/tauri";
 import { useI18n } from "../../i18n";
 import type { AssetSummary } from "../../types";
@@ -17,113 +17,114 @@ interface ThumbnailButtonProps {
   onClick: () => void;
 }
 
-const ThumbnailButton = React.forwardRef<
-  HTMLButtonElement,
-  ThumbnailButtonProps
->(({ asset, isActive, onClick }, ref) => {
-  const { t } = useI18n();
-  const [src, setSrc] = useState<string | null>(null);
-  const [isVisible, setIsVisible] = useState(isActive);
-  const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+const ThumbnailButton = React.forwardRef<HTMLButtonElement, ThumbnailButtonProps>(
+  ({ asset, isActive, onClick }, ref) => {
+    const { t } = useI18n();
+    const [src, setSrc] = useState<string | null>(null);
+    const [isVisible, setIsVisible] = useState(isActive);
+    const buttonRef = React.useRef<HTMLButtonElement | null>(null);
 
-  // Use Intersection Observer to detect when thumbnail enters viewport
-  useEffect(() => {
-    const element = buttonRef.current;
-    if (!element) return;
+    // Use Intersection Observer to detect when thumbnail enters viewport
+    useEffect(() => {
+      const element = buttonRef.current;
+      if (!element) return;
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        setIsVisible(entry.isIntersecting || isActive);
-      },
-      { root: null, rootMargin: "100px", threshold: 0 },
-    );
+      const observer = new IntersectionObserver(
+        ([entry]) => {
+          setIsVisible(entry.isIntersecting || isActive);
+        },
+        { root: null, rootMargin: "100px", threshold: 0 },
+      );
 
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [isActive]);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }, [isActive]);
 
-  useEffect(() => {
-    if (!isVisible) {
-      return;
-    }
+    useEffect(() => {
+      if (!isVisible) {
+        return;
+      }
 
-    let cancelled = false;
+      let cancelled = false;
 
-    async function loadThumbnail() {
-      try {
-        console.log(`[Thumbnail] Loading thumbnail for asset: ${asset.id}`);
-        const value = await getAssetThumbnail(asset.id);
-        if (!cancelled) {
-          console.log(
-            `[Thumbnail] Successfully loaded thumbnail for asset: ${asset.id}`,
-          );
-          setSrc(value);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error(
-            `[Thumbnail] Failed to load thumbnail for asset: ${asset.id}`,
-            error,
-          );
-          setSrc(null);
+      async function loadThumbnail() {
+        try {
+          console.log(`[Thumbnail] Loading thumbnail for asset: ${asset.id}`);
+          const value = await getAssetThumbnail(asset.id);
+          if (!cancelled) {
+            console.log(`[Thumbnail] Successfully loaded thumbnail for asset: ${asset.id}`);
+            setSrc(value);
+          }
+        } catch (error) {
+          if (!cancelled) {
+            console.error(`[Thumbnail] Failed to load thumbnail for asset: ${asset.id}`, error);
+            setSrc(null);
+          }
         }
       }
-    }
 
-    void loadThumbnail();
+      void loadThumbnail();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [asset.id, isVisible]);
+      return () => {
+        cancelled = true;
+      };
+    }, [asset.id, isVisible]);
 
-  return (
-    <button
-      ref={(element) => {
-        buttonRef.current = element;
-        if (typeof ref === "function") {
-          ref(element);
-        } else if (ref) {
-          ref.current = element;
-        }
-      }}
-      type="button"
-      className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border transition-all ${
-        isActive
-          ? "border-primary ring-2 ring-primary/70"
-          : "border-white/15 hover:border-white/40"
-      }`}
-      onClick={onClick}
-      aria-label={t("photoGrid.openThumbnailAria", {
-        name: asset.originalFileName,
-      })}
-    >
-      {src ? (
-        <img
-          className="h-full w-full object-cover"
-          src={src}
-          alt={asset.originalFileName}
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center bg-white/10">
-          <span className="loading loading-spinner loading-xs text-white" />
-        </div>
-      )}
+    return (
+      <button
+        ref={(element) => {
+          buttonRef.current = element;
+          if (typeof ref === "function") {
+            ref(element);
+          } else if (ref) {
+            ref.current = element;
+          }
+        }}
+        type="button"
+        className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border transition-all ${
+          isActive
+            ? "border-primary ring-2 ring-primary/70"
+            : "border-white/15 hover:border-white/40"
+        }`}
+        onClick={onClick}
+        aria-label={t("photoGrid.openThumbnailAria", {
+          name: asset.originalFileName,
+        })}
+      >
+        {src ? (
+          <img className="h-full w-full object-cover" src={src} alt={asset.originalFileName} />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-white/10">
+            <span className="loading loading-spinner loading-xs text-white" />
+          </div>
+        )}
 
-      {asset.livePhotoVideoId ? (
-        <div className="absolute right-1 top-1 rounded-md bg-black/60 p-1 text-white">
-          <Film size={10} />
-        </div>
-      ) : null}
+        {asset.stackCount && asset.stackCount > 1 ? (
+          <div
+            className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded bg-black/70 px-1 text-[10px] text-white"
+            aria-label={t("photoGrid.versionStackCount", { count: asset.stackCount })}
+            title={t("photoGrid.versionStackCount", { count: asset.stackCount })}
+          >
+            <Layers3 size={10} />
+            <span>{asset.stackCount}</span>
+          </div>
+        ) : null}
 
-      {isVideoAsset(asset) ? (
-        <div className="absolute bottom-1 right-1 rounded-md bg-black/60 p-1 text-white">
-          <CirclePlay size={10} />
-        </div>
-      ) : null}
-    </button>
-  );
-});
+        {asset.livePhotoVideoId ? (
+          <div className="absolute right-1 top-1 rounded-md bg-black/60 p-1 text-white">
+            <Film size={10} />
+          </div>
+        ) : null}
+
+        {isVideoAsset(asset) ? (
+          <div className="absolute bottom-1 right-1 rounded-md bg-black/60 p-1 text-white">
+            <CirclePlay size={10} />
+          </div>
+        ) : null}
+      </button>
+    );
+  },
+);
 
 ThumbnailButton.displayName = "ThumbnailButton";
 
@@ -145,10 +146,7 @@ export function FullscreenThumbnailStrip({
     const containerRect = scrollContainer.getBoundingClientRect();
     const thumbRect = activeThumbnail.getBoundingClientRect();
 
-    if (
-      thumbRect.left < containerRect.left ||
-      thumbRect.right > containerRect.right
-    ) {
+    if (thumbRect.left < containerRect.left || thumbRect.right > containerRect.right) {
       const scrollLeft =
         activeThumbnail.offsetLeft +
         activeThumbnail.offsetWidth / 2 -
@@ -162,10 +160,7 @@ export function FullscreenThumbnailStrip({
   }, [activeIndex]);
 
   return (
-    <div
-      ref={scrollContainerRef}
-      className="horizontal-scrollbar overflow-x-auto"
-    >
+    <div ref={scrollContainerRef} className="horizontal-scrollbar overflow-x-auto">
       <div className="flex gap-2">
         {assets.map((asset, index) => (
           <ThumbnailButton

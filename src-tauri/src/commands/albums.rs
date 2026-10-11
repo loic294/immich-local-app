@@ -75,6 +75,50 @@ pub async fn fetch_albums(state: tauri::State<'_, AppState>) -> Result<Vec<Album
 }
 
 #[tauri::command]
+pub async fn record_recent_album(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    log::info!("[albums.recent] recording album_id={album_id}");
+    state.db.record_recent_album(&album_id)
+}
+
+#[tauri::command]
+pub async fn get_recent_albums(
+    limit: Option<u32>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AlbumSummary>, String> {
+    let recent = state
+        .db
+        .get_recent_albums(limit.unwrap_or(5))
+        .map_err(|error| format!("recent album cache read failed: {error}"))?;
+    Ok(recent
+        .into_iter()
+        .map(|album| AlbumSummary {
+            id: album.id,
+            album_name: album.album_name,
+            album_thumbnail_asset_id: album.album_thumbnail_asset_id,
+            owner_id: album.owner_id.clone(),
+            shared: album.shared,
+            created_at: album.created_at,
+            updated_at: album.updated_at,
+            start_date: album.start_date,
+            end_date: album.end_date,
+            asset_count: album.asset_count,
+            owner: Some(AlbumOwnerSummary {
+                id: album.owner_id,
+                name: album.owner_name,
+                email: album.owner_email,
+            }),
+            description: album.description,
+            saved_local_folder_path: album.saved_local_folder_path,
+            role: None,
+            is_read_only: None,
+        })
+        .collect())
+}
+
+#[tauri::command]
 pub async fn get_album_assets_paged(
     album_id: String,
     page: u32,
@@ -208,6 +252,9 @@ pub async fn create_album_with_assets(
         .db
         .upsert_albums(&primary.id, &albums)
         .map_err(|err| format!("album cache write failed: {err}"))?;
+    if let Err(error) = state.db.record_recent_album(&created.id) {
+        log::warn!("[albums.recent] could not record newly created album {}: {}", created.id, error);
+    }
 
     Ok(created)
 }
@@ -235,6 +282,9 @@ pub async fn add_assets_to_album(
         .db
         .upsert_albums(&account_id, &albums)
         .map_err(|err| format!("album cache write failed: {err}"))?;
+    if let Err(error) = state.db.record_recent_album(&album_id) {
+        log::warn!("[albums.recent] could not record updated album {}: {}", album_id, error);
+    }
 
     Ok(())
 }

@@ -50,6 +50,12 @@ pub struct AssetStatistics {
 #[serde(rename_all = "camelCase")]
 pub struct AssetSummary {
     pub id: String,
+    #[serde(default)]
+    pub stack_count: Option<u32>,
+    #[serde(default)]
+    pub stack_original_id: Option<String>,
+    #[serde(default)]
+    pub is_stack_secondary: bool,
     pub original_file_name: String,
     #[serde(default)]
     pub original_path: Option<String>,
@@ -2726,6 +2732,33 @@ impl ImmichClient {
         }))
     }
 
+    pub async fn trash_asset(&self, asset_id: &str) -> Result<(), String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IMMICH_API_KEY_HEADER,
+            HeaderValue::from_str(&session.access_token).map_err(|error| error.to_string())?,
+        );
+        let url = format!("{}/api/assets", session.server_url);
+        let response = self
+            .client
+            .delete(&url)
+            .headers(headers)
+            .json(&serde_json::json!({ "ids": [asset_id], "force": false }))
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("trash request failed with status {}", response.status()));
+        }
+        Ok(())
+    }
+
     pub async fn update_asset_favorite(
         &self,
         asset_id: &str,
@@ -3730,6 +3763,9 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
 
     let mut asset = AssetSummary {
         id,
+        stack_count: None,
+        stack_original_id: None,
+        is_stack_secondary: false,
         original_file_name,
         original_path: value
             .get("originalPath")

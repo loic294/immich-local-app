@@ -15,6 +15,7 @@ import {
 } from "../../api/media";
 import { useConnectionContext } from "../../hooks/connectionContext";
 import { useMediaLabels } from "../../i18n/media";
+import { useSessionReplay } from "../../hooks/useSessionReplay";
 import { ImportDialog } from "./ImportDialog";
 
 interface MediaWorkflowProps {
@@ -23,6 +24,7 @@ interface MediaWorkflowProps {
 }
 export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   const labels = useMediaLabels();
+  useSessionReplay(enabled);
   const { isOnline } = useConnectionContext();
   const queryClient = useQueryClient();
   const [importRoot, setImportRoot] = useState<string | null | undefined>(undefined);
@@ -36,18 +38,42 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   const scanning = useRef(false);
   const dismissedEdits = useRef(false);
   const mountedQueue = useRef<string[]>([]);
-  const refresh = useCallback(async () => {
-    const jobs = await getMediaUploads();
-    setUploads(jobs);
-    await queryClient.invalidateQueries();
-  }, [queryClient]);
+  const flushing = useRef(false);
+  const previousUploads = useRef<UploadJob[]>([]);
+  const updateUploads = useCallback(
+    (jobs: UploadJob[]) => {
+      const remaining = new Set(jobs.map((job) => job.id));
+      const completed = previousUploads.current.some((job) => !remaining.has(job.id));
+      previousUploads.current = jobs;
+      setUploads(jobs);
+      if (completed) {
+        console.info("[media:queue] completed uploads; refreshing cached views");
+        void queryClient
+          .invalidateQueries()
+          .catch((error) => console.error("[media:queue] cache refresh failed", error));
+      }
+    },
+    [queryClient],
+  );
+  const refresh = useCallback(
+    async (uploaded: boolean) => {
+      const jobs = await getMediaUploads();
+      updateUploads(jobs);
+      if (uploaded) await queryClient.invalidateQueries();
+    },
+    [queryClient, updateUploads],
+  );
   const flush = useCallback(async () => {
+    if (flushing.current) return;
+    flushing.current = true;
     try {
-      await flushMediaUploads();
-      await refresh();
+      const count = await flushMediaUploads();
+      await refresh(count > 0);
     } catch (error) {
       console.error("[media:queue] flush failed", error);
-      setError(String(error));
+      if (!String(error).startsWith("offline:")) setError(String(error));
+    } finally {
+      flushing.current = false;
     }
   }, [refresh]);
   const inspect = useCallback(async () => {
@@ -67,14 +93,14 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
       }
       deviceRoots.current = new Set(roots);
       if (!dismissedEdits.current) setChanges(edited);
-      setUploads(jobs);
+      updateUploads(jobs);
     } catch (error) {
       console.error("[media:scan] inspection failed", error);
       setError(String(error));
     } finally {
       scanning.current = false;
     }
-  }, []);
+  }, [updateUploads]);
   useEffect(() => {
     if (!enabled) return;
     void inspect();
@@ -92,6 +118,20 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   useEffect(() => {
     if (enabled && isOnline === true) void flush();
   }, [enabled, isOnline, flush]);
+  const hasPendingUploads = uploads.some(
+    (job) => job.state === "queued" || job.state === "uploading",
+  );
+  useEffect(() => {
+    if (!enabled || !hasPendingUploads) return;
+    if (isOnline === true) void flush();
+    const timer = window.setInterval(() => {
+      void getMediaUploads()
+        .then(updateUploads)
+        .catch((error) => console.error("[media:upload] progress refresh failed", error));
+      if (isOnline === true) void flush();
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [enabled, hasPendingUploads, isOnline, flush, updateUploads]);
   useEffect(() => {
     if (enabled)
       void trackMediaEvent(`page-${page}`).catch((error) =>
@@ -120,7 +160,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
         })
         .catch((error) => {
           console.error("[media:editor] launch failed", error);
-          setError(String(error));
+          setError(`${labels.editFailed} ${String(error)}`);
         })
         .finally(() => setBusy(false));
     };
@@ -131,7 +171,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
       window.removeEventListener("media:edit-request", edit);
       window.removeEventListener("media:import-request", importing);
     };
-  }, [enabled]);
+  }, [enabled, labels.editFailed]);
   const exportChanges = async () => {
     setBusy(true);
     setError(null);
@@ -151,9 +191,6 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   return (
     <>
       <div className="fixed bottom-3 right-3 z-50 flex gap-2">
-        <button className="btn btn-sm" disabled={busy} onClick={() => setImportRoot(null)}>
-          {labels.import}
-        </button>
         {uploads.length > 0 && (
           <button className="btn btn-sm btn-warning" onClick={() => setShowQueue(true)}>
             {labels.queue} ({uploads.length})
@@ -250,14 +287,38 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
       {showQueue && (
         <div role="dialog" aria-modal="true" aria-label={labels.queue} className="modal modal-open">
           <div className="modal-box">
-            <h2 className="text-lg font-semibold">{labels.queue}</h2>
+            <h2 className="text-lg font-semibold">
+              {labels.queue} ({uploads.length})
+            </h2>
+            {uploads.some((job) => job.state === "uploading") && (
+              <p role="status" className="flex items-center gap-2 text-sm">
+                <span className="loading loading-spinner loading-sm" />
+                {labels.uploadProgress}
+              </p>
+            )}
             <div className="my-4 max-h-72 space-y-3 overflow-auto">
               {uploads.map((job) => (
                 <div key={job.id}>
                   <p className="break-all text-sm">{job.localPath}</p>
                   <p className={job.error ? "text-error" : "text-base-content/60"}>
-                    {job.error ?? job.state}
+                    {job.state === "queued"
+                      ? labels.queued
+                      : job.state === "uploading"
+                        ? labels.uploading
+                        : job.state === "failed"
+                          ? labels.failed
+                          : job.state === "complete"
+                            ? labels.complete
+                            : labels.unknownState}
                   </p>
+                  {job.error && <p className="text-sm text-error">{job.error}</p>}
+                  {job.state === "uploading" && (
+                    <progress
+                      max={100}
+                      className="progress progress-primary w-full"
+                      aria-label={labels.uploading}
+                    />
+                  )}
                 </div>
               ))}
             </div>

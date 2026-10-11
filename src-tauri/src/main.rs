@@ -9,8 +9,8 @@ use commands::albums::{
     add_assets_to_album, add_user_to_album, can_manage_album_sharing, create_album_with_assets,
     create_share_link_for_assets, delete_local_album, fetch_albums, get_album_assets_paged,
     get_album_share_link, get_album_share_users, get_cached_album_full_grid_layout,
-    get_or_create_album_share_link, get_shareable_users, remove_user_from_album,
-    save_album_locally,
+    get_or_create_album_share_link, get_recent_albums, get_shareable_users,
+    record_recent_album, remove_user_from_album, save_album_locally,
 };
 use commands::assets::{
     calculate_grid_layout, fetch_assets, fetch_assets_by_month, flush_pending_mutations,
@@ -29,7 +29,10 @@ use commands::auth::{
     remove_account, restore_session, set_primary_account,
 };
 use commands::folders::get_cached_folder_full_grid_layout;
-use commands::folders::{get_folder_assets_paged, get_unique_original_paths};
+use commands::folders::{
+    get_folder_assets_paged, get_folders_base_directory, get_unique_original_paths,
+    set_folders_base_directory,
+};
 use commands::memories::fetch_memories;
 use commands::settings::{get_cache_path, get_cache_stats, get_settings, update_settings};
 use commands::shell::{
@@ -255,6 +258,7 @@ pub fn main() {
             commands::media::get_changed_editor_jobs,
             commands::media::export_media_edits,
             commands::media::get_edit_versions,
+            commands::media::delete_edit_version,
             commands::media::track_media_event,
             commands::settings::get_feature_preferences,
             commands::settings::update_feature_preferences,
@@ -307,6 +311,8 @@ pub fn main() {
             fetch_memories,
             fetch_albums,
             get_album_assets_paged,
+            get_recent_albums,
+            record_recent_album,
             get_cached_album_full_grid_layout,
             create_album_with_assets,
             add_assets_to_album,
@@ -322,6 +328,8 @@ pub fn main() {
             delete_local_album,
             get_unique_original_paths,
             get_folder_assets_paged,
+            get_folders_base_directory,
+            set_folders_base_directory,
             get_cached_folder_full_grid_layout,
             get_settings,
             update_settings,

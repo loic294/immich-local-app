@@ -15,6 +15,7 @@ pub struct MediaPreferences {
     pub editor_sidecars: Vec<String>,
     pub import_requires_album: bool,
     pub telemetry_enabled: bool,
+    pub session_replay_enabled: bool,
 }
 
 impl Default for MediaPreferences {
@@ -39,6 +40,7 @@ impl Default for MediaPreferences {
             editor_sidecars: vec!["rrdata".into(), "xml".into(), "xmp".into()],
             import_requires_album: true,
             telemetry_enabled: true,
+            session_replay_enabled: false,
         }
     }
 }
@@ -63,6 +65,78 @@ pub struct EditorJob {
     pub asset_id: String,
     pub local_path: String,
     pub snapshot: String,
+}
+
+fn jpeg_metadata_app1(payload: &[u8]) -> bool {
+    payload.starts_with(b"Exif\0\0")
+        || payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
+        || payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
+}
+
+fn jpeg_app1_segments(bytes: &[u8]) -> Result<Vec<(usize, usize)>, String> {
+    if bytes.len() < 4 || bytes[..2] != [0xff, 0xd8] {
+        return Err("JPEG data has no SOI marker".into());
+    }
+    let mut segments = Vec::new();
+    let mut offset = 2;
+    while offset < bytes.len() {
+        if bytes[offset] != 0xff {
+            return Err("Invalid JPEG marker sequence".into());
+        }
+        let start = offset;
+        while offset < bytes.len() && bytes[offset] == 0xff {
+            offset += 1;
+        }
+        let marker = *bytes.get(offset).ok_or("Truncated JPEG marker")?;
+        offset += 1;
+        if marker == 0xda || marker == 0xd9 {
+            break;
+        }
+        if marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+        let length_bytes = bytes.get(offset..offset + 2).ok_or("Truncated JPEG segment")?;
+        let length = u16::from_be_bytes([length_bytes[0], length_bytes[1]]) as usize;
+        if length < 2 {
+            return Err("Invalid JPEG segment length".into());
+        }
+        let end = offset.checked_add(length).ok_or("Invalid JPEG segment length")?;
+        if end > bytes.len() {
+            return Err("Truncated JPEG segment data".into());
+        }
+        let payload = &bytes[offset + 2..end];
+        if marker == 0xe1 && jpeg_metadata_app1(payload) {
+            segments.push((start, end));
+        }
+        offset = end;
+    }
+    Ok(segments)
+}
+
+fn copy_jpeg_metadata_bytes(source: &[u8], destination: &[u8]) -> Result<Vec<u8>, String> {
+    let source_segments = jpeg_app1_segments(source)?;
+    let destination_segments = jpeg_app1_segments(destination)?;
+    let mut output = Vec::with_capacity(destination.len() + source.len());
+    output.extend_from_slice(&destination[..2]);
+    for (start, end) in source_segments {
+        output.extend_from_slice(&source[start..end]);
+    }
+    let mut cursor = 2;
+    for (start, end) in destination_segments {
+        output.extend_from_slice(&destination[cursor..start]);
+        cursor = end;
+    }
+    output.extend_from_slice(&destination[cursor..]);
+    Ok(output)
+}
+
+/// Replaces exported JPEG EXIF/XMP APP1 blocks with the corresponding blocks
+/// from the original, preserving date, GPS, camera, and other embedded tags.
+pub fn copy_jpeg_metadata(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_bytes = std::fs::read(source).map_err(|error| error.to_string())?;
+    let destination_bytes = std::fs::read(destination).map_err(|error| error.to_string())?;
+    let output = copy_jpeg_metadata_bytes(&source_bytes, &destination_bytes)?;
+    std::fs::write(destination, output).map_err(|error| error.to_string())
 }
 
 impl Database {
@@ -156,6 +230,36 @@ impl Database {
             .map_err(|e| e.to_string())
     }
 
+    pub fn set_media_upload_state(
+        &self,
+        id: &str,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<(), String> {
+        if !["queued", "uploading", "failed"].contains(&state) {
+            return Err("Invalid pending upload state".into());
+        }
+        self.init_media()?;
+        self.open()?
+            .execute(
+                "UPDATE media_uploads SET state=?1,error=?2 WHERE id=?3 AND completed_at IS NULL",
+                params![state, error, id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // Only called while holding the processor lock: an uploading row here was interrupted.
+    pub fn recover_media_uploads(&self) -> Result<(), String> {
+        self.init_media()?;
+        let count = self.open()?.execute("UPDATE media_uploads SET state='queued',error=NULL WHERE state='uploading' AND completed_at IS NULL", [])
+            .map_err(|e| e.to_string())?;
+        if count > 0 {
+            log::warn!("[media:upload] recovered interrupted jobs count={count}");
+        }
+        Ok(())
+    }
+
     pub fn known_media_hash(&self, account: &str, checksum: &str) -> Result<bool, String> {
         self.init_media()?;
         self.open()?
@@ -247,6 +351,34 @@ impl Database {
             .optional()
             .map_err(|e| e.to_string())?;
         Ok(original.unwrap_or_else(|| id.to_string()))
+    }
+
+    pub fn is_deletable_edit_version(&self, asset_id: &str) -> Result<bool, String> {
+        self.init_media()?;
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM edit_versions ev JOIN assets a ON a.id=ev.asset_id
+             WHERE ev.asset_id=?1 AND COALESCE(a.is_stack_secondary,0)=1)",
+            [asset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|exists| exists != 0)
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn remove_edit_version_from_cache(&self, asset_id: &str) -> Result<(), String> {
+        self.init_media()?;
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM edit_versions WHERE asset_id=?1", [asset_id])
+            .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM asset_people WHERE asset_id=?1", [asset_id])
+            .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM album_assets WHERE asset_id=?1", [asset_id])
+            .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM assets WHERE id=?1", [asset_id])
+            .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
     }
 
     pub fn edit_version_ids(&self, original: &str) -> Result<Vec<String>, String> {
@@ -474,6 +606,32 @@ impl ImmichClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app1(payload: &[u8]) -> Vec<u8> {
+        let length = (payload.len() + 2) as u16;
+        let mut segment = vec![0xff, 0xe1];
+        segment.extend_from_slice(&length.to_be_bytes());
+        segment.extend_from_slice(payload);
+        segment
+    }
+
+    #[test]
+    fn export_metadata_replaces_existing_exif_and_preserves_xmp() {
+        let mut source = vec![0xff, 0xd8];
+        source.extend(app1(b"Exif\0\0original-camera-gps-date"));
+        source.extend(app1(b"http://ns.adobe.com/xap/1.0/\0original-xmp"));
+        source.extend_from_slice(&[0xff, 0xda, 0, 2, 1, 2, 0xff, 0xd9]);
+        let mut destination = vec![0xff, 0xd8];
+        destination.extend(app1(b"Exif\0\0stale-export-tags"));
+        destination.extend_from_slice(&[0xff, 0xda, 0, 2, 3, 4, 0xff, 0xd9]);
+
+        let result = copy_jpeg_metadata_bytes(&source, &destination).unwrap();
+        assert!(result.windows(b"original-camera-gps-date".len()).any(|window| window == b"original-camera-gps-date"));
+        assert!(result.windows(b"original-xmp".len()).any(|window| window == b"original-xmp"));
+        assert!(!result.windows(b"stale-export-tags".len()).any(|window| window == b"stale-export-tags"));
+        assert!(result.ends_with(&[0xff, 0xda, 0, 2, 3, 4, 0xff, 0xd9]));
+    }
+
     #[test]
     fn editor_defaults_preserve_metadata() {
         let p = MediaPreferences::default();
@@ -488,13 +646,16 @@ mod tests {
     fn partial_preferences_are_backward_compatible() {
         let p: MediaPreferences = serde_json::from_str("{\"telemetryEnabled\":false}").unwrap();
         assert!(!p.telemetry_enabled);
+        assert!(!p.session_replay_enabled);
         assert!(!p.editor_executable.is_empty());
     }
 
     #[test]
     fn edited_primary_is_unique_in_all_views_and_sync_preserves_original() {
         use crate::services::immich_client::{AssetStack, AssetSummary};
-        let folder = std::env::temp_dir().join(format!("immich-stack-{}", uuid::Uuid::new_v4()));
+        let folder = std::env::current_dir()
+            .unwrap()
+            .join(format!("immich-stack-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&folder).unwrap();
         let path = folder.join("db.sqlite");
         let db = Database::test_database(path.clone()).unwrap();
@@ -527,6 +688,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(db.original_edit_asset("second").unwrap(), "original");
+        assert!(db.is_deletable_edit_version("first").unwrap());
+        assert!(!db.is_deletable_edit_version("second").unwrap());
+        assert!(!db.is_deletable_edit_version("original").unwrap());
+        let album_items = db.get_album_assets("album", 0, 100, None, None).unwrap().0;
+        assert_eq!(album_items[0].stack_count, Some(3));
         assert_eq!(
             db.get_assets(0, 100, None, None, None, None)
                 .unwrap()
@@ -602,7 +768,9 @@ mod tests {
 
     #[tokio::test]
     async fn upload_preserves_capture_time_streams_original_and_creates_edited_first_stack() {
-        let folder = std::env::temp_dir().join(format!("immich-http-{}", uuid::Uuid::new_v4()));
+        let folder = std::env::current_dir()
+            .unwrap()
+            .join(format!("immich-http-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&folder).unwrap();
         let file = folder.join("photo.jpg");
         let sidecar = folder.join("photo.xmp");
@@ -659,7 +827,9 @@ mod tests {
 
     #[tokio::test]
     async fn reachable_upload_rejections_are_explicit() {
-        let file = std::env::temp_dir().join(format!("immich-reject-{}.jpg", uuid::Uuid::new_v4()));
+        let file = std::env::current_dir()
+            .unwrap()
+            .join(format!("immich-reject-{}.jpg", uuid::Uuid::new_v4()));
         std::fs::write(&file, b"fixture").unwrap();
         let (url, requests) = mock_server(vec![(200, "{}"), (403, "{}")]).await;
         let client = ImmichClient::new();
@@ -684,8 +854,9 @@ mod tests {
 
     #[test]
     fn queue_and_deduplication_survive_restart_and_isolate_accounts() {
-        let folder =
-            std::env::temp_dir().join(format!("immich-media-test-{}", uuid::Uuid::new_v4()));
+        let folder = std::env::current_dir()
+            .unwrap()
+            .join(format!("immich-media-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&folder).unwrap();
         let path = folder.join("db.sqlite");
         let db = Database::test_database(path.clone()).unwrap();
@@ -711,6 +882,19 @@ mod tests {
         assert_eq!(db.media_uploads().unwrap().len(), 1);
         assert!(db.known_media_hash("account-a", &checksum).unwrap());
         assert!(!db.known_media_hash("account-b", &checksum).unwrap());
+        db.set_media_upload_state("job", "uploading", None).unwrap();
+        assert_eq!(db.media_uploads().unwrap()[0].state, "uploading");
+        db.recover_media_uploads().unwrap();
+        assert_eq!(db.media_uploads().unwrap()[0].state, "queued");
+        db.set_media_upload_state("job", "failed", Some("rejected"))
+            .unwrap();
+        assert_eq!(
+            db.media_uploads().unwrap()[0].error.as_deref(),
+            Some("rejected")
+        );
+        db.set_media_upload_state("job", "queued", None).unwrap();
+        assert!(db.media_uploads().unwrap()[0].error.is_none());
+        assert!(db.set_media_upload_state("job", "invalid", None).is_err());
         let job = db.media_uploads().unwrap().remove(0);
         assert_eq!(job.album_ids, ["album"]);
         assert!(db.queue_media(&job).is_err());

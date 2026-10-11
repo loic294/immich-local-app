@@ -7,6 +7,7 @@ export interface MediaPreferences {
   editorSidecars: string[];
   importRequiresAlbum: boolean;
   telemetryEnabled: boolean;
+  sessionReplayEnabled: boolean;
 }
 export interface ImportFile {
   path: string;
@@ -33,7 +34,10 @@ export interface EditorJob {
 }
 export const getMediaPreferences = () => invoke<MediaPreferences>("get_media_preferences");
 export const updateMediaPreferences = (preferences: MediaPreferences) =>
-  invoke<MediaPreferences>("update_media_preferences", { preferences });
+  invoke<MediaPreferences>("update_media_preferences", { preferences }).then((value) => {
+    window.dispatchEvent(new CustomEvent("media:preferences-changed", { detail: value }));
+    return value;
+  });
 export const listMediaDevices = () => invoke<string[]>("list_media_devices");
 export const scanImportMedia = (root: string, page: number, kind: string) =>
   invoke<ImportPage>("scan_import_media", { root, page, kind });
@@ -50,7 +54,18 @@ export const exportMediaEdits = (assetIds: string[]) =>
   invoke<number>("export_media_edits", { assetIds });
 export const getEditVersions = (assetId: string) =>
   invoke<AssetSummary[]>("get_edit_versions", { assetId });
-export const trackMediaEvent = (event: string) => invoke<void>("track_media_event", { event });
+export const deleteEditVersion = (assetId: string) =>
+  invoke<boolean>("delete_edit_version", { assetId });
+export const trackMediaEvent = (event: string) =>
+  invoke<void>("track_media_event", {
+    event,
+    context: {
+      userAgent: navigator.userAgent,
+      language: navigator.language,
+      screen: `${window.screen.width}x${window.screen.height}`,
+      hostname: window.location.hostname || "immich-local-app",
+    },
+  });
 export function requestMediaEdit(assetIds: string[], albumId?: string): void {
   window.dispatchEvent(new CustomEvent("media:edit-request", { detail: { assetIds, albumId } }));
 }

@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCachedAssets } from "../api/tauri";
-import type {
-  AssetFilter,
-  AssetFilterCriteria,
-  AssetSummary,
-  SortPreference,
-} from "../types";
+import type { AssetFilter, AssetFilterCriteria, AssetSummary, SortPreference } from "../types";
 
 export const ASSET_PAGE_SIZE = 30;
 
@@ -81,12 +76,7 @@ export function useAssetWindow(
       };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      filter,
-      searchTerm,
-      JSON.stringify(criteria ?? null),
-      JSON.stringify(sort ?? null),
-    ],
+    [filter, searchTerm, JSON.stringify(criteria ?? null), JSON.stringify(sort ?? null)],
   );
 
   const replaceWithPage = useCallback(
@@ -106,18 +96,21 @@ export function useAssetWindow(
           itemCount: currentPage.items.length,
           hasNextPage: currentPage.hasNextPage,
         });
+        if (version !== requestVersionRef.current) {
+          console.log("[useAssetWindow] stale replacement ignored", { page, version });
+          return;
+        }
         setPages({ [page]: currentPage });
         setOrderedPages([page]);
       } catch (err) {
+        if (version !== requestVersionRef.current) return;
+        console.warn("[useAssetWindow] replacement failed", { page, error: String(err) });
         setPages({});
         setOrderedPages([]);
-        setError(
-          err instanceof Error ? err : new Error("Failed to load assets"),
-        );
+        setError(err instanceof Error ? err : new Error("Failed to load assets"));
       } finally {
-        console.log(
-          "[useAssetWindow] replaceWithPage done, isInitialLoading -> false",
-        );
+        if (version !== requestVersionRef.current) return;
+        console.log("[useAssetWindow] replaceWithPage done, isInitialLoading -> false");
         isReplacingRef.current = false;
         setIsInitialLoading(false);
       }
@@ -190,9 +183,7 @@ export function useAssetWindow(
           : [...current, nextPageNumber].sort((left, right) => left - right),
       );
     } catch (err) {
-      setError(
-        err instanceof Error ? err : new Error("Failed to load next page"),
-      );
+      setError(err instanceof Error ? err : new Error("Failed to load next page"));
     } finally {
       setIsFetchingNextPage(false);
     }
@@ -252,18 +243,12 @@ export function useAssetWindow(
       setOrderedPages((current) =>
         current.includes(previousPageNumber)
           ? current
-          : [previousPageNumber, ...current].sort(
-              (left, right) => left - right,
-            ),
+          : [previousPageNumber, ...current].sort((left, right) => left - right),
       );
     } catch (err) {
-      setError(
-        err instanceof Error ? err : new Error("Failed to load previous page"),
-      );
+      setError(err instanceof Error ? err : new Error("Failed to load previous page"));
     } finally {
-      console.log(
-        "[useAssetWindow] loadPreviousPage: done, isFetchingPreviousPage -> false",
-      );
+      console.log("[useAssetWindow] loadPreviousPage: done, isFetchingPreviousPage -> false");
       setIsFetchingPreviousPage(false);
     }
   }, [isFetchingPreviousPage, loadPage, orderedPages]);
@@ -283,12 +268,9 @@ export function useAssetWindow(
     [orderedPages, pages],
   );
 
-  const hasPreviousPage =
-    orderedPages.length > 0 && Math.min(...orderedPages) > 0;
+  const hasPreviousPage = orderedPages.length > 0 && Math.min(...orderedPages) > 0;
   const hasNextPage =
-    orderedPages.length > 0
-      ? (pages[Math.max(...orderedPages)]?.hasNextPage ?? false)
-      : false;
+    orderedPages.length > 0 ? (pages[Math.max(...orderedPages)]?.hasNextPage ?? false) : false;
 
   return {
     assets,

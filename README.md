@@ -18,6 +18,13 @@ the Immich server.
 
 ## Features
 
+The app integrates window controls into its header on macOS and Windows
+(without a separate native title bar). Use the left-hand traffic lights on
+macOS or the right-hand buttons on Windows to minimize, maximize/restore, or
+close. Drag an empty header area to move the window; double-click it to
+maximize or restore. Controls remain available in selection mode, Settings,
+and the sign-in screens.
+
 - Browse a virtualized photo timeline, albums, folders, calendar views,
   favorites, and deleted assets.
 - Filter and sort the library by available details such as people, camera,
@@ -42,8 +49,11 @@ Album photos use embedded assets on older servers or paginated, album-scoped
 metadata search on newer servers that omit assets from album details.
 
 **People** in the Library sidebar shows cached face thumbnails and photo counts.
-Choose a person to open the shared Photos timeline with its People filter already
-selected; the remaining filters and fullscreen controls work as in All Photos.
+Sort by name or photo count; the chosen order is kept for the session. The face
+grid scrolls independently of the sidebar. Choose a person to open the shared
+Photos timeline with a top back button, avatar, name and photo count (without the
+filter bar), with the People scope applied from the first cached read. Search,
+sorting and fullscreen controls work as in All Photos.
 
 **Map** clusters cached GPS-tagged photos into thumbnail markers. Select a marker
 or cluster to browse its photos on the right, or pan the map to browse the visible
@@ -61,19 +71,26 @@ optionally calculated from a reference photo in the same view. It changes
 Immich metadata and the local cache, never the original files, and queues
 changes while offline.
 
-**Import** scans a chosen folder or suggests newly connected removable media.
-Choose an album and select photos/videos in the virtualized grid; previously
-imported checksums are labelled. Originals are copied safely to the configured
+**Import** in the sidebar above Settings scans a chosen folder or suggests newly connected removable media.
+Choose an album with the shared thumbnail picker and select photos/videos in the
+virtualized grid; previously imported checksums are labelled. Click or Cmd/Ctrl-click
+toggles a tile; Shift-click selects a range. The footer explains the album requirement
+when Import is disabled. Originals are copied safely to the configured
 local `Albums/<album name>` folder and retained there. Offline uploads are
 durable, account-scoped, and replay when connectivity returns; failed uploads
-remain visible in the queue with a retry action. JPEG/PNG/WebP/TIFF thumbnails
+remain visible in the queue with a retry action. Enqueue/export completion and
+periodic online checks kick processing; interrupted uploads recover on restart.
+The queue shows translated waiting/uploading/failure states and activity progress.
+JPEG/PNG/WebP/TIFF thumbnails
 are decoded locally; RAW/HEIC previews use the macOS or Windows native codecs
 when installed, otherwise an explicit placeholder is shown.
 
 **Editing** opens the original image in RapidRAW (or the configured editor),
 downloading it first if needed. **Edit all photos** passes every cached image
 in the album to one GUI launch as file arguments; the editor must support
-that invocation. Sidecar changes trigger an export suggestion. The default
+that invocation. The toolbar waits for the native launch rather than relying on
+a fire-and-forget UI event; empty albums and launch failures show a visible message.
+Sidecar changes trigger an export suggestion. The default
 CLI export produces a quality-100 JPEG with metadata, retained beside the
 original as `<name>-edited-YYYYMMDD.jpg`, then queues an upload. The newest
 edit becomes the stack primary in Immich and local browsing, including the
@@ -93,6 +110,12 @@ offline downloads; available resolutions depend on server capabilities.
 project's Umami analytics endpoint by default. Photo names, paths, account
 details, server URLs, and credentials are never included. Disable analytics
 in Settings > Privacy to persist an opt-out and send one final disabled event.
+Events include the webview browser identity, language, screen size and application
+hostname (not the Immich server address). **Session replay** is a separate, optional
+opt-in, off by default. It loads the Umami tracker and recorder only after consent,
+masks text/inputs and blocks media. Turning it off reloads the app view immediately
+to stop the recorder's observers and timers; normal browsing restores from the local
+cache. Replay availability and sampling also depend on the analytics server settings.
 
 ## Technology
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CalendarDays } from "lucide-react";
 import { DayPicker } from "react-day-picker";
+import { useI18n } from "../../i18n";
 
 interface DaisyCalendarPickerProps {
   value: string | null;
@@ -16,6 +17,7 @@ export function DaisyCalendarPicker({
   onChange,
   disabled = false,
 }: DaisyCalendarPickerProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const selected = parseDateOnly(value);
 
@@ -34,7 +36,7 @@ export function DaisyCalendarPicker({
       <summary
         className={`btn btn-sm w-full justify-between ${disabled ? "btn-disabled" : "btn-outline"}`}
       >
-        <span className="truncate">{value ?? "Select date"}</span>
+        <span className="truncate">{value ?? t("settings.selectDate")}</span>
         <CalendarDays size={16} />
       </summary>
 
@@ -60,9 +62,7 @@ function parseDateOnly(value: string | null): Date | undefined {
   if (!value) {
     return undefined;
   }
-  const [year, month, day] = value
-    .split("-")
-    .map((part) => Number.parseInt(part, 10));
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
   if (!year || !month || !day) {
     return undefined;
   }

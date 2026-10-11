@@ -7,6 +7,7 @@ import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { FilterBar } from "../components/Filters/FilterBar";
 import { useFolderAssets } from "../hooks/useFolderAssets";
 import { useFolderPaths } from "../hooks/useFolderPaths";
+import { useAccounts } from "../hooks/useAccounts";
 import { useAssetFilters } from "../hooks/useAssetFilters";
 import { useSortPreference } from "../hooks/useSortPreference";
 import {
@@ -15,6 +16,7 @@ import {
   createShareLinkForAssets,
   fetchAlbums,
   getCachedFolderFullGridLayout,
+  getFoldersBaseDirectory,
   updateAssetVisibility,
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
@@ -30,6 +32,9 @@ interface FoldersPageProps {
 export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps) {
   const { t } = useI18n();
   const [currentPath, setCurrentPath] = useState("/");
+  const accounts = useAccounts();
+  const [baseDirectory, setBaseDirectory] = useState("/");
+  const [baseDirectoryLoaded, setBaseDirectoryLoaded] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [selectedCount, setSelectedCount] = useState(0);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -40,6 +45,37 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const folderPathsQuery = useFolderPaths(true);
+
+  useEffect(() => {
+    const accountId = accounts.primaryAccount?.id;
+    let cancelled = false;
+    if (!accountId) {
+      setBaseDirectory("/");
+      setCurrentPath("/");
+      setBaseDirectoryLoaded(!accounts.isLoading);
+      return;
+    }
+    setBaseDirectoryLoaded(false);
+    void getFoldersBaseDirectory(accountId)
+      .then((path) => {
+        if (cancelled) return;
+        const root = normalizePath(path);
+        setBaseDirectory(root);
+        setCurrentPath(root);
+        setBaseDirectoryLoaded(true);
+        console.info("[folders] loaded account base directory", { accountId, baseDirectory: root });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("[folders] failed to load account base directory", { accountId, error });
+        setBaseDirectory("/");
+        setCurrentPath("/");
+        setBaseDirectoryLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts.primaryAccount?.id, accounts.isLoading]);
 
   const filters = useAssetFilters(`folder:${currentPath}`);
   const [searchTerm, setSearchTerm] = useState("");
@@ -64,22 +100,26 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
   } = useSortPreference();
 
   const paths = useMemo(
-    () => (folderPathsQuery.data ?? []).map((path) => normalizePath(path)),
-    [folderPathsQuery.data],
+    () =>
+      (folderPathsQuery.data ?? [])
+        .map((path) => normalizePath(path))
+        .filter((path) => isWithinBaseDirectory(path, baseDirectory)),
+    [baseDirectory, folderPathsQuery.data],
   );
 
   useEffect(() => {
-    if (!paths.length) {
-      return;
+    if (!baseDirectoryLoaded) return;
+    if (
+      !isWithinBaseDirectory(currentPath, baseDirectory) ||
+      (currentPath !== baseDirectory &&
+        !paths.some((path) => path === currentPath || path.startsWith(`${currentPath}/`)))
+    ) {
+      setCurrentPath(baseDirectory);
     }
-
-    if (currentPath !== "/" && !paths.some((path) => path.startsWith(currentPath))) {
-      setCurrentPath("/");
-    }
-  }, [currentPath, paths]);
+  }, [baseDirectory, baseDirectoryLoaded, currentPath, paths]);
 
   const assetsQuery = useFolderAssets(
-    !folderPathsQuery.isLoading,
+    !folderPathsQuery.isLoading && baseDirectoryLoaded,
     currentPath,
     filterPayload,
     sortPreference,
@@ -92,9 +132,14 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
 
   const subfolders = useMemo(() => getDirectChildFolders(paths, currentPath), [currentPath, paths]);
 
+  const rootParts = baseDirectory.split("/").filter(Boolean);
+  const rootLabel =
+    baseDirectory === "/"
+      ? t("folders.root")
+      : (rootParts[rootParts.length - 1] ?? t("folders.root"));
   const breadcrumbs = useMemo(
-    () => getBreadcrumbs(currentPath, t("folders.root")),
-    [currentPath, t],
+    () => getBreadcrumbs(currentPath, baseDirectory, rootLabel),
+    [baseDirectory, currentPath, rootLabel],
   );
   const hasSubfolders = subfolders.length > 0;
   const hasFolderAssets = allAssets.length > 0;
@@ -244,8 +289,14 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
             <div className="flex items-center gap-2">
               <PageBackButton
                 ariaLabel={t("folders.backAria")}
-                disabled={currentPath === "/"}
-                onClick={() => setCurrentPath(getParentPath(currentPath))}
+                disabled={currentPath === baseDirectory}
+                onClick={() =>
+                  setCurrentPath(
+                    currentPath === baseDirectory
+                      ? baseDirectory
+                      : getParentPath(currentPath, baseDirectory),
+                  )
+                }
               />
               <h1 className="m-0 text-2xl font-bold text-base-content">{t("folders.title")}</h1>
             </div>
@@ -258,7 +309,7 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
                   className={`btn btn-ghost btn-xs px-2 ${crumb.path === currentPath ? "text-primary" : ""}`}
                   onClick={() => setCurrentPath(crumb.path)}
                 >
-                  {crumb.path === "/" ? <House size={12} /> : null}
+                  {crumb.path === baseDirectory ? <House size={12} /> : null}
                   <span>{crumb.label}</span>
                   <ChevronRight size={11} className="text-base-content/40" />
                 </button>
@@ -385,31 +436,27 @@ function getDirectChildFolders(paths: string[], parentPath: string) {
   return [...lookup.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function getParentPath(path: string): string {
-  if (path === "/") {
-    return "/";
-  }
-
-  const index = path.lastIndexOf("/");
-  if (index <= 0) {
-    return "/";
-  }
-
-  return path.slice(0, index);
+function isWithinBaseDirectory(path: string, baseDirectory: string): boolean {
+  return baseDirectory === "/" || path === baseDirectory || path.startsWith(`${baseDirectory}/`);
 }
 
-function getBreadcrumbs(path: string, rootLabel: string) {
-  const parts = path.split("/").filter(Boolean);
-  const crumbs = [{ label: rootLabel, path: "/" }];
+function getParentPath(path: string, baseDirectory: string): string {
+  if (path === baseDirectory) return baseDirectory;
+  const index = path.lastIndexOf("/");
+  if (index <= 0) return baseDirectory;
+  const parent = path.slice(0, index);
+  return isWithinBaseDirectory(parent, baseDirectory) ? parent : baseDirectory;
+}
 
-  let current = "";
+function getBreadcrumbs(path: string, baseDirectory: string, rootLabel: string) {
+  const crumbs = [{ label: rootLabel, path: baseDirectory }];
+  const relative =
+    baseDirectory === "/" ? path.slice(1) : path.slice(baseDirectory.length).replace(/^\//, "");
+  const parts = relative.split("/").filter(Boolean);
+  let current = baseDirectory;
   for (const part of parts) {
-    current += `/${part}`;
-    crumbs.push({
-      label: part,
-      path: current,
-    });
+    current = current === "/" ? `/${part}` : `${current}/${part}`;
+    crumbs.push({ label: part, path: current });
   }
-
   return crumbs;
 }

@@ -1086,6 +1086,7 @@ pub async fn flush_pending_mutations(state: tauri::State<'_, AppState>) -> Resul
         let client = state.client_for(Some(&mutation.account_id));
 
         let result = match mutation.kind.as_str() {
+            "delete_version" => client.trash_asset(&mutation.asset_id).await.map(|_| None),
             "favorite" => {
                 let is_favorite = payload
                     .get("isFavorite")

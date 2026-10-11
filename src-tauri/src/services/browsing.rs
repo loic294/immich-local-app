@@ -218,6 +218,9 @@ fn read_map_assets(
                 Ok((
                     AssetSummary {
                         id: r.get(0)?,
+                        stack_count: None,
+                        stack_original_id: None,
+                        is_stack_secondary: false,
                         original_file_name: r.get(1)?,
                         original_path: r.get(2)?,
                         file_created_at: r.get(3)?,

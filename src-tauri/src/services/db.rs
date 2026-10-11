@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::settings::{MyPhotosRule, Settings};
+use crate::commands::settings::{MenuItemPreference, MyPhotosRule, Settings};
 use crate::services::immich_client::AssetSummary;
 
 #[path = "metadata_search.rs"]
@@ -517,7 +517,60 @@ pub fn default_menu_items() -> Vec<String> {
 }
 
 fn default_menu_items_json() -> String {
-    serde_json::to_string(&default_menu_items()).unwrap_or_else(|_| "[]".to_string())
+    serde_json::to_string(&default_menu_preferences()).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn default_menu_preferences() -> Vec<MenuItemPreference> {
+    default_menu_items()
+        .into_iter()
+        .map(|key| MenuItemPreference {
+            group: if matches!(key.as_str(), "people" | "maps" | "favorites" | "deleted") {
+                "library".into()
+            } else {
+                "main".into()
+            },
+            key,
+        })
+        .collect()
+}
+
+fn parse_menu_preferences(raw: &str) -> Vec<MenuItemPreference> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredItem {
+        Key(String),
+        Preference(MenuItemPreference),
+    }
+
+    let Ok(stored) = serde_json::from_str::<Vec<StoredItem>>(raw) else {
+        return default_menu_preferences();
+    };
+    let defaults = default_menu_preferences();
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    for item in stored {
+        let preference = match item {
+            StoredItem::Key(key) => defaults.iter().find(|item| item.key == key).cloned(),
+            StoredItem::Preference(mut preference) => {
+                if !matches!(preference.group.as_str(), "main" | "library") {
+                    preference.group = defaults
+                        .iter()
+                        .find(|item| item.key == preference.key)
+                        .map(|item| item.group.clone())
+                        .unwrap_or_else(|| "main".into());
+                }
+                Some(preference)
+            }
+        };
+        if let Some(preference) = preference {
+            if defaults.iter().any(|item| item.key == preference.key)
+                && seen.insert(preference.key.clone())
+            {
+                result.push(preference);
+            }
+        }
+    }
+    result
 }
 
 fn migrate_browsing_menu(conn: &Connection) -> Result<(), String> {
@@ -538,11 +591,13 @@ fn migrate_browsing_menu(conn: &Connection) -> Result<(), String> {
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
-    let mut items: Vec<String> = serde_json::from_str(&raw)
-        .map_err(|error| format!("Cannot migrate navigation preferences: {error}"))?;
+    let mut items = parse_menu_preferences(&raw);
     for name in ["people", "maps"] {
-        if !items.iter().any(|item| item == name) {
-            items.push(name.into());
+        if !items.iter().any(|item| item.key == name) {
+            items.push(MenuItemPreference {
+                key: name.into(),
+                group: "library".into(),
+            });
         }
     }
     let tx = conn
@@ -856,6 +911,18 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS account_preferences (
+                account_id TEXT PRIMARY KEY,
+                folders_base_directory TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS recent_albums (
+                account_id TEXT NOT NULL,
+                album_id TEXT NOT NULL,
+                last_used_at TEXT NOT NULL,
+                PRIMARY KEY (account_id, album_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_recent_albums_last_used
+                ON recent_albums(last_used_at DESC);
             CREATE TABLE IF NOT EXISTS pending_mutations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 asset_id TEXT NOT NULL,
@@ -2484,6 +2551,7 @@ impl Database {
         if has_next_page {
             items.truncate(page_size as usize);
         }
+        self.populate_stack_metadata(&mut items)?;
 
         Ok((items, has_next_page))
     }
@@ -2596,6 +2664,8 @@ impl Database {
             branch_items
         };
 
+        let mut items = items;
+        self.populate_stack_metadata(&mut items)?;
         Ok(items)
     }
 
@@ -2758,8 +2828,11 @@ impl Database {
     /// responses for mutations applied locally while offline.
     pub fn get_asset_summary(&self, asset_id: &str) -> Result<Option<AssetSummary>, String> {
         let details = self.get_asset_details(asset_id)?;
-        Ok(details.map(|asset| AssetSummary {
+        let mut summary = details.map(|asset| AssetSummary {
             id: asset.id,
+            stack_count: None,
+            stack_original_id: None,
+            is_stack_secondary: false,
             original_file_name: asset.original_file_name,
             original_path: asset.original_path,
             file_created_at: asset.file_created_at,
@@ -2774,7 +2847,38 @@ impl Database {
             width: asset.width,
             height: asset.height,
             thumbhash: asset.thumbhash,
-        }))
+        });
+        if let Some(asset) = summary.as_mut() {
+            self.populate_stack_metadata(std::slice::from_mut(asset))?;
+        }
+        Ok(summary)
+    }
+
+    fn populate_stack_metadata(&self, assets: &mut [AssetSummary]) -> Result<(), String> {
+        if assets.is_empty() {
+            return Ok(());
+        }
+        self.init_media()?;
+        let conn = self.open()?;
+        for asset in assets {
+            let (root_id, count, secondary): (Option<String>, Option<u32>, i32) = conn
+                .query_row(
+                    "SELECT
+                        COALESCE((SELECT original_asset_id FROM edit_versions WHERE asset_id=?1), ?1),
+                        CASE WHEN EXISTS(SELECT 1 FROM edit_versions WHERE asset_id=?1 OR original_asset_id=?1)
+                            THEN (SELECT COUNT(*) + 1 FROM edit_versions WHERE original_asset_id=
+                                COALESCE((SELECT original_asset_id FROM edit_versions WHERE asset_id=?1), ?1))
+                            ELSE NULL END,
+                        COALESCE((SELECT is_stack_secondary FROM assets WHERE id=?1), 0)",
+                    [&asset.id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(|error| error.to_string())?;
+            asset.stack_original_id = count.map(|_| root_id).flatten();
+            asset.stack_count = count;
+            asset.is_stack_secondary = secondary != 0;
+        }
+        Ok(())
     }
 
     pub fn get_asset_jump_target_page(
@@ -3234,6 +3338,8 @@ impl Database {
             items.truncate(page_size as usize);
         }
 
+        self.populate_stack_metadata(&mut items)?;
+
         Ok((items, has_next_page))
     }
 
@@ -3287,7 +3393,119 @@ impl Database {
             items.push(row.map_err(|err| err.to_string())?);
         }
 
+        self.populate_stack_metadata(&mut items)?;
+
         Ok(items)
+    }
+
+    pub fn record_recent_album(&self, album_id: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        let account_id = conn
+            .query_row(
+                "SELECT account_id FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => format!("album not found in local cache: {album_id}"),
+                other => other.to_string(),
+            })?;
+        conn.execute(
+            "INSERT INTO recent_albums(account_id, album_id, last_used_at)
+             VALUES(?1, ?2, ?3)
+             ON CONFLICT(account_id, album_id) DO UPDATE SET last_used_at=excluded.last_used_at",
+            params![account_id, album_id, chrono::Local::now().to_rfc3339()],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_recent_albums(&self, limit: u32) -> Result<Vec<CachedAlbumSummary>, String> {
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.id, a.album_name, a.album_thumbnail_asset_id, a.owner_id, a.shared,
+                        a.created_at, a.updated_at, a.start_date, a.end_date, a.asset_count,
+                        a.owner_name, a.owner_email, a.description, a.saved_local_folder_path,
+                        a.account_id
+                 FROM recent_albums r
+                 JOIN albums a ON a.id = r.album_id AND a.account_id = r.account_id
+                 ORDER BY r.last_used_at DESC LIMIT ?1",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = stmt
+            .query_map(params![limit.clamp(1, 20)], |row| {
+                Ok(CachedAlbumSummary {
+                    id: row.get(0)?,
+                    album_name: row.get(1)?,
+                    album_thumbnail_asset_id: row.get(2)?,
+                    owner_id: row.get(3)?,
+                    shared: row.get::<_, Option<i32>>(4)?.unwrap_or(0) != 0,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    start_date: row.get(7)?,
+                    end_date: row.get(8)?,
+                    asset_count: row.get(9)?,
+                    owner_name: row.get(10)?,
+                    owner_email: row.get(11)?,
+                    description: row.get(12)?,
+                    saved_local_folder_path: row.get(13)?,
+                    account_id: row.get(14)?,
+                })
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn get_folders_base_directory(&self, account_id: &str) -> Result<String, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT folders_base_directory FROM account_preferences WHERE account_id = ?1",
+            params![account_id],
+            |row| row.get::<_, String>(0),
+        )
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(String::new()),
+            other => Err(other),
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn set_folders_base_directory(
+        &self,
+        account_id: &str,
+        base_directory: &str,
+    ) -> Result<String, String> {
+        let normalized = base_directory.trim().replace('\\', "/");
+        let normalized = normalized.trim_end_matches('/');
+        let conn = self.open()?;
+        if !normalized.is_empty() {
+            let prefix = format!("{normalized}/");
+            let mut stmt = conn
+                .prepare("SELECT original_path FROM assets WHERE account_id = ?1 AND original_path IS NOT NULL AND original_path != ''")
+                .map_err(|error| error.to_string())?;
+            let paths = stmt
+                .query_map([account_id], |row| row.get::<_, String>(0))
+                .map_err(|error| error.to_string())?;
+            let mut found = false;
+            for path in paths {
+                if path.map_err(|error| error.to_string())?.replace('\\', "/").starts_with(&prefix) {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err("Choose a folder path present in this account's local asset cache".into());
+            }
+        }
+        conn.execute(
+            "INSERT INTO account_preferences(account_id, folders_base_directory) VALUES(?1, ?2)
+             ON CONFLICT(account_id) DO UPDATE SET folders_base_directory=excluded.folders_base_directory",
+            params![account_id, normalized],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(normalized.to_string())
     }
 
     pub fn get_unique_original_paths(&self) -> Result<Vec<String>, String> {
@@ -3440,6 +3658,8 @@ impl Database {
             items.truncate(page_size as usize);
         }
 
+        self.populate_stack_metadata(&mut items)?;
+
         Ok((items, has_next_page))
     }
 
@@ -3534,6 +3754,8 @@ impl Database {
             }
         }
 
+        self.populate_stack_metadata(&mut items)?;
+
         Ok(items)
     }
 
@@ -3598,6 +3820,8 @@ impl Database {
             items.truncate(page_size as usize);
         }
 
+        self.populate_stack_metadata(&mut items)?;
+
         Ok((items, has_next_page))
     }
 
@@ -3650,6 +3874,8 @@ impl Database {
         for row in rows {
             items.push(row.map_err(|err| err.to_string())?);
         }
+
+        self.populate_stack_metadata(&mut items)?;
 
         Ok(items)
     }
@@ -3802,14 +4028,21 @@ impl Database {
         let menu_items = stmt
             .query_row(params!["menu_items"], |row| row.get::<_, String>(0))
             .ok()
-            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
-            .unwrap_or_else(default_menu_items);
+            .map(|raw| parse_menu_preferences(&raw))
+            .unwrap_or_else(default_menu_preferences);
 
         let my_photos_rules = stmt
             .query_row(params!["my_photos_rules"], |row| row.get::<_, String>(0))
             .ok()
             .and_then(|raw| serde_json::from_str::<Vec<MyPhotosRule>>(&raw).ok())
             .unwrap_or_default();
+
+        let recent_albums_limit = stmt
+            .query_row(params!["recent_albums_limit"], |row| row.get::<_, String>(0))
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| (1..=20).contains(value))
+            .unwrap_or(5);
 
         Ok(Settings {
             locale,
@@ -3819,6 +4052,7 @@ impl Database {
             user_local_folder_path,
             menu_items,
             my_photos_rules,
+            recent_albums_limit,
         })
     }
 
@@ -3855,6 +4089,11 @@ impl Database {
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('my_photos_rules', ?1)",
             params![my_photos_rules_json],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('recent_albums_limit', ?1)",
+            params![settings.recent_albums_limit.clamp(1, 20).to_string()],
         )
         .map_err(|err| err.to_string())?;
 
@@ -4057,6 +4296,9 @@ fn dirs_home() -> Option<PathBuf> {
 fn map_asset_summary(row: &rusqlite::Row<'_>) -> Result<AssetSummary, rusqlite::Error> {
     Ok(AssetSummary {
         id: row.get(0)?,
+        stack_count: None,
+        stack_original_id: None,
+        is_stack_secondary: false,
         original_file_name: row.get(1)?,
         original_path: row.get(2)?,
         file_created_at: row.get(3)?,
@@ -4143,5 +4385,102 @@ fn asset_filter_where_clause(filter: Option<&str>) -> &'static str {
             "COALESCE(is_archived, 0) = 1 OR LOWER(COALESCE(visibility, '')) = 'archive'"
         }
         _ => "1=1",
+    }
+}
+
+
+#[cfg(test)]
+mod account_local_navigation_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_db_path(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::current_dir()
+            .expect("working directory")
+            .join(format!(".test-{name}-{}-{nonce}.sqlite", std::process::id()))
+    }
+
+    fn cleanup_db(path: &PathBuf) {
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn menu_migration_accepts_legacy_strings_and_grouped_objects() {
+        for (name, raw) in [
+            ("legacy-menu", r#"["albums","photos"]"#),
+            (
+                "grouped-menu",
+                r#"[{"key":"albums","group":"library"},{"key":"photos","group":"main"}]"#,
+            ),
+        ] {
+            let path = test_db_path(name);
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
+            conn.execute("INSERT INTO settings(key, value) VALUES('menu_items', ?1)", [raw]).unwrap();
+            drop(conn);
+
+            let db = Database::test_database(path.clone()).unwrap();
+            let migrated: String = db.open().unwrap().query_row(
+                "SELECT value FROM settings WHERE key='menu_items'",
+                [],
+                |row| row.get(0),
+            ).unwrap();
+            let preferences: Vec<MenuItemPreference> = serde_json::from_str(&migrated).unwrap();
+            assert_eq!(preferences[0].key, "albums");
+            assert_eq!(preferences[0].group, if name == "grouped-menu" { "library" } else { "main" });
+            assert_eq!(preferences[1].key, "photos");
+            cleanup_db(&path);
+        }
+    }
+
+    #[test]
+    fn recent_albums_are_local_ordered_and_limited() {
+        let path = test_db_path("recent-albums");
+        let db = Database::test_database(path.clone()).unwrap();
+        {
+            let conn = db.open().unwrap();
+            for album_id in ["older", "newer"] {
+                conn.execute(
+                    "INSERT INTO albums(id, account_id, album_name, owner_id) VALUES(?1, 'account-a', ?1, 'owner')",
+                    [album_id],
+                ).unwrap();
+            }
+        }
+        db.record_recent_album("older").unwrap();
+        db.record_recent_album("newer").unwrap();
+        db.open().unwrap().execute(
+            "UPDATE recent_albums SET last_used_at='2025-01-01T00:00:00Z' WHERE album_id='older'",
+            [],
+        ).unwrap();
+        db.open().unwrap().execute(
+            "UPDATE recent_albums SET last_used_at='2025-01-02T00:00:00Z' WHERE album_id='newer'",
+            [],
+        ).unwrap();
+
+        let recent = db.get_recent_albums(1).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, "newer");
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn folders_base_directory_is_account_scoped_and_validated_against_cached_files() {
+        let path = test_db_path("folders-base");
+        let db = Database::test_database(path.clone()).unwrap();
+        db.open().unwrap().execute(
+            "INSERT INTO assets(id, account_id, original_file_name, original_path, updated_at) VALUES('asset-1', 'account-a', 'image.jpg', '/photos/2024/image.jpg', 0)",
+            [],
+        ).unwrap();
+
+        assert_eq!(db.get_folders_base_directory("account-a").unwrap(), "");
+        assert_eq!(db.set_folders_base_directory("account-a", "/photos/2024/").unwrap(), "/photos/2024");
+        assert_eq!(db.get_folders_base_directory("account-a").unwrap(), "/photos/2024");
+        assert_eq!(db.get_folders_base_directory("account-b").unwrap(), "");
+        assert!(db.set_folders_base_directory("account-a", "/missing").is_err());
+        cleanup_db(&path);
     }
 }

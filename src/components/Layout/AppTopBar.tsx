@@ -1,3 +1,4 @@
+import { WindowHeader } from "./WindowHeader";
 import { X, Trash2, ArchiveRestore } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Session } from "../../hooks/useSession";
@@ -119,8 +120,8 @@ export function AppTopBar({
   if (selectedCount > 0) {
     return (
       <>
-        <header className="navbar border-b border-base-300 bg-base-100 px-3 sm:px-4">
-          <div className="navbar-start gap-4">
+        <WindowHeader>
+          <div className="flex min-w-0 items-center gap-4">
             <button
               type="button"
               className="btn btn-sm btn-outline gap-1"
@@ -137,7 +138,7 @@ export function AppTopBar({
             </p>
           </div>
 
-          <div className="navbar-end gap-2">
+          <div className="order-2 flex shrink-0 items-center gap-2">
             {onUnarchiveSelected ? (
               <button
                 type="button"
@@ -175,7 +176,7 @@ export function AppTopBar({
               </>
             )}
           </div>
-        </header>
+        </WindowHeader>
 
         {onUnarchiveSelected && selectionError ? (
           <div role="alert" className="alert alert-error alert-soft mx-3 mt-2 py-2 text-sm sm:mx-4">

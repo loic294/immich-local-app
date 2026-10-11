@@ -114,6 +114,8 @@ export function FullscreenInfoPanel({
         </div>
       </div>
 
+      <StackVersions assetId={asset.id} />
+
       <div className="mt-3 space-y-2 rounded-sm bg-zinc-900 p-4">
         <div>
           <p className="text-[10px] uppercase tracking-wide text-white/45">
@@ -219,8 +221,6 @@ export function FullscreenInfoPanel({
           </div>
         ) : null}
       </div>
-
-      <StackVersions assetId={asset.id} />
 
       {details?.people || details?.tags ? (
         <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-zinc-900 p-3">

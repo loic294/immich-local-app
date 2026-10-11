@@ -137,6 +137,18 @@ export function MediaSettings({ section = "editing" }: MediaSettingsProps) {
                 {labels.telemetry}
               </label>
               <p className="text-sm text-base-content/65">{labels.telemetryHelp}</p>
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  className="toggle toggle-primary"
+                  checked={preferences.sessionReplayEnabled ?? false}
+                  onChange={(event) =>
+                    setPreferences({ ...preferences, sessionReplayEnabled: event.target.checked })
+                  }
+                />
+                {labels.replay}
+              </label>
+              <p className="text-sm text-base-content/65">{labels.replayHelp}</p>
             </>
           ))}
         <div className="card-actions justify-end">

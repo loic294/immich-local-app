@@ -1,3 +1,4 @@
+import { WindowHeader } from "./components/Layout/WindowHeader";
 import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSession } from "./hooks/useSession";
@@ -335,13 +336,19 @@ export function App() {
   ]);
 
   if (isRestoringSession) {
-    return <LoadingScreen />;
+    return (
+      <>
+        <WindowHeader floating />
+        <LoadingScreen />
+      </>
+    );
   }
 
   if (!session) {
     if (showServerUrlScreen && !serverUrl) {
       return (
-        <main className="min-h-screen bg-base-200 p-6">
+        <main className="min-h-screen bg-base-200 p-6 pt-24">
+          <WindowHeader floating />
           <ServerUrlScreen
             onSubmit={async (url) => {
               await setServerUrl(url);
@@ -355,7 +362,8 @@ export function App() {
     }
 
     return (
-      <main className="min-h-screen bg-base-200 p-6">
+      <main className="min-h-screen bg-base-200 p-6 pt-24">
+        <WindowHeader floating />
         <LoginScreen
           serverUrl={serverUrl ?? "http://localhost:2283"}
           onAuthorize={initiateOAuth}

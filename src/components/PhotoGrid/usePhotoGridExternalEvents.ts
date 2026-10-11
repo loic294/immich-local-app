@@ -76,17 +76,30 @@ export function usePhotoGridExternalEvents(
           }
           console.info(`[PhotoGrid.openVersion] open extra asset=${assetId}`);
           setExtraLightboxAsset(asset);
-          openAssetRef.current(assetId, [...displayAssetsRef.current, asset]);
+          const loadedAssets = displayAssetsRef.current;
+          const originalIndex = loadedAssets.findIndex((item) => item.id === asset.stackOriginalId);
+          const insertionIndex = originalIndex >= 0 ? originalIndex + 1 : loadedAssets.length;
+          openAssetRef.current(assetId, [
+            ...loadedAssets.slice(0, insertionIndex),
+            asset,
+            ...loadedAssets.slice(insertionIndex),
+          ]);
         })
         .catch((error) => console.error(`[PhotoGrid.openVersion] failed asset=${assetId}`, error));
     };
     const onTimeShifted = () => setLayoutRefreshNonce((value) => value + 1);
+    const onVersionsChanged = () => {
+      setExtraLightboxAsset(null);
+      setLayoutRefreshNonce((value) => value + 1);
+    };
     window.addEventListener(OPEN_VERSION_EVENT, onOpenVersion);
     window.addEventListener(ASSETS_TIME_SHIFTED_EVENT, onTimeShifted);
+    window.addEventListener("media:versions-changed", onVersionsChanged);
     return () => {
       disposed = true;
       window.removeEventListener(OPEN_VERSION_EVENT, onOpenVersion);
       window.removeEventListener(ASSETS_TIME_SHIFTED_EVENT, onTimeShifted);
+      window.removeEventListener("media:versions-changed", onVersionsChanged);
     };
   }, []);
 

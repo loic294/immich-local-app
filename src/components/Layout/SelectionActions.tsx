@@ -17,6 +17,7 @@ import type { AlbumSummary } from "../../types";
 import { useI18n } from "../../i18n";
 import { requestFixTime } from "../../api/time";
 import { useSearchTimeI18n } from "../../i18n/searchTime";
+import { AlbumPicker } from "../Albums/AlbumPicker";
 
 type SelectionActionsProps = {
   selectedAssetIds: string[];
@@ -30,6 +31,7 @@ type SelectionActionsProps = {
   variant?: "topbar" | "preview";
   modalZIndexClass?: string;
   stopPropagation?: boolean;
+  showTimeButton?: boolean;
 };
 
 export function SelectionActions({
@@ -44,6 +46,7 @@ export function SelectionActions({
   variant = "topbar",
   modalZIndexClass = "z-[120]",
   stopPropagation = false,
+  showTimeButton = true,
 }: SelectionActionsProps) {
   const [showAlbumModal, setShowAlbumModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -102,7 +105,9 @@ export function SelectionActions({
   };
 
   const addButtonClass =
-    variant === "preview" ? "btn btn-sm btn-outline" : "btn btn-sm btn-outline";
+    variant === "preview"
+      ? "btn btn-sm border border-white/15 bg-zinc-900 text-white hover:bg-zinc-800"
+      : "btn btn-sm btn-outline";
   // Time correction is local-first (SQLite + offline mutation queue), so it is
   // only gated on having a selection, never on connectivity or album loading.
   const updateTimeButtonClass =
@@ -503,19 +508,21 @@ export function SelectionActions({
         {t("selectionActions.addToAlbum")}
       </button>
 
-      <button
-        type="button"
-        className={updateTimeButtonClass}
-        data-test="selection-update-time"
-        aria-label={tTime("updateTime")}
-        disabled={!canRunSelectionAction}
-        onClick={(event) => {
-          triggerAction(event, () => requestFixTime(selectedAssetIds));
-        }}
-      >
-        <Clock size={16} />
-        {tTime("updateTime")}
-      </button>
+      {showTimeButton ? (
+        <button
+          type="button"
+          className={updateTimeButtonClass}
+          data-test="selection-update-time"
+          aria-label={tTime("updateTime")}
+          disabled={!canRunSelectionAction}
+          onClick={(event) => {
+            triggerAction(event, () => requestFixTime(selectedAssetIds));
+          }}
+        >
+          <Clock size={16} />
+          {tTime("updateTime")}
+        </button>
+      ) : null}
 
       <details
         className="dropdown dropdown-end"
@@ -604,62 +611,14 @@ export function SelectionActions({
                 <span className="label-text">{t("selectionActions.existingAlbum")}</span>
               </label>
 
-              <details className="dropdown w-full">
-                <summary className="btn btn-outline w-full justify-between">
-                  {selectedAlbumId
-                    ? (availableAlbums.find((album) => album.id === selectedAlbumId)?.albumName ??
-                      t("selectionActions.selectAlbum"))
-                    : t("selectionActions.selectAlbum")}
-                </summary>
-                <ul className="menu dropdown-content z-[130] mt-2 max-h-72 w-full overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow">
-                  {availableAlbums.length === 0 ? (
-                    <li>
-                      <span className="text-base-content/60">
-                        {isLoadingAlbums
-                          ? t("selectionActions.loadingAlbums")
-                          : t("selectionActions.noAlbumsAvailable")}
-                      </span>
-                    </li>
-                  ) : (
-                    availableAlbums.map((album) => {
-                      const isActive = selectedAlbumId === album.id;
-                      const thumbSrc = albumThumbnailMap[album.id];
-
-                      return (
-                        <li key={album.id}>
-                          <button
-                            type="button"
-                            className={`justify-between ${isActive ? "menu-active" : ""}`}
-                            onClick={() => {
-                              setSelectedAlbumId(album.id);
-                            }}
-                          >
-                            <div className="flex items-center gap-2">
-                              {thumbSrc ? (
-                                <span className="avatar">
-                                  <span className="w-8 rounded-box overflow-hidden">
-                                    <img src={thumbSrc} alt={album.albumName} />
-                                  </span>
-                                </span>
-                              ) : (
-                                <span className="avatar placeholder">
-                                  <span className="w-8 rounded-box bg-base-300 text-[10px] text-base-content/70">
-                                    {album.albumName.slice(0, 1).toUpperCase()}
-                                  </span>
-                                </span>
-                              )}
-                              <span className="truncate max-w-52">{album.albumName}</span>
-                            </div>
-                            <span className="badge badge-sm badge-ghost">
-                              {album.assetCount ?? 0}
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })
-                  )}
-                </ul>
-              </details>
+              <AlbumPicker
+                albums={availableAlbums}
+                value={selectedAlbumId}
+                onChange={setSelectedAlbumId}
+                thumbnails={albumThumbnailMap}
+                loading={isLoadingAlbums}
+                disabled={isSubmittingAlbum}
+              />
             </div>
 
             <div className="mb-4 flex gap-2">

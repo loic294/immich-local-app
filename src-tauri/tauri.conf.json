@@ -16,7 +16,9 @@
         "title": "Immich Local App",
         "width": 1280,
         "height": 900,
-        "resizable": true
+        "resizable": true,
+        "decorations": false,
+        "shadow": true
       }
     ],
     "security": {
@@ -54,9 +56,7 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "app.immich"
-        ]
+        "schemes": ["app.immich"]
       }
     }
   }

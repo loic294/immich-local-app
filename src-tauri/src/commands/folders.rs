@@ -18,6 +18,34 @@ fn is_visible_in_grid(asset: &crate::services::immich_client::AssetSummary) -> b
 }
 
 #[tauri::command]
+pub async fn get_folders_base_directory(
+    account_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    state.db.get_folders_base_directory(&account_id)
+}
+
+#[tauri::command]
+pub async fn set_folders_base_directory(
+    account_id: String,
+    base_directory: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    log::info!("[folders.base_directory] saving account_id={account_id}");
+    let account_exists = state
+        .db
+        .list_accounts()?
+        .iter()
+        .any(|account| account.id == account_id);
+    if !account_exists {
+        return Err("account not found".into());
+    }
+    state
+        .db
+        .set_folders_base_directory(&account_id, &base_directory)
+}
+
+#[tauri::command]
 pub async fn get_unique_original_paths(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {

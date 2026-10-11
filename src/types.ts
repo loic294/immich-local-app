@@ -1,5 +1,11 @@
 export type AssetSummary = {
   id: string;
+  /** Number of assets in the locally cached edit stack, when applicable. */
+  stackCount?: number | null;
+  /** Original asset id for stack members; null for assets outside a stack. */
+  stackOriginalId?: string | null;
+  /** Whether Immich identifies this stack member as a secondary asset. */
+  isStackSecondary?: boolean;
   originalFileName: string;
   fileCreatedAt: string | null;
   checksum: string | null;
@@ -148,8 +154,14 @@ export type Settings = {
   thumbnailCachePath: string;
   videoCachePath: string;
   userLocalFolderPath: string;
-  menuItems: string[];
+  menuItems: MenuItemPreference[];
   myPhotosRules: MyPhotosRule[];
+  recentAlbumsLimit: number;
+};
+
+export type MenuItemPreference = {
+  key: string;
+  group: "main" | "library";
 };
 
 export type LocalCopyResult = {

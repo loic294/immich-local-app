@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Image, Film } from "lucide-react";
@@ -7,9 +8,10 @@ import { useMediaLabels } from "../../i18n/media";
 interface ImportTileProps {
   file: ImportFile;
   checked: boolean;
-  onToggle: () => void;
+  onToggle: (event: MouseEvent<HTMLDivElement>) => void;
+  disabled?: boolean;
 }
-export function ImportTile({ file, checked, onToggle }: ImportTileProps) {
+export function ImportTile({ file, checked, onToggle, disabled }: ImportTileProps) {
   const labels = useMediaLabels();
   const preview = useQuery({
     queryKey: ["import-preview", file.path, file.checksum],
@@ -19,7 +21,16 @@ export function ImportTile({ file, checked, onToggle }: ImportTileProps) {
     gcTime: 30_000,
   });
   return (
-    <label
+    <div
+      onClick={(event) => {
+        if (!file.alreadyImported && !disabled) onToggle(event);
+      }}
+      onContextMenu={(event) => {
+        if (event.ctrlKey) {
+          event.preventDefault();
+          if (!file.alreadyImported && !disabled) onToggle(event);
+        }
+      }}
       className={`relative flex cursor-pointer flex-col overflow-hidden rounded-box border ${checked ? "border-primary" : "border-base-300"} ${file.alreadyImported ? "opacity-50" : ""}`}
     >
       <div className="aspect-square overflow-hidden bg-base-300">
@@ -49,14 +60,20 @@ export function ImportTile({ file, checked, onToggle }: ImportTileProps) {
         type="checkbox"
         className="checkbox checkbox-primary absolute left-2 top-2"
         checked={checked}
-        disabled={file.alreadyImported}
-        onChange={onToggle}
+        disabled={file.alreadyImported || disabled}
+        readOnly
+        onKeyDown={(event) => {
+          if (event.key === " ") {
+            event.preventDefault();
+            if (!file.alreadyImported && !disabled) event.currentTarget.click();
+          }
+        }}
         aria-label={file.name}
       />
       <span className="truncate p-2 text-xs" title={file.name}>
         {file.name}
       </span>
       {file.alreadyImported && <span className="px-2 pb-2 text-xs">{labels.duplicate}</span>}
-    </label>
+    </div>
   );
 }

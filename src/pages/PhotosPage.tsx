@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAssetDays } from "../hooks/useAssetDays";
 import { useMemories } from "../hooks/useMemories";
 import { AppTopBar } from "../components/Layout/AppTopBar";
@@ -35,6 +35,8 @@ interface PhotosPageProps {
   assetFilter?: AssetFilter;
   searchLabel?: string;
   initialPersonId?: string;
+  hideFilterBar?: boolean;
+  pageHeader?: ReactNode;
 }
 
 export function PhotosPage({
@@ -45,6 +47,8 @@ export function PhotosPage({
   assetFilter = "all",
   searchLabel,
   initialPersonId,
+  hideFilterBar = false,
+  pageHeader,
 }: PhotosPageProps) {
   const { t } = useI18n();
   const effectiveSearchLabel = searchLabel ?? t("photos.searchLabel");
@@ -64,14 +68,13 @@ export function PhotosPage({
   const { syncStatus } = useSyncStatus();
   const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}:${archiveRefreshNonce}`;
 
-  const filters = useAssetFilters(`photos:${assetFilter}`);
-  useEffect(() => {
-    if (initialPersonId) {
-      filters.update({ personId: initialPersonId });
-      filters.setOpen(true);
-    }
-  }, [initialPersonId, filters.update, filters.setOpen]);
-  const filterPayload = filters.payload;
+  const filters = useAssetFilters(
+    initialPersonId ? `person:${initialPersonId}` : `photos:${assetFilter}`,
+  );
+  const filterPayload = useMemo(
+    () => (initialPersonId ? { ...filters.criteria, personId: initialPersonId } : filters.payload),
+    [initialPersonId, filters.criteria, filters.payload],
+  );
   const fixTimeCriteria = useMemo(
     () => criteriaWithQuery(filterPayload, searchTerm),
     [filterPayload, searchTerm],
@@ -145,11 +148,15 @@ export function PhotosPage({
       const container = contentRef.current;
       const memoryStrip = container.querySelector('[data-test="memories-strip"]') as HTMLElement;
       const searchBar = container.querySelector('[data-test="search-bar"]') as HTMLElement;
+      const pageHeader = container.querySelector('[data-test="photo-page-header"]') as HTMLElement;
       const errorAlert = container.querySelector('[data-test="error-alert"]') as HTMLElement;
 
       const padding = 16; // padding from p-2 sm:p-3 lg:p-4 (bottom only)
       let usedHeight = padding;
 
+      if (pageHeader) {
+        usedHeight += pageHeader.offsetHeight + 8;
+      }
       if (memoryStrip) {
         usedHeight += memoryStrip.offsetHeight;
       }
@@ -269,7 +276,7 @@ export function PhotosPage({
           onSelectAll={() => {
             setSelectionCommand({ type: "select-all", nonce: Date.now() });
           }}
-          showFilterButton
+          showFilterButton={!hideFilterBar}
           searchScope={filterScope}
           filterActive={filters.isActive}
           filterOpen={filters.isOpen}
@@ -282,16 +289,23 @@ export function PhotosPage({
           }}
         />
 
-        <FilterBar
-          open={filters.isOpen}
-          scope={filterScope}
-          criteria={filters.criteria}
-          isActive={filters.isActive}
-          onChange={filters.update}
-          onReset={filters.reset}
-        />
+        {!hideFilterBar && (
+          <FilterBar
+            open={filters.isOpen}
+            scope={filterScope}
+            criteria={filters.criteria}
+            isActive={filters.isActive}
+            onChange={filters.update}
+            onReset={filters.reset}
+          />
+        )}
 
-        <section ref={contentRef} className="flex flex-col gap-2 p-2 sm:p-3 lg:p-4">
+        <section ref={contentRef} className="flex min-h-0 flex-1 flex-col gap-2 p-2 sm:p-3 lg:p-4">
+          {pageHeader && (
+            <div data-test="photo-page-header" className="shrink-0">
+              {pageHeader}
+            </div>
+          )}
           {activePage === "photos" && (
             <div data-test="memories-strip" className="shrink-0">
               <MemoriesStrip

@@ -627,6 +627,26 @@ export async function fetchTimelineMonths(): Promise<TimelineMonths> {
   return getCachedTimelineMonths();
 }
 
+export async function getRecentAlbums(limit = 5): Promise<AlbumSummary[]> {
+  return invoke<AlbumSummary[]>("get_recent_albums", { limit });
+}
+
+export async function recordRecentAlbum(albumId: string): Promise<void> {
+  await invoke<void>("record_recent_album", { albumId });
+  window.dispatchEvent(new Event("recent-albums-changed"));
+}
+
+export async function getFoldersBaseDirectory(accountId: string): Promise<string> {
+  return invoke<string>("get_folders_base_directory", { accountId });
+}
+
+export async function setFoldersBaseDirectory(
+  accountId: string,
+  baseDirectory: string,
+): Promise<string> {
+  return invoke<string>("set_folders_base_directory", { accountId, baseDirectory });
+}
+
 export async function fetchAlbums(): Promise<AlbumSummary[]> {
   return getCachedAlbums();
 }
@@ -635,17 +655,20 @@ export async function createAlbumWithAssets(
   albumName: string,
   assetIds: string[],
 ): Promise<AlbumSummary> {
-  return invoke<AlbumSummary>("create_album_with_assets", {
+  const album = await invoke<AlbumSummary>("create_album_with_assets", {
     albumName,
     assetIds,
   });
+  window.dispatchEvent(new Event("recent-albums-changed"));
+  return album;
 }
 
 export async function addAssetsToAlbum(albumId: string, assetIds: string[]): Promise<void> {
-  return invoke<void>("add_assets_to_album", {
+  await invoke<void>("add_assets_to_album", {
     albumId,
     assetIds,
   });
+  window.dispatchEvent(new Event("recent-albums-changed"));
 }
 
 export async function createShareLinkForAssets(assetIds: string[]): Promise<string> {

@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 import { Pencil, LoaderCircle } from "lucide-react";
-import { requestMediaEdit } from "../../api/media";
-import { getCachedAlbumAssetsPaged } from "../../api/tauri";
+import { beginMediaEdit, trackFeature } from "../../api/media";
+import { getCachedAlbumAssetsPaged, refreshAlbumAssets } from "../../api/tauri";
+import { useConnectionContext } from "../../hooks/connectionContext";
 import { useMediaLabels } from "../../i18n/media";
 
 const PAGE_SIZE = 500;
@@ -15,9 +16,9 @@ async function collectAlbumPhotoIds(albumId: string): Promise<string[]> {
     for (const asset of result.items) {
       if ((asset.type ?? "").toUpperCase() !== "VIDEO") ids.push(asset.id);
     }
-    if (!result.hasNextPage) break;
+    if (!result.hasNextPage) return [...new Set(ids)];
   }
-  return ids;
+  throw new Error("Album photo collection exceeded the page limit");
 }
 
 type EditAllPhotosButtonProps = { albumId: string };
@@ -25,6 +26,7 @@ type EditAllPhotosButtonProps = { albumId: string };
 /** Album toolbar action that opens every cached album photo in the external editor. */
 export function EditAllPhotosButton({ albumId }: EditAllPhotosButtonProps) {
   const labels = useMediaLabels();
+  const { isOnline } = useConnectionContext();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
@@ -35,12 +37,23 @@ export function EditAllPhotosButton({ albumId }: EditAllPhotosButtonProps) {
     setBusy(true);
     setError(null);
     try {
-      const ids = await collectAlbumPhotoIds(albumId);
+      let ids = await collectAlbumPhotoIds(albumId);
+      if (ids.length === 0 && isOnline === true) {
+        console.info(`[albums.editAll] refreshing uncached album=${albumId}`);
+        await refreshAlbumAssets(albumId);
+        ids = await collectAlbumPhotoIds(albumId);
+      }
       console.info(`[albums.editAll] album=${albumId} photos=${ids.length}`);
-      if (ids.length > 0) requestMediaEdit(ids, albumId);
+      if (ids.length === 0) {
+        setError(labels.noPhotos);
+        return;
+      }
+      await beginMediaEdit(ids);
+      console.info(`[albums.editAll] editor opened album=${albumId} photos=${ids.length}`);
+      trackFeature("edit");
     } catch (cause) {
       console.error(`[albums.editAll] failed album=${albumId}`, cause);
-      setError(String(cause));
+      setError(`${labels.editFailed} ${String(cause)}`);
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -48,16 +61,28 @@ export function EditAllPhotosButton({ albumId }: EditAllPhotosButtonProps) {
   };
 
   return (
-    <button
-      type="button"
-      className="btn btn-sm btn-outline shrink-0"
-      disabled={busy}
-      title={error ?? labels.editAll}
-      onClick={() => void run()}
-    >
-      {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Pencil size={16} />}
-      {labels.editAll}
-      {error ? <span className="badge badge-error badge-xs">!</span> : null}
-    </button>
+    <>
+      <button
+        type="button"
+        className="btn btn-sm btn-outline shrink-0"
+        disabled={busy}
+        title={error ?? labels.editAll}
+        onClick={() => void run()}
+      >
+        {busy ? <LoaderCircle size={16} className="animate-spin" /> : <Pencil size={16} />}
+        {labels.editAll}
+        {error ? <span className="badge badge-error badge-xs">!</span> : null}
+      </button>
+      {error && (
+        <div className="toast toast-end z-[10050]" role="alert">
+          <div className="alert alert-error max-w-xl">
+            <span>{error}</span>
+            <button className="btn btn-sm" onClick={() => setError(null)}>
+              {labels.close}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
