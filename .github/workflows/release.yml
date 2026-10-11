@@ -90,8 +90,11 @@ jobs:
         shell: bash
         run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
 
-      - name: Test backend
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Validate frontend and backend
+        shell: bash
+        run: |
+          npm run build
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
