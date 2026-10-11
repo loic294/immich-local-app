@@ -1,5 +1,5 @@
-// Sets the app version across package.json, src-tauri/tauri.conf.json and
-// src-tauri/Cargo.toml. Used by the release workflow so a single computed
+// Sets the app version across manifests and lockfiles.
+// Used by the release workflow so a single computed
 // version is baked into every build (the updater compares this value).
 //
 // Usage: node scripts/set-version.mjs <version>
@@ -21,6 +21,16 @@ function setJsonVersion(path) {
 setJsonVersion("package.json");
 setJsonVersion("src-tauri/tauri.conf.json");
 
+const npmLockPath = "package-lock.json";
+const npmLock = JSON.parse(readFileSync(npmLockPath, "utf8"));
+if (!npmLock.packages?.[""]) {
+  throw new Error(`[set-version] missing root package in ${npmLockPath}`);
+}
+npmLock.version = version;
+npmLock.packages[""].version = version;
+writeFileSync(npmLockPath, `${JSON.stringify(npmLock, null, 2)}\n`);
+console.log(`[set-version] ${npmLockPath} -> ${version}`);
+
 // Cargo.toml: only the [package] version sits at the start of a line.
 const cargoPath = "src-tauri/Cargo.toml";
 const cargo = readFileSync(cargoPath, "utf8");
@@ -36,3 +46,16 @@ writeFileSync(
   cargo.replace(versionPattern, `version = "${version}"`),
 );
 console.log(`[set-version] ${cargoPath} -> ${version}`);
+
+const cargoLockPath = "src-tauri/Cargo.lock";
+const cargoLock = readFileSync(cargoLockPath, "utf8");
+const appVersionPattern =
+  /(\[\[package\]\]\r?\nname = "immich-local-app"\r?\nversion = ")[^"]+(")/;
+if (!appVersionPattern.test(cargoLock)) {
+  throw new Error(`[set-version] missing app package in ${cargoLockPath}`);
+}
+writeFileSync(
+  cargoLockPath,
+  cargoLock.replace(appVersionPattern, (_, before, after) => `${before}${version}${after}`),
+);
+console.log(`[set-version] ${cargoLockPath} -> ${version}`);
