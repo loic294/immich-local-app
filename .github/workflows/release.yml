@@ -50,6 +50,8 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
+      # Each publisher merges the shared latest.json release asset.
+      max-parallel: 1
       matrix:
         include:
           - platform: macos-latest
