@@ -552,6 +552,7 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
 
     let mut total = 0u32;
     let mut any_online = false;
+    let mut failures = Vec::new();
     for (account_id, client) in accounts {
         let server_url = state
             .db
@@ -579,6 +580,7 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
                     "[sync.refresh_album_list] fetch albums failed for account {}: {}",
                     account_id, err
                 );
+                failures.push(format!("account {account_id}: {err}"));
                 continue;
             }
         };
@@ -592,6 +594,9 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
 
     if !any_online {
         return Err("offline: server unreachable".to_string());
+    }
+    if !failures.is_empty() {
+        return Err(format!("album list refresh failed: {}", failures.join("; ")));
     }
 
     log::warn!(

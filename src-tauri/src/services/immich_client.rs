@@ -1024,8 +1024,14 @@ impl ImmichClient {
             ));
         }
 
-        let mut albums = parse_album_list(&owned_body)?;
-        let shared_albums = parse_album_list(&shared_body)?;
+        let mut albums = parse_album_list(&owned_body).map_err(|err| {
+            log::error!("[albums.fetch] owned album response invalid: {err}");
+            err
+        })?;
+        let shared_albums = parse_album_list(&shared_body).map_err(|err| {
+            log::error!("[albums.fetch] shared album response invalid: {err}");
+            err
+        })?;
 
         let mut seen = HashSet::new();
         albums.retain(|album| seen.insert(album.id.clone()));
@@ -1035,6 +1041,7 @@ impl ImmichClient {
             }
         }
 
+        log::info!("[albums.fetch] complete album_count={}", albums.len());
         Ok(albums)
     }
 
@@ -1057,6 +1064,7 @@ impl ImmichClient {
         );
 
         let url = format!("{}/api/albums", session.server_url);
+        log::info!("[albums.create] start asset_count={}", asset_ids.len());
         let payload = serde_json::json!({
             "albumName": album_name,
             "assetIds": asset_ids,
@@ -1074,6 +1082,7 @@ impl ImmichClient {
         let status = response.status();
         let body = response.text().await.map_err(|err| err.to_string())?;
         if !status.is_success() {
+            log::error!("[albums.create] server rejected creation status={status}");
             return Err(format!(
                 "create album failed with status {} ({})",
                 status,
@@ -1081,7 +1090,12 @@ impl ImmichClient {
             ));
         }
 
-        parse_album_from_payload(&body)
+        let album = parse_album_from_payload(&body).map_err(|err| {
+            log::error!("[albums.create] server accepted creation but response invalid: {err}");
+            err
+        })?;
+        log::info!("[albums.create] complete album_id={}", album.id);
+        Ok(album)
     }
 
     pub async fn add_assets_to_album(
@@ -1826,7 +1840,7 @@ impl ImmichClient {
         let response = self
             .client
             .get(url)
-            .headers(headers)
+            .headers(headers.clone())
             .query(&[("withoutAssets", "false")])
             .send()
             .await
@@ -1842,7 +1856,59 @@ impl ImmichClient {
             ));
         }
 
-        parse_album_assets(&body)
+        let details: Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
+        if details.get("assets").is_some() {
+            return parse_album_assets(&body);
+        }
+
+        log::info!("[albums.assets] album_id={album_id} fetching via metadata search");
+        let search_url = format!("{}/api/search/metadata", session.server_url);
+        let mut page = 1u32;
+        let page_size = 1000u32;
+        let mut assets = Vec::new();
+        let mut seen = HashSet::new();
+        loop {
+            let response = self
+                .client
+                .post(&search_url)
+                .headers(headers.clone())
+                .json(&serde_json::json!({
+                    "albumIds": [album_id],
+                    "page": page,
+                    "size": page_size,
+                    "withExif": true
+                }))
+                .send()
+                .await
+                .map_err(|err| {
+                    log::error!("[albums.assets] album_id={album_id} page={page} request failed: {err}");
+                    err.to_string()
+                })?;
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+            if !status.is_success() {
+                log::error!("[albums.assets] album_id={album_id} page={page} status={status}");
+                return Err(format!(
+                    "album asset search failed with status {status} ({})",
+                    truncate_for_log(&body)
+                ));
+            }
+            let result = parse_asset_list(&body)?;
+            let count = result.items.len();
+            let has_next = result.has_next_page || count >= page_size as usize;
+            let before = assets.len();
+            assets.extend(result.items.into_iter().filter(|asset| seen.insert(asset.id.clone())));
+            log::info!("[albums.assets] album_id={album_id} page={page} fetched={count}");
+            if count == 0 || !has_next {
+                break;
+            }
+            if assets.len() == before {
+                return Err(format!("album asset pagination made no progress for album {album_id}"));
+            }
+            page += 1;
+        }
+        log::info!("[albums.assets] album_id={album_id} complete asset_count={}", assets.len());
+        Ok(assets)
     }
 
     pub async fn get_assets_by_original_path(
@@ -2971,39 +3037,131 @@ fn parse_memories(payload: &str) -> Result<Vec<MemorySummary>, String> {
 }
 
 fn parse_album_list(payload: &str) -> Result<Vec<AlbumSummary>, String> {
-    if let Ok(items) = serde_json::from_str::<Vec<AlbumSummary>>(payload) {
-        return Ok(items);
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    let items = value
+        .as_array()
+        .or_else(|| value.get("items").and_then(Value::as_array))
+        .ok_or_else(|| "unknown album payload shape".to_string())?;
+    items.iter().cloned().map(parse_album_summary).collect()
+}
+
+fn parse_album_from_payload(payload: &str) -> Result<AlbumSummary, String> {
+    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    if value.get("id").is_some() {
+        return parse_album_summary(value);
+    }
+    if let Some(album) = value.get("album") {
+        return parse_album_summary(album.clone());
     }
 
-    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
-    if let Some(items) = value.get("items") {
-        return serde_json::from_value::<Vec<AlbumSummary>>(items.clone())
-            .map_err(|err| err.to_string());
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        if let Some(first) = items.first() {
+            return parse_album_summary(first.clone());
+        }
     }
 
     Err("unknown album payload shape".to_string())
 }
 
-fn parse_album_from_payload(payload: &str) -> Result<AlbumSummary, String> {
-    if let Ok(album) = serde_json::from_str::<AlbumSummary>(payload) {
-        return Ok(album);
+fn parse_album_summary(mut value: Value) -> Result<AlbumSummary, String> {
+    // Newer Immich versions expose ownership through albumUsers, not ownerId.
+    let owner = value
+        .get("owner")
+        .filter(|owner| owner.get("id").and_then(Value::as_str).is_some())
+        .cloned()
+        .or_else(|| {
+            value.get("albumUsers")?.as_array()?.iter().find_map(|entry| {
+                (entry.get("role").and_then(Value::as_str) == Some("owner"))
+                    .then(|| entry.get("user").cloned())
+                    .flatten()
+            })
+        });
+    if let Some(owner) = owner {
+        if value.get("ownerId").and_then(Value::as_str).is_none() {
+            value["ownerId"] = owner
+                .get("id")
+                .cloned()
+                .ok_or_else(|| "album owner missing user id".to_string())?;
+        }
+        value["owner"] = owner;
+    }
+    serde_json::from_value(value).map_err(|err| format!("invalid album response: {err}"))
+}
+
+#[cfg(test)]
+mod album_response_tests {
+    use super::*;
+
+    fn modern_album() -> Value {
+        serde_json::json!({
+            "id": "album-1",
+            "albumName": "Test album",
+            "assetCount": 2,
+            "albumUsers": [
+                { "role": "editor", "user": { "id": "editor-1", "name": "Editor" } },
+                { "role": "owner", "user": { "id": "owner-1", "name": "Owner" } }
+            ]
+        })
     }
 
-    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
-
-    if let Some(album) = value.get("album") {
-        return serde_json::from_value::<AlbumSummary>(album.clone())
-            .map_err(|err| err.to_string());
-    }
-
-    if let Some(items) = value.get("items").and_then(Value::as_array) {
-        if let Some(first) = items.first() {
-            return serde_json::from_value::<AlbumSummary>(first.clone())
-                .map_err(|err| err.to_string());
+    #[test]
+    fn parses_modern_album_lists_and_creation_responses() {
+        let album = modern_album();
+        for payload in [
+            serde_json::json!([album.clone()]),
+            serde_json::json!({ "items": [album.clone()] }),
+        ] {
+            let parsed = parse_album_list(&payload.to_string()).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].owner_id, "owner-1");
+            assert_eq!(parsed[0].owner.as_ref().unwrap().name.as_deref(), Some("Owner"));
+        }
+        for payload in [
+            album.clone(),
+            serde_json::json!({ "album": album.clone() }),
+            serde_json::json!({ "items": [album] }),
+        ] {
+            assert_eq!(parse_album_from_payload(&payload.to_string()).unwrap().owner_id, "owner-1");
         }
     }
 
-    Err("unknown album payload shape".to_string())
+    #[test]
+    fn preserves_legacy_ownership() {
+        let payload = r#"{"id":"album-1","albumName":"Legacy","ownerId":"legacy-owner"}"#;
+        assert_eq!(parse_album_from_payload(payload).unwrap().owner_id, "legacy-owner");
+        let mut album = modern_album();
+        album["ownerId"] = Value::String("legacy-owner".to_string());
+        assert_eq!(parse_album_summary(album).unwrap().owner_id, "legacy-owner");
+    }
+
+    #[test]
+    fn rejects_missing_ownership_instead_of_guessing() {
+        let payload = r#"{"id":"album-1","albumName":"Invalid","albumUsers":[]}"#;
+        assert!(parse_album_from_payload(payload).unwrap_err().contains("ownerId"));
+        assert!(parse_album_list(&format!("[{payload}]")).unwrap_err().contains("ownerId"));
+    }
+
+    #[test]
+    fn parses_legacy_album_assets_and_modern_search_pages() {
+        let asset = serde_json::json!({
+            "id": "asset-1", "originalFileName": "photo.jpg",
+            "fileCreatedAt": "2026-10-10T00:00:00Z", "type": "IMAGE",
+            "exifInfo": { "exifImageWidth": 6000, "exifImageHeight": 4000 }
+        });
+        let legacy = serde_json::json!({ "assets": [asset.clone()] });
+        let parsed = parse_album_assets(&legacy.to_string()).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].width, Some(6000));
+        let modern = serde_json::json!({ "assets": { "items": [asset], "nextPage": "2" } });
+        let parsed = parse_asset_list(&modern.to_string()).unwrap();
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].height, Some(4000));
+        assert!(parsed.has_next_page);
+        let empty = r#"{"assets":{"items":[],"nextPage":null}}"#;
+        let parsed = parse_asset_list(empty).unwrap();
+        assert!(parsed.items.is_empty());
+        assert!(!parsed.has_next_page);
+    }
 }
 
 fn parse_share_url_from_payload(payload: &str, base_url: &str) -> Result<String, String> {

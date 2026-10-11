@@ -33,6 +33,14 @@ the Immich server.
 - Save album assets locally and detect changes to saved files.
 - Share albums and manage album access where supported by the Immich server.
 
+Albums render from the local cache first and refresh their list when opened
+online, without syncing every album's photos. Both legacy `ownerId` responses
+and newer Immich `albumUsers` ownership responses are supported for browsing
+and album creation. Server refresh errors are shown without discarding cached
+albums.
+Album photos use embedded assets on older servers or paginated, album-scoped
+metadata search on newer servers that omit assets from album details.
+
 ## Technology
 
 - **Desktop:** [Tauri 2](https://v2.tauri.app/) with a Rust backend
