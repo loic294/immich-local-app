@@ -26,12 +26,6 @@ type I18nContextValue = {
 
 const RESOURCES: Record<AppLocale, TranslationTree> = {
   "en-CA": {
-    window: {
-      minimize: "Minimize window",
-      maximize: "Maximize window",
-      restore: "Restore window",
-      close: "Close window",
-    },
     nav: {
       photos: "Photos",
       albums: "Albums",
@@ -562,12 +556,6 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
     },
   },
   "fr-CA": {
-    window: {
-      minimize: "Réduire la fenêtre",
-      maximize: "Agrandir la fenêtre",
-      restore: "Restaurer la fenêtre",
-      close: "Fermer la fenêtre",
-    },
     nav: {
       photos: "Photos",
       albums: "Albums",

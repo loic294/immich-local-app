@@ -4,20 +4,12 @@ import { useI18n } from "../../i18n";
 
 export function SyncStatusCard() {
   const { t } = useI18n();
-  const {
-    syncStatus,
-    isSyncing,
-    isChecking,
-    progress,
-    error,
-    checkForNewAssets,
-    cancelSync,
-  } = useSyncStatus();
+  const { syncStatus, isSyncing, isChecking, progress, error, checkForNewAssets, cancelSync } =
+    useSyncStatus();
 
   const isBusy = isSyncing || isChecking;
   const isSyncComplete =
-    syncStatus?.lastSyncCompletedAt !== null &&
-    syncStatus?.lastSyncCompletedAt !== undefined;
+    syncStatus?.lastSyncCompletedAt !== null && syncStatus?.lastSyncCompletedAt !== undefined;
 
   const formatDate = (dateString: string | null): string => {
     if (!dateString) return "";
@@ -62,9 +54,7 @@ export function SyncStatusCard() {
           <>
             <div className="flex items-center gap-2">
               <span className="loading loading-spinner loading-xs"></span>
-              <span className="text-xs text-base-content/70">
-                {t("syncCard.checking")}
-              </span>
+              <span className="text-xs text-base-content/70">{t("syncCard.checking")}</span>
             </div>
           </>
         ) : isSyncComplete && syncStatus ? (
@@ -75,17 +65,13 @@ export function SyncStatusCard() {
             >
               <div className="flex items-center gap-2">
                 <Check size={16} className="text-success" />
-                <span className="text-xs font-medium text-success">
-                  {t("syncCard.complete")}
-                </span>
+                <span className="text-xs font-medium text-success">{t("syncCard.complete")}</span>
               </div>
             </div>
           </>
         ) : (
           <>
-            <div className="text-xs text-base-content/70">
-              {t("syncCard.ready")}
-            </div>
+            <div className="text-xs text-base-content/70">{t("syncCard.ready")}</div>
           </>
         )}
 

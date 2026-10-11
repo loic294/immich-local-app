@@ -18,12 +18,10 @@ the Immich server.
 
 ## Features
 
-The app integrates window controls into its header on macOS and Windows
-(without a separate native title bar). Use the left-hand traffic lights on
-macOS or the right-hand buttons on Windows to minimize, maximize/restore, or
-close. Drag an empty header area to move the window; double-click it to
-maximize or restore. Controls remain available in selection mode, Settings,
-and the sign-in screens.
+On macOS the native traffic lights sit inside the app header (overlay title
+bar), keeping the native window chrome; drag an empty header area to move the
+window and double-click it to zoom. Windows and Linux use the standard native
+title bar.
 
 - Browse a virtualized photo timeline, albums, folders, calendar views,
   favorites, and deleted assets.

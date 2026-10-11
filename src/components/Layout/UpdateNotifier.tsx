@@ -30,9 +30,7 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
         <div className="alert border border-base-300 bg-base-200 text-base-content shadow-lg">
           <Download size={18} className="shrink-0 text-primary" />
           <div className="flex flex-col gap-1">
-            <span className="text-sm font-medium">
-              {t("updateNotifier.downloading")}
-            </span>
+            <span className="text-sm font-medium">{t("updateNotifier.downloading")}</span>
             <progress
               className="progress progress-primary w-48"
               value={update.progress ?? 0}
@@ -47,9 +45,7 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
             <span className="text-sm font-medium">
               {t("updateNotifier.ready", { version: update.newVersion ?? "" })}
             </span>
-            <span className="text-xs text-base-content/60">
-              {t("updateNotifier.restartHint")}
-            </span>
+            <span className="text-xs text-base-content/60">{t("updateNotifier.restartHint")}</span>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -63,9 +59,7 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
                 });
               }}
             >
-              {isInstalling
-                ? t("updateNotifier.restarting")
-                : t("updateNotifier.restartNow")}
+              {isInstalling ? t("updateNotifier.restarting") : t("updateNotifier.restartNow")}
             </button>
             <button
               type="button"

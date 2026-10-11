@@ -20,6 +20,7 @@ import { useConnectionContext } from "../../hooks/connectionContext";
 import { useSettings } from "../../hooks/useSettings";
 import { useI18n } from "../../i18n";
 import logoUrl from "../../assets/logo_with_title.svg";
+import { isMacPlatform } from "../../utils/platform";
 import { useBrowsingI18n } from "../../i18n/browsing";
 
 interface SidebarProps {
@@ -114,6 +115,9 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   return (
     <aside className="hidden h-screen border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
       <div className="flex h-full min-h-0 w-full flex-col gap-3 p-3">
+        {isMacPlatform() && (
+          <div aria-hidden data-tauri-drag-region className="-mx-3 -mt-3 h-11 shrink-0" />
+        )}
         <div className="flex h-10 items-center gap-2 px-2 text-3xl font-bold text-primary">
           <img src={logoUrl} alt="" className="h-10" />
         </div>

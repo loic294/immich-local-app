@@ -347,7 +347,7 @@ export function App() {
   if (!session) {
     if (showServerUrlScreen && !serverUrl) {
       return (
-        <main className="min-h-screen bg-base-200 p-6 pt-24">
+        <main className="min-h-screen bg-base-200 p-6">
           <WindowHeader floating />
           <ServerUrlScreen
             onSubmit={async (url) => {
@@ -362,7 +362,7 @@ export function App() {
     }
 
     return (
-      <main className="min-h-screen bg-base-200 p-6 pt-24">
+      <main className="min-h-screen bg-base-200 p-6">
         <WindowHeader floating />
         <LoginScreen
           serverUrl={serverUrl ?? "http://localhost:2283"}

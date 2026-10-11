@@ -6,11 +6,7 @@ interface PageBackButtonProps {
   disabled?: boolean;
 }
 
-export function PageBackButton({
-  onClick,
-  ariaLabel,
-  disabled = false,
-}: PageBackButtonProps) {
+export function PageBackButton({ onClick, ariaLabel, disabled = false }: PageBackButtonProps) {
   return (
     <button
       type="button"
