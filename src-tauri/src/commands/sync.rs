@@ -1512,6 +1512,10 @@ pub(crate) fn to_enriched_asset_record(
             checksum: asset.checksum,
             r#type: asset.r#type,
             duration: asset.duration,
+            live_photo_video_id: metadata
+                .as_ref()
+                .and_then(|m| m.live_photo_video_id.clone())
+                .or(asset.live_photo_video_id),
             is_favorite: asset.is_favorite,
             is_archived: asset.is_archived,
             visibility: asset.visibility,
@@ -1555,6 +1559,20 @@ fn parse_asset_created_at_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
 mod local_snapshot_tests {
     use super::*;
     use crate::services::{db::Database, immich_client::AssetSummary};
+
+    #[test]
+    fn live_photo_enrichment_retains_detail_and_summary_pairing() {
+        let asset: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id": "photo", "originalFileName": "photo.jpg", "type": "IMAGE"
+        })).unwrap();
+        let metadata = serde_json::from_value(serde_json::json!({
+            "livePhotoVideoId": "motion"
+        })).unwrap();
+        assert_eq!(to_enriched_asset_record(asset.clone(), Some(metadata)).asset.live_photo_video_id.as_deref(), Some("motion"));
+        let mut paired = asset;
+        paired.live_photo_video_id = Some("motion".into());
+        assert_eq!(to_enriched_asset_record(paired, None).asset.live_photo_video_id.as_deref(), Some("motion"));
+    }
 
     #[test]
     fn modified_snapshot_preserves_description_and_never_queues_mutations() {

@@ -88,6 +88,8 @@ pub struct AssetSummary {
 #[serde(rename_all = "camelCase")]
 pub struct AssetMetadata {
     #[serde(default)]
+    pub live_photo_video_id: Option<String>,
+    #[serde(default)]
     pub stack: Option<AssetStack>,
     #[serde(default)]
     pub description: Option<String>,
@@ -4619,6 +4621,16 @@ fn normalize_asset_summary(mut asset: AssetSummary) -> AssetSummary {
     asset
 }
 
+#[cfg(test)]
+#[test]
+fn live_photo_detail_parser_preserves_pairing_and_accepts_unlinked_assets() {
+    let paired = parse_asset_metadata_from_value(&serde_json::json!({"livePhotoVideoId":"motion"}));
+    assert_eq!(paired.live_photo_video_id.as_deref(), Some("motion"));
+    for unlinked in [serde_json::json!({}), serde_json::json!({"livePhotoVideoId":null})] {
+        assert!(parse_asset_metadata_from_value(&unlinked).live_photo_video_id.is_none());
+    }
+}
+
 fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
     let exif_info = value.get("exifInfo");
     let original_path = value
@@ -4643,6 +4655,10 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
 
     AssetMetadata {
         stack: None,
+        live_photo_video_id: value
+            .get("livePhotoVideoId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         description: value
             .get("description")
             .and_then(Value::as_str)

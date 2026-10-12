@@ -339,6 +339,15 @@ fn rule_matches_asset(rule: &MyPhotosRule, camera: &str, day: &str, today: &str)
     day <= end_day.as_str()
 }
 
+pub(crate) fn live_photo_visibility_filter(alias: &str) -> String {
+    format!("(UPPER(COALESCE({alias}.asset_type,''))<>'VIDEO' OR NOT EXISTS (
+        SELECT 1 FROM assets photo
+        WHERE photo.live_photo_video_id={alias}.id
+          AND photo.account_id={alias}.account_id
+          AND photo.id<>{alias}.id
+          AND UPPER(COALESCE(photo.asset_type,''))='IMAGE'))")
+}
+
 /// Build the optional `AND <id_column> IN (SELECT id FROM assets WHERE ...)`
 /// fragment plus its bind parameters for the given criteria. The fragment is
 /// self-contained (always selects from the `assets` table) so it can be appended
@@ -361,8 +370,8 @@ fn criteria_filter(
     deleted_view: bool,
 ) -> (String, DynParams) {
     let mut params: DynParams = Vec::new();
-    let stack_filter = if deleted_view { "1=1" } else {
-        "COALESCE(is_stack_secondary,0)=0 AND id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id)"
+    let stack_filter = if deleted_view { "1=1".to_string() } else {
+        format!("COALESCE(is_stack_secondary,0)=0 AND {} AND id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id)", live_photo_visibility_filter("assets"))
     };
     let Some(criteria) = criteria.filter(|c| !c.is_empty()) else {
         return (format!(" AND {id_column} IN (SELECT id FROM assets WHERE {stack_filter})"), params);
@@ -744,6 +753,8 @@ pub struct AssetSummaryExtended {
     pub checksum: Option<String>,
     pub r#type: Option<String>,
     pub duration: Option<String>,
+    #[serde(default)]
+    pub live_photo_video_id: Option<String>,
     pub is_favorite: bool,
     pub is_archived: bool,
     pub visibility: Option<String>,
@@ -1088,15 +1099,19 @@ impl Database {
             ("preview_local", "BOOLEAN DEFAULT 0"),
             ("full_resolution_local", "BOOLEAN DEFAULT 0"),
             ("is_stack_secondary", "BOOLEAN DEFAULT 0"),
+            ("live_photo_video_id", "TEXT"),
         ];
 
         for (col_name, col_type) in required_columns {
             if !columns.contains(&col_name.to_string()) {
                 let alter_sql = format!("ALTER TABLE assets ADD COLUMN {} {}", col_name, col_type);
-                let _ = conn.execute(&alter_sql, []);
+                conn.execute(&alter_sql, [])
+                    .map_err(|err| format!("[db:migration] {col_name}: {err}"))?;
+                if col_name == "live_photo_video_id" {
+                    log::info!("[live-photo:migration] added cached pairing column; refresh existing assets with Force Full Sync");
+                }
             }
         }
-
         let conn = self.open()?;
         let mut stmt = conn
             .prepare("PRAGMA table_info(albums)")
@@ -1134,6 +1149,11 @@ impl Database {
         ] {
             self.ensure_account_id_column(&conn, table);
         }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_assets_live_photo ON assets(account_id, live_photo_video_id)",
+            [],
+        )
+        .map_err(|err| format!("[live-photo:migration] index creation failed: {err}"))?;
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_assets_account_id ON assets(account_id)",
             [],
@@ -2116,9 +2136,9 @@ impl Database {
                 "
                 INSERT INTO assets (
                     id, account_id, original_file_name, original_path, file_created_at, checksum, updated_at,
-                    asset_type, duration, is_favorite, is_archived, visibility, rating, width, height, thumbhash
+                    asset_type, duration, is_favorite, is_archived, visibility, rating, width, height, thumbhash, live_photo_video_id
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                 ON CONFLICT(id) DO UPDATE SET
                     account_id = excluded.account_id,
                     original_file_name = excluded.original_file_name,
@@ -2134,7 +2154,8 @@ impl Database {
                     rating = excluded.rating,
                     width = excluded.width,
                     height = excluded.height,
-                    thumbhash = excluded.thumbhash
+                    thumbhash = excluded.thumbhash,
+                    live_photo_video_id = excluded.live_photo_video_id
                 ",
                 params![
                     asset.id,
@@ -2151,7 +2172,8 @@ impl Database {
                     asset.rating,
                     asset.width,
                     asset.height,
-                    asset.thumbhash
+                    asset.thumbhash,
+                    asset.live_photo_video_id
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -2316,9 +2338,9 @@ impl Database {
                 INSERT INTO assets (
                     id, account_id, original_file_name, description, original_path, file_created_at, checksum, updated_at,
                     asset_type, duration, is_favorite, is_archived, visibility, rating,
-                    width, height, thumbhash, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json
+                    width, height, thumbhash, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json, live_photo_video_id
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now'), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now'), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
                 ON CONFLICT(id) DO UPDATE SET
                     account_id = excluded.account_id,
                     original_file_name = excluded.original_file_name,
@@ -2342,7 +2364,8 @@ impl Database {
                     file_extension = excluded.file_extension,
                     people = excluded.people,
                     tags = excluded.tags,
-                    exif_info_json = excluded.exif_info_json
+                    exif_info_json = excluded.exif_info_json,
+                    live_photo_video_id = excluded.live_photo_video_id
                 ",
                 params![
                     asset.id,
@@ -2367,7 +2390,8 @@ impl Database {
                     asset.file_extension,
                     asset.people,
                     asset.tags,
-                    asset.exif_info_json
+                    asset.exif_info_json,
+                    asset.live_photo_video_id
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -2598,7 +2622,7 @@ impl Database {
         if has_next_page {
             items.truncate(page_size as usize);
         }
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
 
         Ok((items, has_next_page))
     }
@@ -2712,7 +2736,7 @@ impl Database {
         };
 
         let mut items = items;
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
         Ok(items)
     }
 
@@ -2840,7 +2864,8 @@ impl Database {
                     preview_local,
                     full_resolution_local,
                     (SELECT COALESCE(NULLIF(user_name, ''), user_email, user_id)
-                       FROM accounts WHERE accounts.id = assets.account_id) AS account_name
+                       FROM accounts WHERE accounts.id = assets.account_id) AS account_name,
+                    live_photo_video_id
                 FROM assets
                 WHERE id = ?1
                 LIMIT 1
@@ -2886,7 +2911,7 @@ impl Database {
             checksum: asset.checksum,
             r#type: asset.r#type,
             duration: asset.duration,
-            live_photo_video_id: None,
+            live_photo_video_id: asset.live_photo_video_id,
             is_favorite: asset.is_favorite,
             is_archived: asset.is_archived,
             is_trashed: false,
@@ -2897,18 +2922,25 @@ impl Database {
             thumbhash: asset.thumbhash,
         });
         if let Some(asset) = summary.as_mut() {
-            self.populate_stack_metadata(std::slice::from_mut(asset))?;
+            self.populate_cached_asset_metadata(std::slice::from_mut(asset))?;
         }
         Ok(summary)
     }
 
-    fn populate_stack_metadata(&self, assets: &mut [AssetSummary]) -> Result<(), String> {
+    fn populate_cached_asset_metadata(&self, assets: &mut [AssetSummary]) -> Result<(), String> {
         if assets.is_empty() {
             return Ok(());
         }
         self.init_media()?;
         let conn = self.open()?;
         for asset in assets {
+            asset.live_photo_video_id = conn
+                .query_row(
+                    "SELECT live_photo_video_id FROM assets WHERE id=?1",
+                    [&asset.id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("[live-photo:cache] {}: {error}", asset.id))?;
             asset.is_trashed = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM trashed_assets t JOIN assets owner
                  ON owner.id=t.asset_id AND owner.account_id=t.account_id WHERE owner.id=?1)",
@@ -3423,7 +3455,7 @@ impl Database {
             items.truncate(page_size as usize);
         }
 
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
 
         Ok((items, has_next_page))
     }
@@ -3478,7 +3510,7 @@ impl Database {
             items.push(row.map_err(|err| err.to_string())?);
         }
 
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
 
         Ok(items)
     }
@@ -3752,7 +3784,7 @@ impl Database {
             items.truncate(page_size as usize);
         }
 
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
 
         Ok((items, has_next_page))
     }
@@ -3847,7 +3879,7 @@ impl Database {
             }
         }
 
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
 
         Ok(items)
     }
@@ -3913,7 +3945,7 @@ impl Database {
             items.truncate(page_size as usize);
         }
 
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
 
         Ok((items, has_next_page))
     }
@@ -3968,7 +4000,7 @@ impl Database {
             items.push(row.map_err(|err| err.to_string())?);
         }
 
-        self.populate_stack_metadata(&mut items)?;
+        self.populate_cached_asset_metadata(&mut items)?;
 
         Ok(items)
     }
@@ -4424,6 +4456,7 @@ fn map_asset_summary_extended(
 ) -> Result<AssetSummaryExtended, rusqlite::Error> {
     Ok(AssetSummaryExtended {
         stack: None,
+        live_photo_video_id: row.get(27)?,
         id: row.get(0)?,
         original_file_name: row.get(1)?,
         description: row.get(2)?,
@@ -4512,6 +4545,76 @@ mod account_local_navigation_tests {
 
     fn cleanup_db(path: &PathBuf) {
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn live_photo_migration_preserves_existing_assets_and_is_idempotent() {
+        let path = test_db_path("live-photo-migration");
+        let db = Database::test_database(path.clone()).unwrap();
+        let photo: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id":"existing", "originalFileName":"existing.jpg", "type":"IMAGE"
+        })).unwrap();
+        db.upsert_assets("account", &[photo]).unwrap();
+        let conn = db.open().unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_assets_live_photo;
+             ALTER TABLE assets DROP COLUMN live_photo_video_id;",
+        ).unwrap();
+        drop(conn);
+        drop(db);
+        for _ in 0..2 {
+            let db = Database::test_database(path.clone()).unwrap();
+            let photo = db.get_asset_summary("existing").unwrap().unwrap();
+            assert_eq!(photo.original_file_name, "existing.jpg");
+            assert!(photo.live_photo_video_id.is_none());
+        }
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn live_photo_link_survives_cache_and_hides_only_its_companion_in_every_grid() {
+        let path = test_db_path("live-photo");
+        let db = Database::test_database(path.clone()).unwrap();
+        let photo: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id":"photo", "originalFileName":"photo.jpg", "originalPath":"/photos/photo.jpg",
+            "type":"IMAGE", "fileCreatedAt":"2026-10-11T12:00:00Z", "livePhotoVideoId":"motion"
+        })).unwrap();
+        let video = |id: &str| serde_json::from_value::<AssetSummary>(serde_json::json!({
+            "id":id, "originalFileName":format!("{id}.mov"), "originalPath":format!("/photos/{id}.mov"),
+            "type":"VIDEO", "fileCreatedAt":"2026-10-11T12:00:01Z"
+        })).unwrap();
+        db.upsert_assets("account", &[photo.clone(), video("motion"), video("standalone")]).unwrap();
+        let foreign: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id":"foreign", "originalFileName":"foreign.jpg", "type":"IMAGE",
+            "livePhotoVideoId":"standalone"
+        })).unwrap();
+        db.upsert_assets("another-account", &[foreign]).unwrap();
+        let criteria = AssetFilterCriteria { account_id: Some("account".into()), ..Default::default() };
+        let assert_pair = |items: Vec<AssetSummary>| {
+            assert_eq!(items.len(), 2);
+            assert!(!items.iter().any(|asset| asset.id == "motion"));
+            assert!(items.iter().any(|asset| asset.id == "standalone"));
+            assert_eq!(items.iter().find(|asset| asset.id == "photo").unwrap().live_photo_video_id.as_deref(), Some("motion"));
+        };
+        assert_pair(db.get_all_assets(None, None, Some(&criteria), None).unwrap());
+        let (items, more) = db.get_assets(0, 2, None, None, Some(&criteria), None).unwrap();
+        assert_pair(items);
+        assert!(!more);
+        assert_pair(db.get_all_folder_assets("/photos", Some(&criteria), None).unwrap());
+        assert_pair(db.get_all_calendar_assets(2026, 10, Some(&criteria), None).unwrap());
+        db.replace_album_assets("account", "album", &["photo".into(), "motion".into(), "standalone".into()]).unwrap();
+        assert_pair(db.get_all_album_assets("album", Some(&criteria), None).unwrap());
+        assert_eq!(db.get_asset_summary("photo").unwrap().unwrap().live_photo_video_id.as_deref(), Some("motion"));
+        assert!(db.get_asset_summary("motion").unwrap().is_some());
+
+        let enriched = crate::commands::sync::to_enriched_asset_record(photo.clone(), None);
+        db.upsert_assets_with_metadata("account", &[enriched.asset]).unwrap();
+        assert_pair(db.get_all_assets(None, None, Some(&criteria), None).unwrap());
+        let mut unlinked = photo;
+        unlinked.live_photo_video_id = None;
+        db.upsert_assets("account", &[unlinked]).unwrap();
+        assert_eq!(db.get_all_assets(None, None, Some(&criteria), None).unwrap().len(), 3);
+        cleanup_db(&path);
     }
 
     #[test]

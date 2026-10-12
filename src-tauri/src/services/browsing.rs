@@ -1,4 +1,4 @@
-use crate::services::db::Database;
+use crate::services::db::{live_photo_visibility_filter, Database};
 use crate::services::immich_client::{AssetSummary, PersonSummary};
 use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
@@ -79,7 +79,8 @@ fn visible_assets(conn: &Connection, alias: &str) -> Result<String, String> {
         [], |row| row.get(0),
     ).map_err(|e| e.to_string())?;
     Ok(format!(
-        "COALESCE({alias}.is_archived,0)=0 AND LOWER(COALESCE({alias}.visibility,'timeline')) NOT IN ('archive','hidden','locked'){}{}",
+        "COALESCE({alias}.is_archived,0)=0 AND LOWER(COALESCE({alias}.visibility,'timeline')) NOT IN ('archive','hidden','locked') AND {}{}{}",
+        live_photo_visibility_filter(alias),
         if stack_column { format!(" AND COALESCE({alias}.is_stack_secondary,0)=0") } else { String::new() },
         if trash_table { format!(" AND NOT EXISTS(SELECT 1 FROM trashed_assets t WHERE t.asset_id={alias}.id AND t.account_id={alias}.account_id)") } else { String::new() }
     ))
@@ -320,7 +321,7 @@ fn read_map_assets(
         };
         let mut stmt = conn.prepare(&format!(
                 "SELECT a.id,a.original_file_name,a.original_path,a.file_created_at,a.checksum,a.asset_type,a.duration,
-                a.is_favorite,a.is_archived,a.visibility,a.rating,a.width,a.height,a.thumbhash,a.exif_info_json
+                a.is_favorite,a.is_archived,a.visibility,a.rating,a.width,a.height,a.thumbhash,a.exif_info_json,a.live_photo_video_id
                 FROM assets a WHERE ({visible}) AND ({selection})"
             )).map_err(|e|e.to_string())?;
         let rows = stmt
@@ -337,7 +338,7 @@ fn read_map_assets(
                         checksum: r.get(4)?,
                         r#type: r.get(5)?,
                         duration: r.get(6)?,
-                        live_photo_video_id: None,
+                        live_photo_video_id: r.get(15)?,
                         is_favorite: r.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0,
                         is_archived: r.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0,
                         is_trashed: false,
@@ -376,7 +377,7 @@ mod tests {
             "CREATE TABLE assets(id TEXT PRIMARY KEY, original_file_name TEXT,original_path TEXT,
              file_created_at TEXT,checksum TEXT,asset_type TEXT,duration TEXT,is_favorite INTEGER,
              is_archived INTEGER,visibility TEXT,rating INTEGER,width INTEGER,height INTEGER,thumbhash TEXT,exif_info_json TEXT,
-             people TEXT, account_id TEXT NOT NULL DEFAULT 'account');
+             people TEXT, account_id TEXT NOT NULL DEFAULT 'account',live_photo_video_id TEXT);
              CREATE TABLE people(id TEXT PRIMARY KEY,name TEXT,is_hidden INTEGER,thumbnail_path TEXT,account_id TEXT NOT NULL DEFAULT 'account');
              CREATE TABLE asset_people(asset_id TEXT,person_id TEXT,account_id TEXT NOT NULL DEFAULT 'account',PRIMARY KEY(asset_id,person_id));
              INSERT INTO people(id,name,is_hidden,thumbnail_path) VALUES('alice','Alice',0,NULL),('private','Private',0,NULL),('hidden-person','Hidden',1,NULL);
@@ -402,6 +403,23 @@ mod tests {
             south: -90.,
             north: 90.,
         }
+    }
+    #[test]
+    fn live_photo_map_and_people_count_only_photo_and_preserve_playback_link() {
+        let conn = fixture();
+        conn.execute_batch(
+            "UPDATE assets SET asset_type='IMAGE',live_photo_video_id='motion' WHERE id='zero';
+             INSERT INTO assets(id,asset_type,exif_info_json) VALUES('motion','VIDEO','{\"latitude\":0,\"longitude\":0}');
+             INSERT INTO asset_people(asset_id,person_id) VALUES('motion','alice');",
+        ).unwrap();
+        assert_eq!(read_markers(&conn).unwrap().len(), 2);
+        let assets = read_map_assets(&conn, &world(), None).unwrap();
+        assert_eq!(assets.len(), 2);
+        assert_eq!(
+            assets.iter().find(|asset| asset.id == "zero").unwrap().live_photo_video_id.as_deref(),
+            Some("motion")
+        );
+        assert_eq!(read_people(&conn).unwrap()[0].asset_count, 1);
     }
     #[test]
     fn cached_queries_preserve_metadata_and_hide_private_assets() {

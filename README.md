@@ -29,6 +29,11 @@ title bar.
   media type, rating, favorite status, and account.
 - View photos and videos with metadata, location maps, and all memories returned
   by the server, without applying a date filter.
+- Browse Live Photos as one photo tile with linked motion playback. The server's
+  pairing is retained offline; linked motion videos are not separate browsing
+  tiles, while standalone videos remain visible. Deleted keeps individual assets
+  available for restoration. If an older cache shows split Live Photos, run
+  **Force Full Sync** once to recover the previously discarded pairing.
 - Manage multiple Immich accounts and sign in with an API key, password, or
   OAuth.
 - Cache library data locally and browse cached content while offline.
