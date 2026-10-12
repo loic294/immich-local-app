@@ -60,6 +60,19 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       recentAlbumsCount: "{count} albums",
       exit: "Exit Settings",
       languageTitle: "Language",
+      deleteBehaviorTitle: "Delete behavior",
+      deleteBehaviorDescription:
+        "Applies to Delete actions in all accounts. Deleted shows archived photos or the Immich trash, depending on this preference.",
+      deleteBehaviorArchive: "Archive (default)",
+      deleteBehaviorTrash: "Move to Immich trash",
+      deleteBehaviorSaveFailed: "Could not save Delete behavior.",
+      deletedRefreshFailed: "Could not refresh Deleted. Cached items are still available.",
+      deletedOffline: "Offline — showing cached deleted items.",
+      restoreDeleted: "Restore",
+      deleteVersionArchiveConfirm:
+        "Archive this edited version? You can restore it from Deleted. The original is protected.",
+      deleteVersionTrashConfirm:
+        "Move this edited version to Immich trash? The original is protected. Immich may automatically remove it after its retention period.",
       languageDescription:
         "Choose your display language. The app applies this setting immediately and remembers it between launches.",
       languageLabel: "Display language",
@@ -323,6 +336,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       selectedCount: "{count} selected",
       delete: "Delete",
       archiveConfirmTitle: "Delete photos?",
+      archiveModeConfirmBody:
+        "This will archive {count} selected photo{suffix}. You can restore them from Deleted.",
+      trashConfirmBody:
+        "This will move {count} selected photo{suffix} to Immich trash. Immich may automatically remove trashed items after its retention period.",
       archiveConfirmBody:
         "This will delete {count} selected photo{suffix}. You can restore them later.",
       archiveFailed: "Failed to delete photos",
@@ -586,6 +603,20 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       recentAlbumsCount: "{count} albums",
       exit: "Quitter les paramètres",
       languageTitle: "Langue",
+      deleteBehaviorTitle: "Comportement de suppression",
+      deleteBehaviorDescription:
+        "S'applique aux actions Supprimer de tous les comptes. Supprimés affiche les photos archivées ou la corbeille Immich, selon ce réglage.",
+      deleteBehaviorArchive: "Archiver (par défaut)",
+      deleteBehaviorTrash: "Déplacer dans la corbeille Immich",
+      deleteBehaviorSaveFailed: "Impossible d'enregistrer le comportement de suppression.",
+      deletedRefreshFailed:
+        "Impossible d'actualiser Supprimés. Les éléments en cache restent disponibles.",
+      deletedOffline: "Hors ligne — affichage des éléments supprimés en cache.",
+      restoreDeleted: "Restaurer",
+      deleteVersionArchiveConfirm:
+        "Archiver cette version retouchée ? Vous pourrez la restaurer depuis Supprimés. L'original est protégé.",
+      deleteVersionTrashConfirm:
+        "Déplacer cette version retouchée dans la corbeille Immich ? L'original est protégé. Immich peut la supprimer automatiquement après sa période de rétention.",
       languageDescription:
         "Choisissez la langue d'affichage. L'application applique ce réglage immédiatement et le conserve entre les redémarrages.",
       languageLabel: "Langue d'affichage",
@@ -851,6 +882,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       selectedCount: "{count} sélectionnées",
       delete: "Supprimer",
       archiveConfirmTitle: "Supprimer les photos ?",
+      archiveModeConfirmBody:
+        "Ceci archivera {count} photo{suffix} sélectionnée{suffix}. Vous pourrez les restaurer depuis Supprimés.",
+      trashConfirmBody:
+        "Ceci déplacera {count} photo{suffix} sélectionnée{suffix} dans la corbeille Immich. Immich peut les supprimer automatiquement après sa période de rétention.",
       archiveConfirmBody:
         "Ceci supprimera {count} photo{suffix} sélectionnée{suffix}. Vous pourrez les restaurer plus tard.",
       archiveFailed: "Impossible de supprimer les photos",

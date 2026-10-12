@@ -15,6 +15,9 @@ const en = {
   save: "Save",
   saved: "Saved",
   edit: "Edit",
+  finishEditing: "Finish editing",
+  importingEdit: "Importing edited image",
+  editPreview: "Edited image preview",
   import: "Import",
   importTitle: "Import media",
   mounted: "External media detected",
@@ -39,9 +42,7 @@ const en = {
   sourceSafe:
     "Originals are copied to your local Albums folder. Offline uploads resume when the server returns.",
   exportTitle: "Edited photos detected",
-  exportHelp:
-    "Export these edits as JPEG at quality 100 with metadata, then upload and stack them with their originals? Editor project sidecars remain safely on disk; Immich accepts metadata sidecars, not .rrdata projects.",
-  export: "Export & upload",
+  export: "Import edited version",
   later: "Later",
   queue: "Pending uploads",
   retry: "Retry uploads",
@@ -83,6 +84,9 @@ const fr: typeof en = {
   save: "Enregistrer",
   saved: "Enregistré",
   edit: "Retoucher",
+  finishEditing: "Terminer la retouche",
+  importingEdit: "Importation de l’image retouchée",
+  editPreview: "Aperçu de l’image retouchée",
   import: "Importer",
   importTitle: "Importer des médias",
   mounted: "Média externe détecté",
@@ -108,9 +112,7 @@ const fr: typeof en = {
   sourceSafe:
     "Les originaux sont copiés dans votre dossier Albums local. Les envois reprennent au retour du serveur.",
   exportTitle: "Photos retouchées détectées",
-  exportHelp:
-    "Exporter ces retouches en JPEG de qualité 100 avec métadonnées, puis les envoyer et les empiler avec les originaux? Les fichiers de projet restent sur disque; Immich accepte les fichiers annexes de métadonnées, pas les projets .rrdata.",
-  export: "Exporter et envoyer",
+  export: "Importer la version retouchée",
   later: "Plus tard",
   queue: "Envois en attente",
   retry: "Réessayer les envois",

@@ -3,6 +3,8 @@ import { useState } from "react";
 import { deleteEditVersion, getEditVersions } from "../../api/media";
 import { getAssetThumbnail } from "../../api/tauri";
 import { useMediaLabels } from "../../i18n/media";
+import { useI18n } from "../../i18n";
+import { useSettings } from "../../hooks/useSettings";
 import type { AssetSummary } from "../../types";
 
 interface StackVersionsProps {
@@ -33,6 +35,8 @@ function VersionCard({
   remainingCount: number;
 }) {
   const labels = useMediaLabels();
+  const { t } = useI18n();
+  const { data: settings } = useSettings();
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const [queued, setQueued] = useState(false);
@@ -116,7 +120,13 @@ function VersionCard({
             <h3 id={`delete-version-${asset.id}`} className="font-bold">
               {labels.deleteVersion}
             </h3>
-            <p className="py-4">{labels.deleteVersionConfirm}</p>
+            <p className="py-4">
+              {t(
+                settings?.deleteBehavior === "trash"
+                  ? "settings.deleteVersionTrashConfirm"
+                  : "settings.deleteVersionArchiveConfirm",
+              )}
+            </p>
             <div className="modal-action">
               <button type="button" className="btn" onClick={() => setConfirming(false)}>
                 {labels.cancel}

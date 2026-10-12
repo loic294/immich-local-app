@@ -1,5 +1,6 @@
 import { WindowHeader } from "./WindowHeader";
 import { X, ArchiveRestore } from "lucide-react";
+import { useSettings } from "../../hooks/useSettings";
 import { useEffect, useState } from "react";
 import type { Session } from "../../hooks/useSession";
 import type { AlbumSummary, SortPreference, ViewScope } from "../../types";
@@ -65,6 +66,7 @@ export function AppTopBar({
   sortPreference,
   onSortChange,
 }: AppTopBarProps) {
+  const { data: deleteSettings } = useSettings();
   const { t } = useI18n();
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
@@ -181,10 +183,15 @@ export function AppTopBar({
             <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
               <h3 className="m-0 text-lg font-semibold">{t("topBar.archiveConfirmTitle")}</h3>
               <p className="mb-4 mt-1 text-sm text-base-content/70">
-                {t("topBar.archiveConfirmBody", {
-                  count: selectedCount,
-                  suffix: selectedCount > 1 ? "s" : "",
-                })}
+                {t(
+                  deleteSettings?.deleteBehavior === "trash"
+                    ? "topBar.trashConfirmBody"
+                    : "topBar.archiveModeConfirmBody",
+                  {
+                    count: selectedCount,
+                    suffix: selectedCount > 1 ? "s" : "",
+                  },
+                )}
               </p>
 
               {selectionError ? (
@@ -228,6 +235,9 @@ export function AppTopBar({
       userId={session.userId}
       userName={session.userName}
       onLogout={onLogout}
+      onOpenSettings={() => {
+        window.dispatchEvent(new Event("immich:open-settings"));
+      }}
       searchPlaceholder={searchPlaceholder}
       showFilterButton={showFilterButton}
       searchScope={searchScope}

@@ -425,8 +425,16 @@ pub async fn import_media(
 #[tauri::command]
 pub async fn get_media_uploads(
     state: tauri::State<'_, AppState>,
+    edit_job_ids: Option<Vec<String>>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<UploadJob>, String> {
-    state.db.media_uploads()
+    let jobs = state.db.media_uploads_for_edits(&edit_job_ids.unwrap_or_default())?;
+    for job in &jobs {
+        if job.original_asset_id.is_some() && Path::new(&job.local_path).is_file() {
+            app.asset_protocol_scope().allow_file(&job.local_path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(jobs)
 }
 
 #[tauri::command]
@@ -628,11 +636,91 @@ fn sidecar_snapshot(path: &Path, extensions: &[String]) -> Result<String, String
     Ok(values.join("\n"))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedEditorJob {
+    asset_id: String,
+    local_path: String,
+    preview_path: Option<String>,
+    preview_error: Option<String>,
+}
+
+fn edit_preview_path(job: &EditorJob, snapshot: &str) -> Result<PathBuf, String> {
+    use sha1::{Digest, Sha1};
+    let key = format!("{}\n{}\n{snapshot}", job.asset_id, job.local_path);
+    Ok(crate::services::storage::cache_root()?
+        .join("edit-previews")
+        .join(format!("{:x}.jpg", Sha1::digest(key.as_bytes()))))
+}
+
+fn validate_edit_preview(path: &Path) -> Result<(), String> {
+    let reader = image::ImageReader::open(path).map_err(|e| format!("Cannot open edited preview: {e}"))?
+        .with_guessed_format().map_err(|e| format!("Cannot identify edited preview: {e}"))?;
+    if reader.format() != Some(image::ImageFormat::Jpeg) {
+        return Err("Editor did not produce a JPEG preview".into());
+    }
+    image::image_dimensions(path).map_err(|e| format!("Invalid edited image: {e}"))?;
+    Ok(())
+}
+
+// Shared by preview preparation and import, so the exact displayed edit is imported.
+async fn render_edit_preview(
+    job: &EditorJob,
+    snapshot: &str,
+    preferences: &MediaPreferences,
+) -> Result<PathBuf, String> {
+    let output = edit_preview_path(job, snapshot)?;
+    if output.is_file() {
+        if validate_edit_preview(&output).is_ok() {
+            return Ok(output);
+        }
+        std::fs::remove_file(&output).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(output.parent().ok_or("Invalid preview directory")?)
+        .map_err(|e| e.to_string())?;
+    let args: Vec<_> = preferences.editor_export_args.iter().map(|arg| {
+        arg.replace("{input}", &job.local_path)
+            .replace("{output}", &output.to_string_lossy())
+    }).collect();
+    log::info!("[media:edit-preview] rendering original={}", job.asset_id);
+    let mut command = tokio::process::Command::new(&preferences.editor_executable);
+    crate::services::background_process::configure(command.as_std_mut());
+    let result = async {
+        let mut child = command.args(args).kill_on_drop(true).spawn()
+            .map_err(|e| format!("Could not execute export command: {e}"))?;
+        let status = tokio::time::timeout(std::time::Duration::from_secs(1800), child.wait())
+            .await.map_err(|_| "Editor export exceeded 30 minutes; changes remain pending".to_string())?
+            .map_err(|e| format!("Editor export failed: {e}"))?;
+        if !status.success() {
+            return Err(format!("Editor export failed ({status}); changes remain pending"));
+        }
+        validate_edit_preview(&output)?;
+        match crate::services::media::copy_jpeg_metadata(Path::new(&job.local_path), &output) {
+            Ok(()) => {}
+            Err(error) => log::warn!("[media:edit-preview] metadata copy failed original={}: {error}", job.asset_id),
+        }
+        Ok(())
+    }.await;
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&output);
+        log::error!("[media:edit-preview] failed original={}: {error}", job.asset_id);
+        return Err(error);
+    }
+    log::info!("[media:edit-preview] ready original={}", job.asset_id);
+    Ok(output)
+}
+
+fn edit_export_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 #[tauri::command]
 pub async fn begin_media_edit(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    let _guard = edit_export_lock().lock().await;
     if asset_ids.is_empty() {
         return Err("No images selected".into());
     }
@@ -726,22 +814,49 @@ pub async fn begin_media_edit(
 #[tauri::command]
 pub async fn get_changed_editor_jobs(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<EditorJob>, String> {
+    app: tauri::AppHandle,
+    prepare_previews: Option<bool>,
+) -> Result<Vec<ChangedEditorJob>, String> {
+    let _guard = edit_export_lock().lock().await;
     let db = state.db.clone();
     let preferences = state.db.media_preferences()?;
-    tokio::task::spawn_blocking(move || {
+    let sidecars = preferences.editor_sidecars.clone();
+    let jobs = tokio::task::spawn_blocking(move || -> Result<Vec<(EditorJob, String)>, String> {
         let mut changed = Vec::new();
         for job in db.editor_jobs()? {
-            if sidecar_snapshot(Path::new(&job.local_path), &preferences.editor_sidecars)?
-                != job.snapshot
-            {
-                changed.push(job);
+            let snapshot = sidecar_snapshot(Path::new(&job.local_path), &sidecars)?;
+            if snapshot != job.snapshot {
+                changed.push((job, snapshot));
             }
         }
         Ok(changed)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    let mut changed = Vec::new();
+    for (job, snapshot) in jobs {
+        let preview = if prepare_previews.unwrap_or(false) {
+            render_edit_preview(&job, &snapshot, &preferences).await.map(Some)
+        } else {
+            Ok(None)
+        };
+        let (preview_path, preview_error) = match preview {
+            Ok(Some(path)) => {
+                app.asset_protocol_scope().allow_file(&path).map_err(|e| e.to_string())?;
+                (Some(path.to_string_lossy().into_owned()), None)
+            }
+            Ok(None) => (None, None),
+            Err(error) => (None, Some(error)),
+        };
+        changed.push(ChangedEditorJob {
+            asset_id: job.asset_id,
+            local_path: job.local_path,
+            preview_path,
+            preview_error,
+        });
+    }
+    log::info!("[media:editor] sidecar scan changed_count={}", changed.len());
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -749,100 +864,83 @@ pub async fn export_media_edits(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<u32, String> {
+) -> Result<ExportEditsResult, String> {
+    let _guard = edit_export_lock().lock().await;
     let preferences = state.db.media_preferences()?;
     let jobs = state.db.editor_jobs()?;
-    let mut count = 0;
-    for id in asset_ids {
-        let job = jobs
-            .iter()
-            .find(|j| j.asset_id == id)
-            .ok_or("Editor session no longer exists")?;
-        let input = Path::new(&job.local_path);
-        let snapshot = sidecar_snapshot(input, &preferences.editor_sidecars)?;
-        if snapshot == job.snapshot {
-            continue;
-        }
-        let stem = input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or("Invalid original filename")?;
-        let base = format!("{stem}-edited-{}", chrono::Local::now().format("%Y%m%d"));
-        let mut output = input.with_file_name(format!("{base}.jpg"));
-        for suffix in 1..=10_000 {
-            if !output.exists() {
-                break;
+    let mut exported = Vec::new();
+    let result: Result<(), String> = async {
+        for id in asset_ids {
+            let job = jobs
+                .iter()
+                .find(|j| j.asset_id == id)
+                .ok_or("Editor session no longer exists")?;
+            let input = Path::new(&job.local_path);
+            let snapshot = sidecar_snapshot(input, &preferences.editor_sidecars)?;
+            if snapshot == job.snapshot {
+                continue;
             }
-            output = input.with_file_name(format!("{base}-{suffix}.jpg"));
+            let stem = input
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or("Invalid original filename")?;
+            let base = format!("{stem}-edited-{}", chrono::Local::now().format("%Y%m%d"));
+            let mut output = input.with_file_name(format!("{base}.jpg"));
+            for suffix in 1..=10_000 {
+                if !output.exists() {
+                    break;
+                }
+                output = input.with_file_name(format!("{base}-{suffix}.jpg"));
+            }
+            if output.exists() {
+                return Err("No available edited filename".into());
+            }
+            log::info!("[media:export] starting original={id}");
+            let preview = render_edit_preview(job, &snapshot, &preferences).await?;
+            std::fs::copy(&preview, &output)
+                .map_err(|e| format!("Cannot retain edited JPEG: {e}"))?;
+            let hash_path = output.clone();
+            let checksum = tokio::task::spawn_blocking(move || file_hash(&hash_path))
+                .await
+                .map_err(|e| e.to_string())??;
+            let (account, _) = state.account_and_client_for_asset(&id);
+            let upload = UploadJob {
+                id: uuid::Uuid::new_v4().to_string(),
+                account_id: account,
+                local_path: output.to_string_lossy().into_owned(),
+                checksum,
+                album_ids: state.db.media_album_ids(&id)?,
+                original_asset_id: Some(id.clone()),
+                server_asset_id: None,
+                state: "queued".into(),
+                error: None,
+            };
+            state.db.queue_media(&upload)?;
+            exported.push(upload);
+            state.db.save_editor_job(&EditorJob {
+                snapshot,
+                ..job.clone()
+            })?;
+            log::info!("[media:export] JPEG retained and queued original={id}");
+            kick_media_uploads(app.clone());
         }
-        if output.exists() {
-            return Err("No available edited filename".into());
-        }
-        let args: Vec<_> = preferences
-            .editor_export_args
-            .iter()
-            .map(|arg| {
-                arg.replace("{input}", &job.local_path)
-                    .replace("{output}", &output.to_string_lossy())
-            })
-            .collect();
-        let executable = preferences.editor_executable.clone();
-        log::info!("[media:export] starting original={id}");
-        let mut command = tokio::process::Command::new(executable);
-        crate::services::background_process::configure(command.as_std_mut());
-        let mut child = command
-            .args(args)
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| format!("Could not execute export command: {e}"))?;
-        let status = tokio::time::timeout(std::time::Duration::from_secs(1800), child.wait())
-            .await
-            .map_err(|_| "Editor export exceeded 30 minutes; changes remain pending".to_string())?
-            .map_err(|e| format!("Editor export failed: {e}"))?;
-        if !status.success() {
-            return Err(format!(
-                "Editor export failed ({status}); sidecar changes remain pending"
-            ));
-        }
-        if !output.is_file() || std::fs::metadata(&output).map_err(|e| e.to_string())?.len() == 0 {
-            return Err("Editor did not produce a non-empty JPEG".into());
-        }
-        match tokio::task::spawn_blocking({
-            let source = input.to_path_buf();
-            let destination = output.clone();
-            move || crate::services::media::copy_jpeg_metadata(&source, &destination)
-        })
-        .await
-        {
-            Ok(Ok(())) => log::info!("[media:export] original EXIF/XMP metadata copied original={id}"),
-            Ok(Err(error)) => log::warn!("[media:export] metadata copy failed original={id}; continuing export: {error}"),
-            Err(error) => log::warn!("[media:export] metadata copy task failed original={id}; continuing export: {error}"),
-        }
-        let hash_path = output.clone();
-        let checksum = tokio::task::spawn_blocking(move || file_hash(&hash_path))
-            .await
-            .map_err(|e| e.to_string())??;
-        let (account, _) = state.account_and_client_for_asset(&id);
-        state.db.queue_media(&UploadJob {
-            id: uuid::Uuid::new_v4().to_string(),
-            account_id: account,
-            local_path: output.to_string_lossy().into_owned(),
-            checksum,
-            album_ids: state.db.media_album_ids(&id)?,
-            original_asset_id: Some(id.clone()),
-            server_asset_id: None,
-            state: "queued".into(),
-            error: None,
-        })?;
-        state.db.save_editor_job(&EditorJob {
-            snapshot,
-            ..job.clone()
-        })?;
-        count += 1;
-        log::info!("[media:export] JPEG retained and queued original={id}");
-        kick_media_uploads(app.clone());
+        Ok(())
     }
-    Ok(count)
+    .await;
+    if let Err(error) = &result {
+        log::error!("[media:export] stopped after queued_count={}: {error}", exported.len());
+    }
+    Ok(ExportEditsResult {
+        uploads: exported,
+        error: result.err(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportEditsResult {
+    uploads: Vec<UploadJob>,
+    error: Option<String>,
 }
 
 /// The original is protected independently of the current primary. Deleting
@@ -860,12 +958,13 @@ pub async fn delete_edit_version(
         return Err("offline: Cannot identify the account for this version".into());
     }
     let original = state.db.original_edit_asset(&asset_id)?;
+    let behavior = state.db.get_settings()?.delete_behavior;
     let account = state.db.get_account(&account_id)?.ok_or("Unknown account")?;
     if client.ping(&account.server_url).await {
-        match client.trash_edit_version(&asset_id, &original).await {
+        match client.delete_edit_version_with_behavior(&asset_id, &original, behavior).await {
             Ok(()) => {
-                state.db.remove_edit_version_from_cache(&asset_id, None)?;
-                log::info!("[media:version-delete] moved version to Immich trash asset={asset_id}");
+                state.db.cache_deleted_edit_version(&asset_id, None, behavior)?;
+                log::info!("[media:version-delete] deleted version asset={asset_id} mode={behavior:?}");
                 return Ok(false);
             }
             Err(error) => {
@@ -880,8 +979,8 @@ pub async fn delete_edit_version(
     }
     state
         .db
-        .remove_edit_version_from_cache(&asset_id, Some(&account_id))?;
-    log::info!("[media:version-delete] queued offline trash asset={asset_id}");
+        .cache_deleted_edit_version(&asset_id, Some(&account_id), behavior)?;
+    log::info!("[media:version-delete] queued offline delete asset={asset_id} mode={behavior:?}");
     Ok(true)
 }
 
@@ -892,7 +991,7 @@ pub async fn get_edit_versions(
 ) -> Result<Vec<crate::services::immich_client::AssetSummary>, String> {
     let original = state.db.original_edit_asset(&asset_id)?;
     let mut ids = state.db.edit_version_ids(&original)?;
-    if ids.is_empty() {
+    if ids.is_empty() && !state.db.protected_original(&original)? {
         return Ok(Vec::new());
     }
     ids.push(original);
@@ -1014,6 +1113,36 @@ pub async fn track_media_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn edited_preview_accepts_jpeg_and_rejects_non_images() {
+        let folder = std::env::current_dir().unwrap()
+            .join(format!("media-edit-preview-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("edited.jpg");
+        image::RgbImage::new(2, 2).save(&path).unwrap();
+        assert!(validate_edit_preview(&path).is_ok());
+        std::fs::write(&path, b"not an image").unwrap();
+        assert!(validate_edit_preview(&path).is_err());
+        std::fs::write(&path, []).unwrap();
+        assert!(validate_edit_preview(&path).is_err());
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn edited_preview_cache_is_scoped_to_original_and_sidecar_contents() {
+        let job = EditorJob {
+            asset_id: "original".into(),
+            local_path: r"C:\Photos\été #1.CR3".into(),
+            snapshot: String::new(),
+        };
+        let first = edit_preview_path(&job, "rrdata:first").unwrap();
+        assert_eq!(first, edit_preview_path(&job, "rrdata:first").unwrap());
+        assert_ne!(first, edit_preview_path(&job, "rrdata:second").unwrap());
+        assert_ne!(first, edit_preview_path(&EditorJob {
+            asset_id: "other".into(), ..job.clone()
+        }, "rrdata:first").unwrap());
+        assert_eq!(first.extension().unwrap(), "jpg");
+        assert_eq!(first.file_stem().unwrap().to_str().unwrap().len(), 40);
+    }
     #[tokio::test]
     async fn queue_rechecks_late_jobs_and_recovers_offline_uploads() {
         use std::sync::{Arc, atomic::AtomicBool};

@@ -2,6 +2,7 @@ import type { AppPage } from "../components/Layout/Sidebar";
 import { PhotosPage } from "./PhotosPage";
 import type { Session } from "../hooks/useSession";
 import { useI18n } from "../i18n";
+import { useSettings } from "../hooks/useSettings";
 
 type DeletedPageProps = {
   session: Session;
@@ -9,12 +10,16 @@ type DeletedPageProps = {
   onLogout: () => void;
 };
 
-export function DeletedPage({
-  session,
-  onNavigate,
-  onLogout,
-}: DeletedPageProps) {
+export function DeletedPage({ session, onNavigate, onLogout }: DeletedPageProps) {
   const { t } = useI18n();
+  const { data: settings, error } = useSettings();
+  if (!settings) {
+    return (
+      <div role="status" className="p-4">
+        {error ? String(error) : <span className="loading loading-spinner" />}
+      </div>
+    );
+  }
 
   return (
     <PhotosPage
@@ -22,7 +27,7 @@ export function DeletedPage({
       onNavigate={onNavigate}
       onLogout={onLogout}
       activePage="deleted"
-      assetFilter="archived"
+      assetFilter={settings?.deleteBehavior === "trash" ? "trashed" : "archived"}
       searchLabel={t("nav.deleted")}
     />
   );

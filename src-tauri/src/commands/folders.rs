@@ -5,7 +5,7 @@ use crate::AppState;
 use std::time::Instant;
 
 fn is_visible_in_grid(asset: &crate::services::immich_client::AssetSummary) -> bool {
-    if asset.is_archived {
+    if asset.is_archived || asset.is_trashed {
         return false;
     }
 

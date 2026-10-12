@@ -45,6 +45,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const settingsContentRef = useRef<HTMLDivElement>(null);
   const sections = [
     ["general", "settings.sectionGeneral"],
+    ["my-photos", "settings.sectionMyPhotos"],
     ["navigation", "settings.sectionNavigation"],
     ["sync", "settings.sectionSync"],
     ["storage", "settings.sectionStorage"],
@@ -467,6 +468,43 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             </div>
 
             <div
+              hidden={section !== "general"}
+              className="card mb-6 border border-base-300 bg-base-100 shadow-sm"
+            >
+              <div className="card-body">
+                <h2 className="card-title">{t("settings.deleteBehaviorTitle")}</h2>
+                <p className="text-sm text-base-content/70">
+                  {t("settings.deleteBehaviorDescription")}
+                </p>
+                <label className="fieldset max-w-sm">
+                  <span className="label">{t("settings.deleteBehaviorTitle")}</span>
+                  <select
+                    className="select"
+                    value={settings?.deleteBehavior ?? "archive"}
+                    disabled={!settings || isSaving}
+                    onChange={async (event) => {
+                      if (!settings) return;
+                      const deleteBehavior = event.currentTarget
+                        .value as Settings["deleteBehavior"];
+                      setIsSaving(true);
+                      try {
+                        setSettings(await updateSettings({ ...settings, deleteBehavior }));
+                        await invalidateSettings();
+                      } catch (error) {
+                        console.error("[assets.delete] preference save failed", error);
+                        window.alert(t("settings.deleteBehaviorSaveFailed"));
+                      } finally {
+                        setIsSaving(false);
+                      }
+                    }}
+                  >
+                    <option value="archive">{t("settings.deleteBehaviorArchive")}</option>
+                    <option value="trash">{t("settings.deleteBehaviorTrash")}</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div
               hidden={section !== "sync"}
               className="card mb-6 border border-base-300 bg-base-100 shadow-sm"
             >
@@ -801,9 +839,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               </div>
             </div>
 
-            {/* Live Photo Settings */}
+            {/* My Photos Settings */}
             <div
-              hidden={section !== "general"}
+              hidden={section !== "my-photos"}
               className="card mb-6 border border-base-300 bg-base-100 shadow-sm"
             >
               <div className="card-body">

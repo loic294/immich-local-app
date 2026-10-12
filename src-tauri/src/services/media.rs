@@ -194,17 +194,23 @@ impl Database {
     }
 
     pub fn media_uploads(&self) -> Result<Vec<UploadJob>, String> {
+        self.media_uploads_for_edits(&[])
+    }
+
+    pub fn media_uploads_for_edits(&self, edit_job_ids: &[String]) -> Result<Vec<UploadJob>, String> {
         self.init_media()?;
         let conn = self.open()?;
+        let placeholders = vec!["?"; edit_job_ids.len()].join(",");
+        let sql = format!(
+            "SELECT id,account_id,local_path,checksum,album_ids,original_asset_id,
+                server_asset_id,state,error FROM media_uploads WHERE completed_at IS NULL
+                OR (original_asset_id IS NOT NULL AND id IN ({placeholders})) ORDER BY rowid"
+        );
         let mut stmt = conn
-            .prepare(
-                "SELECT id,account_id,local_path,checksum,album_ids,original_asset_id,
-                    server_asset_id,state,error FROM media_uploads WHERE completed_at IS NULL
-             ORDER BY rowid",
-            )
+            .prepare(&sql)
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params_from_iter(edit_job_ids), |row| {
                 let albums: String = row.get(4)?;
                 let album_ids = serde_json::from_str(&albums).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -366,10 +372,20 @@ impl Database {
         .map_err(|error| error.to_string())
     }
 
+    #[cfg(test)]
     pub fn remove_edit_version_from_cache(
         &self,
         asset_id: &str,
         queued_account: Option<&str>,
+    ) -> Result<(), String> {
+        self.cache_deleted_edit_version(asset_id, queued_account, self.get_settings()?.delete_behavior)
+    }
+
+    pub fn cache_deleted_edit_version(
+        &self,
+        asset_id: &str,
+        queued_account: Option<&str>,
+        behavior: crate::commands::settings::DeleteBehavior,
     ) -> Result<(), String> {
         self.init_media()?;
         let mut conn = self.open()?;
@@ -406,7 +422,7 @@ impl Database {
             if queued_account != account {
                 return Err("Cannot queue deletion for a different account".into());
             }
-            let payload = serde_json::json!({ "originalAssetId": original }).to_string();
+            let payload = serde_json::json!({ "originalAssetId": original, "mode": behavior }).to_string();
             tx.execute(
                 "INSERT INTO pending_mutations(asset_id,account_id,kind,payload_json,created_at)
                  VALUES(?1,?2,'delete_version',?3,?4)",
@@ -414,17 +430,19 @@ impl Database {
             )
             .map_err(|error| error.to_string())?;
         }
-        tx.execute("DELETE FROM edit_versions WHERE asset_id=?1", [asset_id])
-            .map_err(|error| error.to_string())?;
-        tx.execute("DELETE FROM asset_people WHERE asset_id=?1", [asset_id])
-            .map_err(|error| error.to_string())?;
-        tx.execute("DELETE FROM album_assets WHERE asset_id=?1", [asset_id])
-            .map_err(|error| error.to_string())?;
-        tx.execute("DELETE FROM assets WHERE id=?1", [asset_id])
+        match behavior {
+            crate::commands::settings::DeleteBehavior::Archive => {
+                tx.execute("UPDATE assets SET is_archived=1,visibility='archive',is_stack_secondary=1 WHERE id=?1", [asset_id])
+            }
+            crate::commands::settings::DeleteBehavior::Trash => {
+                tx.execute("INSERT OR IGNORE INTO trashed_assets(asset_id,account_id) VALUES(?1,?2)", params![asset_id,account])
+            }
+        }.map_err(|error| error.to_string())?;
+        tx.execute("UPDATE assets SET is_stack_secondary=1 WHERE id=?1", [asset_id])
             .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())?;
         log::info!(
-            "[media:version-delete] removed cached edit={asset_id} original={original} restored={} queued={}",
+            "[media:version-delete] cached deleted edit={asset_id} original={original} mode={behavior:?} restored={} queued={}",
             !secondary,
             queued_account.is_some()
         );
@@ -434,7 +452,7 @@ impl Database {
     pub fn edit_version_ids(&self, original: &str) -> Result<Vec<String>, String> {
         self.init_media()?;
         let conn = self.open()?;
-        let mut stmt=conn.prepare("SELECT asset_id FROM edit_versions WHERE original_asset_id=?1 ORDER BY created_at DESC")
+        let mut stmt=conn.prepare("SELECT ev.asset_id FROM edit_versions ev JOIN assets a ON a.id=ev.asset_id WHERE ev.original_asset_id=?1 AND COALESCE(a.is_archived,0)=0 AND COALESCE(a.visibility,'timeline')<>'archive' AND NOT EXISTS(SELECT 1 FROM trashed_assets t WHERE t.asset_id=a.id AND t.account_id=a.account_id) ORDER BY ev.created_at DESC")
             .map_err(|e|e.to_string())?;
         let rows = stmt
             .query_map([original], |r| r.get(0))
@@ -699,6 +717,34 @@ impl ImmichClient {
 mod tests {
     use super::*;
 
+    #[test]
+    fn edit_completion_can_be_polled_by_exact_job_without_hiding_failures() {
+        let folder = std::env::current_dir().unwrap()
+            .join(format!("media-edit-completion-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let db = Database::test_database(folder.join("db.sqlite")).unwrap();
+        for (id, original) in [("edit", Some("original")), ("ordinary", None), ("failed", Some("other"))] {
+            db.queue_media(&UploadJob {
+                id: id.into(), account_id: "account".into(), local_path: "edited.jpg".into(),
+                checksum: id.into(), album_ids: vec![], original_asset_id: original.map(String::from),
+                server_asset_id: None, state: "queued".into(), error: None,
+            }).unwrap();
+        }
+        db.open().unwrap().execute(
+            "UPDATE media_uploads SET state='complete',completed_at='done',server_asset_id='stacked' WHERE id IN ('edit','ordinary')",
+            [],
+        ).unwrap();
+        db.set_media_upload_state("failed", "failed", Some("server rejected")).unwrap();
+        assert_eq!(db.media_uploads().unwrap().len(), 1);
+        let jobs = db.media_uploads_for_edits(&["edit".into(), "ordinary".into()]).unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].server_asset_id.as_deref(), Some("stacked"));
+        assert_eq!(jobs[0].original_asset_id.as_deref(), Some("original"));
+        assert_eq!(jobs[1].error.as_deref(), Some("server rejected"));
+        drop(db);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
     fn app1(payload: &[u8]) -> Vec<u8> {
         let length = (payload.len() + 2) as u16;
         let mut segment = vec![0xff, 0xe1];
@@ -830,7 +876,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(db.get_asset_summary("second").unwrap().is_none());
+        assert!(db.get_asset_summary("second").unwrap().unwrap().is_archived);
         assert_eq!(
             db.get_assets(0, 100, None, None, None, None).unwrap().0[0].id,
             "original"
@@ -871,7 +917,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .stack_count,
-            None
+            Some(1)
         );
         drop(db);
         for name in ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm"] {
@@ -954,6 +1000,22 @@ mod tests {
         assert!(requests[2].ends_with(r#"{"primaryAssetId":"original"}"#));
         assert!(requests[3].starts_with("DELETE /api/assets "));
         assert!(requests[3].ends_with(r#"{"force":false,"ids":["edit"]}"#));
+    }
+
+    #[tokio::test]
+    async fn deletion_archive_of_active_edit_restores_original_without_trashing() {
+        let body = r#"{"id":"edit","originalFileName":"edited.jpg","fileCreatedAt":null,"checksum":null,"visibility":"archive"}"#;
+        let (client, requests) = fixture_client(vec![
+            (200, r#"{"stack":{"id":"stack"}}"#),
+            (200, r#"{"primaryAssetId":"edit","assets":[{"id":"edit"},{"id":"original"}]}"#),
+            (200, "{}"), (200, body), (200, body),
+        ]).await;
+        client.delete_edit_version_with_behavior("edit", "original", crate::commands::settings::DeleteBehavior::Archive).await.unwrap();
+        let requests = requests.await.unwrap();
+        assert!(requests[2].ends_with(r#"{"primaryAssetId":"original"}"#));
+        assert!(requests[4].ends_with(r#"{"visibility":"archive"}"#));
+        assert!(requests.iter().all(|request| !request.starts_with("DELETE ")));
+        assert!(client.delete_edit_version_with_behavior("original", "original", crate::commands::settings::DeleteBehavior::Archive).await.is_err());
     }
 
     #[tokio::test]

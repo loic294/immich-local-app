@@ -19,6 +19,7 @@ import {
   getSettings,
   openFolderInFileExplorer,
   getCachedAssetDetails,
+  getAssetThumbnail,
 } from "../../api/tauri";
 import { CanvasImageViewer } from "./CanvasImageViewer";
 import { FullscreenInfoPanel } from "./FullscreenInfoPanel";
@@ -28,11 +29,18 @@ import { ZoomControl } from "./ZoomControl";
 import { isVideoAsset } from "./photoGridUtils";
 import { useAssetState } from "../../hooks/useAssetState";
 import { AssetStatusBadge } from "./AssetStatusBadge";
-import { requestMediaEdit } from "../../api/media";
+import {
+  requestMediaEdit,
+  requestFinishMediaEdit,
+  getMediaEditState,
+  subscribeMediaEditState,
+  updateEditImport,
+} from "../../api/media";
 import { requestFixTime } from "../../api/time";
 import { useSearchTimeI18n } from "../../i18n/searchTime";
 import { useMediaLabels } from "../../i18n/media";
 import { isMacPlatform } from "../../utils/platform";
+import { preloadImage } from "./photoGridUtils";
 
 interface PhotoGridFullscreenOverlayProps {
   activeAsset: AssetSummary;
@@ -74,7 +82,7 @@ export function PhotoGridFullscreenOverlay({
   displayAssets,
   hasNextPage,
   activeSrc,
-  activeStillSrc,
+  activeStillSrc: incomingStillSrc,
   activeFullsizeStillSrc,
   zoom,
   onZoomChange,
@@ -144,6 +152,51 @@ export function PhotoGridFullscreenOverlay({
   const downloadProgressRef = React.useRef<number>(0);
   const [downloadProgress, setDownloadProgress] = React.useState<number | null>(null);
   const [shareProgress, setShareProgress] = React.useState<number | null>(null);
+  const [verifiedEditImage, setVerifiedEditImage] = React.useState<{
+    assetId: string;
+    src: string;
+  } | null>(null);
+  const activeStillSrc =
+    verifiedEditImage?.assetId === activeAsset.id ? verifiedEditImage.src : incomingStillSrc;
+  const editState = React.useSyncExternalStore(subscribeMediaEditState, getMediaEditState);
+  const originalId = activeAsset.stackOriginalId ?? activeAsset.id;
+  const editImport = editState.imports[originalId];
+  const editing = editState.phase !== "idle";
+  const sessionAsset =
+    editState.assetIds.includes(activeAsset.id) || editState.assetIds.includes(originalId);
+  React.useEffect(() => {
+    if (editImport?.versionId !== activeAsset.id) return;
+    let cancelled = false;
+    let loading = false;
+    // Parent media props can still contain the previous asset's image on a slot switch.
+    // Load by version ID rather than treating a stale src as import completion.
+    const load = async () => {
+      if (loading || cancelled) return;
+      loading = true;
+      try {
+        const source = await getAssetThumbnail(activeAsset.id);
+        await preloadImage(source);
+        if (!cancelled && getMediaEditState().imports[originalId]?.versionId === activeAsset.id) {
+          console.info(`[media:edit-import] actual image loaded version=${activeAsset.id}`);
+          setVerifiedEditImage({ assetId: activeAsset.id, src: source });
+          updateEditImport(originalId, null);
+        }
+      } catch (error) {
+        console.error(
+          "[media:edit-import] actual image load failed; retaining preview for retry",
+          error,
+        );
+      } finally {
+        loading = false;
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeAsset.id, editImport?.versionId, originalId]);
 
   const assetState = useAssetState({
     activeAsset,
@@ -289,13 +342,19 @@ export function PhotoGridFullscreenOverlay({
               type="button"
               className="btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
               aria-label={mediaLabels.edit}
+              aria-busy={sessionAsset && editing}
+              disabled={editing || !!editImport}
               title={mediaLabels.edit}
               onClick={(event) => {
                 event.stopPropagation();
                 requestMediaEdit([activeAsset.id]);
               }}
             >
-              <Pencil size={16} />
+              {sessionAsset && editing ? (
+                <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+              ) : (
+                <Pencil size={16} />
+              )}
               <span
                 ref={editLabelRef}
                 className={showEditLabel ? "" : "pointer-events-none absolute invisible"}
@@ -303,6 +362,24 @@ export function PhotoGridFullscreenOverlay({
               >
                 {mediaLabels.edit}
               </span>
+            </button>
+          )}
+          {editing && (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              aria-label={mediaLabels.finishEditing}
+              aria-busy={editState.phase === "finishing"}
+              disabled={editState.phase !== "editing"}
+              onClick={(event) => {
+                event.stopPropagation();
+                requestFinishMediaEdit();
+              }}
+            >
+              {editState.phase === "finishing" && (
+                <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+              )}
+              {mediaLabels.finishEditing}
             </button>
           )}
 
@@ -409,7 +486,18 @@ export function PhotoGridFullscreenOverlay({
             ref={imageContainerRef}
             className="pointer-events-auto flex min-h-0 w-full flex-1 items-center justify-center px-12"
           >
-            {isVideoAsset(activeAsset) ? (
+            {editImport?.previewSrc ? (
+              <img
+                src={editImport.previewSrc}
+                alt={mediaLabels.editPreview}
+                className="max-h-full max-w-full object-contain"
+                onError={() =>
+                  console.error(
+                    `[media:edit-import] optimistic preview unavailable original=${originalId}`,
+                  )
+                }
+              />
+            ) : isVideoAsset(activeAsset) ? (
               activeSrc ? (
                 <video
                   className="max-h-full max-w-full object-contain"
@@ -433,6 +521,34 @@ export function PhotoGridFullscreenOverlay({
                     <span className="loading loading-spinner loading-sm" />
                     {t("photoGrid.loadingVideo")}
                   </div>
+                  {editImport && (
+                    <div
+                      role={editImport.state === "failed" ? "alert" : "status"}
+                      className="pointer-events-auto absolute bottom-28 left-1/2 z-30 flex max-w-full -translate-x-1/2 items-center gap-2 rounded-full bg-base-100 px-4 py-2 text-sm text-base-content shadow-lg"
+                    >
+                      {editImport.state === "failed" ? (
+                        <>
+                          <span>
+                            {mediaLabels.failed}: {editImport.error}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={() =>
+                              window.dispatchEvent(new Event("media:show-upload-queue"))
+                            }
+                          >
+                            {mediaLabels.retry}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="loading loading-spinner loading-sm" aria-hidden="true" />
+                          {mediaLabels.importingEdit}
+                        </>
+                      )}
+                    </div>
+                  )}
                   <p className="max-w-xs text-center text-xs text-white/60">
                     {t("photoGrid.loadingVideoHint")}
                   </p>

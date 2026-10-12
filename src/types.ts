@@ -14,6 +14,7 @@ export type AssetSummary = {
   livePhotoVideoId: string | null;
   isFavorite: boolean;
   isArchived: boolean;
+  isTrashed?: boolean;
   visibility: string | null;
   rating: number | null;
   width: number | null;
@@ -149,6 +150,7 @@ export type MyPhotosRule = {
 };
 
 export type Settings = {
+  deleteBehavior: "archive" | "trash";
   locale: "en-CA" | "fr-CA";
   livePhotoAutoplay: boolean;
   thumbnailCachePath: string;
@@ -185,7 +187,7 @@ export type CacheStats = {
 
 export type AssetVisibility = "timeline" | "archive" | "hidden" | "locked";
 
-export type AssetFilter = "all" | "favorites" | "archived";
+export type AssetFilter = "all" | "favorites" | "archived" | "trashed";
 
 /** How the rating value should be compared against an asset's rating. */
 export type RatingMode = "eq" | "gte" | "lte";

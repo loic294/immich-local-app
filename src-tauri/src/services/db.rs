@@ -358,13 +358,17 @@ fn criteria_filter(
     criteria: Option<&AssetFilterCriteria>,
     id_column: &str,
     start_index: usize,
+    deleted_view: bool,
 ) -> (String, DynParams) {
     let mut params: DynParams = Vec::new();
+    let stack_filter = if deleted_view { "1=1" } else {
+        "COALESCE(is_stack_secondary,0)=0 AND id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id)"
+    };
     let Some(criteria) = criteria.filter(|c| !c.is_empty()) else {
-        return (format!(" AND {id_column} IN (SELECT id FROM assets WHERE COALESCE(is_stack_secondary,0)=0)"), params);
+        return (format!(" AND {id_column} IN (SELECT id FROM assets WHERE {stack_filter})"), params);
     };
 
-    let mut conditions: Vec<String> = vec!["COALESCE(is_stack_secondary,0)=0".into()];
+    let mut conditions: Vec<String> = vec![stack_filter.into()];
     let mut next_index = start_index;
 
     if let Some(rating) = criteria.rating {
@@ -875,6 +879,11 @@ impl Database {
                 tags TEXT,
                 exif_info_json TEXT
             );
+            CREATE TABLE IF NOT EXISTS trashed_assets (
+                asset_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                PRIMARY KEY (asset_id, account_id)
+            );
             CREATE TABLE IF NOT EXISTS albums (
                 id TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL DEFAULT '',
@@ -1329,6 +1338,8 @@ impl Database {
             .map_err(|err| err.to_string())?;
         tx.execute("DELETE FROM pending_mutations", [])
             .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM trashed_assets", [])
+            .map_err(|err| err.to_string())?;
         tx.execute("DELETE FROM people", [])
             .map_err(|err| err.to_string())?;
         tx.execute("DELETE FROM albums", [])
@@ -1609,6 +1620,7 @@ impl Database {
         let tx = conn.transaction().map_err(|err| err.to_string())?;
         // Drop all of this account's cached library rows, then the account row.
         for table in [
+            "trashed_assets",
             "assets",
             "albums",
             "album_assets",
@@ -2117,8 +2129,8 @@ impl Database {
                     asset_type = excluded.asset_type,
                     duration = excluded.duration,
                     is_favorite = excluded.is_favorite,
-                    is_archived = excluded.is_archived,
-                    visibility = excluded.visibility,
+                    is_archived = CASE WHEN EXISTS(SELECT 1 FROM pending_mutations p WHERE p.asset_id=assets.id AND p.account_id=assets.account_id AND p.kind IN ('delete_asset','restore_deleted','delete_version','visibility')) THEN assets.is_archived ELSE excluded.is_archived END,
+                    visibility = CASE WHEN EXISTS(SELECT 1 FROM pending_mutations p WHERE p.asset_id=assets.id AND p.account_id=assets.account_id AND p.kind IN ('delete_asset','restore_deleted','delete_version','visibility')) THEN assets.visibility ELSE excluded.visibility END,
                     rating = excluded.rating,
                     width = excluded.width,
                     height = excluded.height,
@@ -2221,6 +2233,9 @@ impl Database {
                 FROM assets
                 WHERE account_id = ?1
                   AND file_created_at IS NOT NULL
+                  AND COALESCE(is_archived,0)=0 AND COALESCE(visibility,'timeline')<>'archive'
+                  AND id NOT IN (SELECT asset_id FROM trashed_assets WHERE account_id = ?1)
+                  AND id NOT IN (SELECT asset_id FROM pending_mutations WHERE account_id = ?1)
                   AND julianday(file_created_at) >= julianday(?2)
                   AND julianday(file_created_at) <= julianday(?3)
                 ",
@@ -2278,6 +2293,10 @@ impl Database {
         let deleted = tx
             .execute(&delete_assets_sql, params_from_iter(ids.iter()))
             .map_err(|err| err.to_string())?;
+        tx.execute(
+            &format!("DELETE FROM trashed_assets WHERE asset_id IN ({})", placeholders),
+            params_from_iter(ids.iter()),
+        ).map_err(|err| err.to_string())?;
 
         tx.commit().map_err(|err| err.to_string())?;
         Ok(deleted)
@@ -2311,8 +2330,8 @@ impl Database {
                     asset_type = excluded.asset_type,
                     duration = excluded.duration,
                     is_favorite = excluded.is_favorite,
-                    is_archived = excluded.is_archived,
-                    visibility = excluded.visibility,
+                    is_archived = CASE WHEN EXISTS(SELECT 1 FROM pending_mutations p WHERE p.asset_id=assets.id AND p.account_id=assets.account_id AND p.kind IN ('delete_asset','restore_deleted','delete_version','visibility')) THEN assets.is_archived ELSE excluded.is_archived END,
+                    visibility = CASE WHEN EXISTS(SELECT 1 FROM pending_mutations p WHERE p.asset_id=assets.id AND p.account_id=assets.account_id AND p.kind IN ('delete_asset','restore_deleted','delete_version','visibility')) THEN assets.visibility ELSE excluded.visibility END,
                     rating = excluded.rating,
                     width = excluded.width,
                     height = excluded.height,
@@ -2478,7 +2497,7 @@ impl Database {
 
         let mut items = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=limit, ?2=offset, ?3=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 4);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 4, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                     SELECT
@@ -2533,7 +2552,7 @@ impl Database {
             branch_items
         } else {
             // Criteria placeholders start after ?1=limit, ?2=offset.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                     SELECT
@@ -2604,7 +2623,7 @@ impl Database {
 
         let items = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                     SELECT
@@ -2654,7 +2673,7 @@ impl Database {
             branch_items
         } else {
             // No positional params; criteria placeholders start at ?1.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                     SELECT
@@ -2717,7 +2736,7 @@ impl Database {
 
         let days = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                                 "
                                         SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
@@ -2754,7 +2773,7 @@ impl Database {
             branch_days
         } else {
             // No positional params; criteria placeholders start at ?1.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                     SELECT DISTINCT substr(file_created_at, 1, 10) AS day_key
@@ -2870,6 +2889,7 @@ impl Database {
             live_photo_video_id: None,
             is_favorite: asset.is_favorite,
             is_archived: asset.is_archived,
+            is_trashed: false,
             visibility: asset.visibility,
             rating: asset.rating,
             width: asset.width,
@@ -2889,13 +2909,20 @@ impl Database {
         self.init_media()?;
         let conn = self.open()?;
         for asset in assets {
+            asset.is_trashed = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM trashed_assets t JOIN assets owner
+                 ON owner.id=t.asset_id AND owner.account_id=t.account_id WHERE owner.id=?1)",
+                [&asset.id], |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
             let (root_id, count, secondary): (Option<String>, Option<u32>, i32) = conn
                 .query_row(
                     "SELECT
                         COALESCE((SELECT original_asset_id FROM edit_versions WHERE asset_id=?1), ?1),
                         CASE WHEN EXISTS(SELECT 1 FROM edit_versions WHERE asset_id=?1 OR original_asset_id=?1)
-                            THEN (SELECT COUNT(*) + 1 FROM edit_versions WHERE original_asset_id=
-                                COALESCE((SELECT original_asset_id FROM edit_versions WHERE asset_id=?1), ?1))
+                            THEN (SELECT COUNT(*) + 1 FROM edit_versions ev JOIN assets a ON a.id=ev.asset_id WHERE ev.original_asset_id=
+                                COALESCE((SELECT original_asset_id FROM edit_versions WHERE asset_id=?1), ?1)
+                                AND COALESCE(a.is_archived,0)=0 AND COALESCE(a.visibility,'timeline')<>'archive'
+                                AND NOT EXISTS(SELECT 1 FROM trashed_assets t WHERE t.asset_id=a.id AND t.account_id=a.account_id))
                             ELSE NULL END,
                         COALESCE((SELECT is_stack_secondary FROM assets WHERE id=?1), 0)",
                     [&asset.id],
@@ -2927,7 +2954,7 @@ impl Database {
 
         let exists = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=date_key, ?2=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                 SELECT EXISTS(
@@ -2958,7 +2985,7 @@ impl Database {
             })
         } else {
             // Criteria placeholders start after ?1=date_key.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                 SELECT EXISTS(
@@ -2985,7 +3012,7 @@ impl Database {
 
         let newer_count = if let Some(pattern) = search_pattern.as_deref() {
             // Criteria placeholders start after ?1=date_key, ?2=pattern.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                                 SELECT COUNT(*)
@@ -3014,7 +3041,7 @@ impl Database {
             })
         } else {
             // Criteria placeholders start after ?1=date_key.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2, matches!(filter, Some("archived" | "trashed")));
             let query = format!(
                 "
                                 SELECT COUNT(*)
@@ -3314,7 +3341,7 @@ impl Database {
         let offset = i64::from(page) * i64::from(page_size);
         let limit = i64::from(page_size) + 1;
         // Criteria placeholders start after ?1=album_id, ?2=limit, ?3=offset.
-        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 4);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 4, false);
         let default_sort = SortParams::default();
         let sort = sort.unwrap_or(&default_sort);
         let order_by = sort.order_by_clause_prefixed("a.");
@@ -3379,7 +3406,7 @@ impl Database {
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         // Criteria placeholders start after ?1=album_id.
-        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 2);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "a.id", 2, false);
         let default_sort = SortParams::default();
         let sort = sort.unwrap_or(&default_sort);
         let order_by = sort.order_by_clause_prefixed("a.");
@@ -3603,7 +3630,7 @@ impl Database {
         if path == "/" {
             // Root: match paths with exactly one segment, e.g. /file.jpg
             // Criteria placeholders start after ?1=limit, ?2=offset.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3, false);
             let query = format!(
                 "
                     SELECT
@@ -3645,7 +3672,7 @@ impl Database {
             // 1-based position of the first character after the prefix (for substr)
             let remaining_start = (path_prefix.chars().count() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining, ?3=limit, ?4=offset.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 5);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 5, false);
 
             let query = format!(
                 "
@@ -3715,7 +3742,7 @@ impl Database {
 
         if path == "/" {
             // No positional params; criteria placeholders start at ?1.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1, false);
             let query = format!(
                 "
                     SELECT
@@ -3751,7 +3778,7 @@ impl Database {
             let path_prefix = format!("{}/", path);
             let remaining_start = (path_prefix.chars().count() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining.
-            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
+            let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3, false);
 
             let query = format!(
                 "
@@ -3809,7 +3836,7 @@ impl Database {
         let limit = i64::from(page_size) + 1;
         let month_key = format!("{:04}-{:02}", year, month);
         // Criteria placeholders start after ?1=month_key, ?2=limit, ?3=offset.
-        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 4);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 4, false);
         let default_sort = SortParams::default();
         let sort = sort.unwrap_or(&default_sort);
         let order_by = sort.order_by_clause();
@@ -3871,7 +3898,7 @@ impl Database {
         let conn = self.open()?;
         let month_key = format!("{:04}-{:02}", year, month);
         // Criteria placeholders start after ?1=month_key.
-        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2);
+        let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 2, false);
         let default_sort = SortParams::default();
         let sort = sort.unwrap_or(&default_sort);
         let order_by = sort.order_by_clause();
@@ -4083,6 +4110,8 @@ impl Database {
             .unwrap_or(5);
 
         Ok(Settings {
+            delete_behavior: stmt.query_row(params!["delete_behavior"], |row| row.get::<_, String>(0))
+                .ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default(),
             locale,
             live_photo_autoplay,
             thumbnail_cache_path: thumbnail_cache_path.to_string_lossy().to_string(),
@@ -4096,6 +4125,11 @@ impl Database {
 
     pub fn update_settings(&self, settings: &Settings) -> Result<Settings, String> {
         let conn = self.open()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings(key,value) VALUES('delete_behavior',?1)",
+            [serde_json::to_string(&settings.delete_behavior).map_err(|e| e.to_string())?],
+        ).map_err(|e| e.to_string())?;
+        log::info!("[assets.delete] saved app-wide behavior={:?}", settings.delete_behavior);
         let locale = normalize_locale(&settings.locale);
         log::info!("[i18n.locale] persisting locale={locale}");
 
@@ -4346,6 +4380,7 @@ fn map_asset_summary(row: &rusqlite::Row<'_>) -> Result<AssetSummary, rusqlite::
         live_photo_video_id: None,
         is_favorite: row.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0,
         is_archived: row.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0,
+        is_trashed: false,
         visibility: row.get(9)?,
         rating: row.get(10)?,
         width: row.get(11)?,
@@ -4417,12 +4452,13 @@ fn asset_filter_where_clause(filter: Option<&str>) -> &'static str {
         .as_str()
     {
         "favorites" => {
-            "is_favorite = 1 AND COALESCE(is_archived, 0) = 0 AND LOWER(COALESCE(visibility, '')) != 'archive'"
+            "id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id) AND is_favorite = 1 AND COALESCE(is_archived, 0) = 0 AND LOWER(COALESCE(visibility, '')) != 'archive'"
         }
         "archived" => {
-            "COALESCE(is_archived, 0) = 1 OR LOWER(COALESCE(visibility, '')) = 'archive'"
+            "id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id) AND (COALESCE(is_archived, 0) = 1 OR LOWER(COALESCE(visibility, '')) = 'archive')"
         }
-        _ => "1=1",
+        "trashed" => "id IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id)",
+        _ => "id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id)",
     }
 }
 

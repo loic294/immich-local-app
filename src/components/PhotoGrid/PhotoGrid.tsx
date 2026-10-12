@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AssetThumbnail } from "./AssetThumbnail";
 import { PhotoGridFullscreenOverlay } from "./PhotoGridFullscreenOverlay";
 import { VerticalTimeline } from "./VerticalTimeline";
@@ -6,7 +7,6 @@ import type {
   AssetCacheDetails,
   GridLayoutSection,
   AssetSummary,
-  AssetVisibility,
   Settings,
   TimelineLayoutDay,
   TimelineLayoutResponse,
@@ -22,9 +22,10 @@ import {
   updateAssetDescription,
   updateAssetFavorite,
   updateAssetRating,
-  updateAssetVisibility,
 } from "../../api/tauri";
 import { useI18n } from "../../i18n";
+import { ASSET_DELETION_CHANGED_EVENT, deleteAsset, restoreDeletedAsset } from "../../api/deletion";
+import { useSettings } from "../../hooks/useSettings";
 import type {
   JumpMetrics,
   PhotoGridProps,
@@ -63,6 +64,7 @@ export function PhotoGrid({
   viewCriteria,
 }: PhotoGridProps) {
   const { t } = useI18n();
+  const deletionQueryClient = useQueryClient();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -78,6 +80,8 @@ export function PhotoGrid({
   const [videoDurations, setVideoDurations] = useState<Record<string, number>>({});
   const [showVideoDebug, setShowVideoDebug] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const deleteSettings = useSettings();
+  const [deletionNonce, setDeletionNonce] = useState(0);
   const [assetOverrides, setAssetOverrides] = useState<Record<string, Partial<AssetSummary>>>({});
   const [isPlayingLivePhoto, setIsPlayingLivePhoto] = useState(false);
   const [shouldAutoplayLivePhoto, setShouldAutoplayLivePhoto] = useState(false);
@@ -394,19 +398,40 @@ export function PhotoGrid({
           return override ? { ...asset, ...override } : asset;
         })
         .filter((asset) => {
+          if (viewScope?.filter === "trashed") return !!asset.isTrashed;
+          if (viewScope?.filter === "archived")
+            return !asset.isTrashed && !!(asset.isArchived || asset.visibility === "archive");
           if (!hideArchivedAssets) {
             return true;
           }
 
-          if (asset.isArchived) {
+          if (asset.isArchived || asset.isTrashed) {
             return false;
           }
 
           const visibility = (asset.visibility ?? "").toLowerCase();
           return visibility !== "archive";
         }),
-    [assetOverrides, assets, hideArchivedAssets],
+    [assetOverrides, assets, hideArchivedAssets, viewScope?.filter],
   );
+
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const asset = (event as CustomEvent<AssetSummary>).detail;
+      if (asset?.id) setAssetOverrides((previous) => ({ ...previous, [asset.id]: asset }));
+      setDeletionNonce((value) => value + 1);
+      for (const key of [
+        "album-assets-paged",
+        "folder-assets-paged",
+        "calendar-assets-paged",
+        "edit-versions",
+      ]) {
+        void deletionQueryClient.invalidateQueries({ queryKey: [key] });
+      }
+    };
+    window.addEventListener(ASSET_DELETION_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(ASSET_DELETION_CHANGED_EVENT, changed);
+  }, [deletionQueryClient]);
 
   const { lightboxAssets, versionAssetsBySlotId, layoutRefreshNonce } = usePhotoGridExternalEvents(
     displayAssets,
@@ -430,7 +455,12 @@ export function PhotoGrid({
       const nextVisibility =
         typeof override?.visibility === "string" ? override.visibility : asset.visibility;
 
-      if (nextIsArchived || (nextVisibility ?? "").toLowerCase() === "archive") {
+      if (
+        override?.isTrashed ||
+        asset.isTrashed ||
+        nextIsArchived ||
+        (nextVisibility ?? "").toLowerCase() === "archive"
+      ) {
         hiddenIds.push(asset.id);
       }
     }
@@ -498,7 +528,7 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [layoutRefreshNonce, loadTimelineLayout, viewportWidth]);
+  }, [deletionNonce, layoutRefreshNonce, loadTimelineLayout, viewportWidth]);
 
   useEffect(() => {
     latestVirtualEntriesRef.current = virtualEntries;
@@ -539,7 +569,7 @@ export function PhotoGrid({
     return () => {
       cancelled = true;
     };
-  }, [hiddenArchivedAssetIdsKey, layoutRefreshNonce, loadFullLayout, viewportWidth]);
+  }, [deletionNonce, hiddenArchivedAssetIdsKey, layoutRefreshNonce, loadFullLayout, viewportWidth]);
 
   // Scroll-position-based load triggers used in full layout mode
   // (IntersectionObserver sentinels are disabled in this mode)
@@ -1332,20 +1362,31 @@ export function PhotoGrid({
       return;
     }
 
-    const nextIsArchived = !activeAsset.isArchived;
-    const nextVisibility: AssetVisibility = nextIsArchived ? "archive" : "timeline";
-
-    updateActiveAssetOverride({
-      isArchived: nextIsArchived,
-      visibility: nextVisibility,
-    });
+    const restore = !!(activeAsset.isArchived || activeAsset.isTrashed);
+    const mode = activeAsset.isTrashed
+      ? "trash"
+      : restore
+        ? "archive"
+        : (deleteSettings.data?.deleteBehavior ?? "archive");
+    updateActiveAssetOverride(
+      mode === "trash"
+        ? { isTrashed: !restore }
+        : {
+            isArchived: !restore,
+            visibility: restore ? "timeline" : "archive",
+          },
+    );
     setArchiveUpdateId(activeAsset.id);
 
     try {
-      await updateAssetVisibility(activeAsset.id, nextVisibility);
+      const updated = restore
+        ? await restoreDeletedAsset(activeAsset.id, mode)
+        : await deleteAsset(activeAsset.id);
+      updateActiveAssetOverride(updated);
     } catch (error) {
       updateActiveAssetOverride({
         isArchived: activeAsset.isArchived,
+        isTrashed: activeAsset.isTrashed,
         visibility: activeAsset.visibility,
       });
       console.error("Failed to update asset archive status:", error);

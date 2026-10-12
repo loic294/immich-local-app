@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { deleteAsset } from "./deletion";
 import type {
   AlbumSummary,
   AlbumShareUser,
@@ -780,6 +781,10 @@ export async function updateAssetVisibility(
   assetId: string,
   visibility: AssetVisibility,
 ): Promise<AssetSummary> {
+  // All normal archive/Delete actions honor the persisted app-wide preference.
+  if (visibility === "archive") {
+    return deleteAsset(assetId);
+  }
   return invoke<AssetSummary>("update_asset_visibility", {
     payload: {
       assetId,

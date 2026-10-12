@@ -18,6 +18,7 @@ import { useConnectionContext } from "../hooks/connectionContext";
 import type { Session } from "../hooks/useSession";
 import { criteriaWithQuery, type AlbumSummary, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
+import { deleteAssets } from "../api/deletion";
 import {
   addAssetsToAlbum,
   canManageAlbumSharing,
@@ -31,7 +32,6 @@ import {
   refreshAlbumAssets,
   recordRecentAlbum,
   saveAlbumLocally,
-  updateAssetVisibility,
 } from "../api/tauri";
 
 interface AlbumsPageProps {
@@ -487,7 +487,17 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage="albums" activeAlbumId={selectedAlbumId} onNavigate={onNavigate} />
+      <Sidebar
+        activePage="albums"
+        activeAlbumId={selectedAlbumId}
+        onNavigate={onNavigate}
+        onNavigateRoot={() => {
+          if (selectedAlbumId === null) return;
+          console.info("[navigation] returning to albums collection", { albumId: selectedAlbumId });
+          setSelectedAlbumId(null);
+          setSearchInput("");
+        }}
+      />
 
       <section className="flex min-h-0 min-w-0 h-screen flex-col overflow-hidden">
         <AppTopBar
@@ -514,10 +524,12 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           }}
           onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
           onArchiveSelected={async () => {
-            await Promise.all(
-              selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
-            );
-            await albumAssetsQuery.refetch();
+            try {
+              await deleteAssets(selectedAssetIds);
+            } finally {
+              await albumAssetsQuery.refetch();
+              setAlbumRefreshNonce((nonce) => nonce + 1);
+            }
           }}
           onClearSelection={() => {
             setSelectionCommand({ type: "clear", nonce: Date.now() });

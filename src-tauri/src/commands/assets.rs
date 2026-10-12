@@ -28,7 +28,7 @@ async fn account_reachable(state: &tauri::State<'_, AppState>, account_id: &str)
 }
 
 fn is_visible_in_grid(asset: &AssetSummary) -> bool {
-    if asset.is_archived {
+    if asset.is_archived || asset.is_trashed {
         return false;
     }
 
@@ -54,6 +54,7 @@ enum AssetFilter {
     All,
     Favorites,
     Archived,
+    Trashed,
 }
 
 fn parse_asset_filter(filter: Option<&str>) -> AssetFilter {
@@ -66,12 +67,13 @@ fn parse_asset_filter(filter: Option<&str>) -> AssetFilter {
     {
         "favorites" => AssetFilter::Favorites,
         "archived" => AssetFilter::Archived,
+        "trashed" => AssetFilter::Trashed,
         _ => AssetFilter::All,
     }
 }
 
 fn include_archived_in_grid(filter: AssetFilter) -> bool {
-    matches!(filter, AssetFilter::Archived)
+    matches!(filter, AssetFilter::Archived | AssetFilter::Trashed)
 }
 
 #[derive(Debug, Serialize)]
@@ -1086,12 +1088,21 @@ pub async fn flush_pending_mutations(state: tauri::State<'_, AppState>) -> Resul
         let client = state.client_for(Some(&mutation.account_id));
 
         let result = match mutation.kind.as_str() {
+            "delete_asset" | "restore_deleted" => {
+                match payload.get("mode").cloned().ok_or("Missing queued delete mode")
+                    .and_then(|mode| serde_json::from_value(mode).map_err(|_| "Invalid queued delete mode")) {
+                    Ok(mode) => client.change_deleted_state(&mutation.asset_id, mode, mutation.kind == "restore_deleted").await.map(|_| None),
+                    Err(error) => Err(error.to_string()),
+                }
+            }
             "delete_version" => match payload
                 .get("originalAssetId")
                 .and_then(serde_json::Value::as_str)
             {
                 Some(original) => client
-                    .trash_edit_version(&mutation.asset_id, original)
+                    .delete_edit_version_with_behavior(&mutation.asset_id, original,
+                        payload.get("mode").cloned().and_then(|v| serde_json::from_value(v).ok())
+                            .unwrap_or(crate::commands::settings::DeleteBehavior::Trash))
                     .await
                     .map(|_| None),
                 // Older queue entries only permitted deletion of secondary edits.

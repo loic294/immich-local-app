@@ -45,6 +45,11 @@ export function PeoplePage({ session, onNavigate, onLogout }: PeoplePageProps) {
           key={selected.id}
           session={session}
           onNavigate={onNavigate}
+          onNavigateRoot={() => {
+            console.info("[navigation] returning to people collection", { personId: selected.id });
+            setSelected(null);
+            setAssigning(null);
+          }}
           onLogout={onLogout}
           activePage="people"
           initialPersonId={selected.id}
@@ -64,7 +69,7 @@ export function PeoplePage({ session, onNavigate, onLogout }: PeoplePageProps) {
   const visiblePeople = filterPeople(people.data ?? [], search, !showUnnamed, sort, t("unnamed"));
   return (
     <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage="people" onNavigate={onNavigate} />
+      <Sidebar activePage="people" onNavigate={onNavigate} onNavigateRoot={() => {}} />
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <AppTopBar
           session={session}

@@ -22,6 +22,7 @@ use commands::assets::{
     refresh_asset, update_asset_description, update_asset_favorite, update_asset_rating,
     update_asset_visibility,
 };
+use commands::deletion::{delete_asset, restore_deleted_asset, refresh_deleted_assets};
 use commands::auth::{
     add_account_complete_oauth, add_account_oauth_url, add_account_with_key,
     add_account_with_password, authenticate, authenticate_with_password, check_server_connection,
@@ -306,6 +307,9 @@ pub fn main() {
             get_timeline_months,
             update_asset_favorite,
             update_asset_visibility,
+            delete_asset,
+            restore_deleted_asset,
+            refresh_deleted_assets,
             update_asset_rating,
             update_asset_description,
             flush_pending_mutations,

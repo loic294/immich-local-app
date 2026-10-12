@@ -71,6 +71,8 @@ pub struct MenuItemPreference {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(default)]
+    pub delete_behavior: DeleteBehavior,
     pub locale: String,
     pub live_photo_autoplay: bool,
     pub thumbnail_cache_path: String,
@@ -79,6 +81,14 @@ pub struct Settings {
     pub menu_items: Vec<MenuItemPreference>,
     pub my_photos_rules: Vec<MyPhotosRule>,
     pub recent_albums_limit: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeleteBehavior {
+    #[default]
+    Archive,
+    Trash,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

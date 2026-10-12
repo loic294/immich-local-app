@@ -190,13 +190,15 @@ export function FullscreenInfoPanel({
 
         {latitude !== null && longitude !== null ? (
           <div>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary mt-2 w-full"
-              onClick={() => openAssetOnMap({ id: asset.id, latitude, longitude })}
-            >
-              <MapPin size={14} /> {bt("openMap")}
-            </button>
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                className="btn btn-sm btn-primary max-w-full whitespace-normal"
+                onClick={() => openAssetOnMap({ id: asset.id, latitude, longitude })}
+              >
+                <MapPin size={14} /> {bt("openMap")}
+              </button>
+            </div>
             <div className="mt-1">
               {isOnline === false ? (
                 <p role="status" className="mt-2 text-white/65">

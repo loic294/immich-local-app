@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { AssetSummary } from "../types";
 
 export interface MediaPreferences {
@@ -27,11 +27,49 @@ export interface UploadJob {
   localPath: string;
   state: string;
   error: string | null;
+  originalAssetId: string | null;
+  serverAssetId: string | null;
 }
 export interface EditorJob {
   assetId: string;
   localPath: string;
+  previewPath?: string | null;
+  previewError?: string | null;
 }
+export interface EditImportState {
+  previewSrc: string | null;
+  state: "importing" | "queued" | "failed" | "loading";
+  error?: string | null;
+  versionId?: string;
+  uploadJobId?: string;
+}
+export interface MediaEditState {
+  assetIds: string[];
+  phase: "idle" | "launching" | "editing" | "finishing";
+  imports: Record<string, EditImportState>;
+}
+let editState: MediaEditState = { assetIds: [], phase: "idle", imports: {} };
+const editListeners = new Set<() => void>();
+export const getMediaEditState = () => editState;
+export function subscribeMediaEditState(listener: () => void): () => void {
+  editListeners.add(listener);
+  return () => {
+    editListeners.delete(listener);
+  };
+}
+export function updateMediaEditState(update: Partial<MediaEditState>): void {
+  editState = { ...editState, ...update };
+  editListeners.forEach((listener) => listener());
+}
+export function updateEditImport(assetId: string, value: EditImportState | null): void {
+  const imports = { ...editState.imports };
+  if (value) imports[assetId] = value;
+  else delete imports[assetId];
+  updateMediaEditState({ imports });
+}
+/** Native preview paths are explicitly scoped by get_changed_editor_jobs. */
+export const editPreviewSrc = (path: string | null | undefined): string | null =>
+  path ? convertFileSrc(path) : null;
 export const getMediaPreferences = () => invoke<MediaPreferences>("get_media_preferences");
 export const updateMediaPreferences = (preferences: MediaPreferences) =>
   invoke<MediaPreferences>("update_media_preferences", { preferences }).then((value) => {
@@ -44,14 +82,21 @@ export const scanImportMedia = (root: string, page: number, kind: string) =>
 export const getImportPreview = (path: string) => invoke<string>("get_import_preview", { path });
 export const importMedia = (paths: string[], albumId: string | null) =>
   invoke<number>("import_media", { paths, albumId });
-export const getMediaUploads = () => invoke<UploadJob[]>("get_media_uploads");
+export const getMediaUploads = () =>
+  invoke<UploadJob[]>("get_media_uploads", {
+    editJobIds: Object.values(editState.imports).flatMap((value) =>
+      value.uploadJobId ? [value.uploadJobId] : [],
+    ),
+  });
 export const flushMediaUploads = () => invoke<number>("flush_media_uploads");
 export const retryMediaUploads = () => invoke<void>("retry_media_uploads");
 export const beginMediaEdit = (assetIds: string[]) =>
   invoke<void>("begin_media_edit", { assetIds });
-export const getChangedEditorJobs = () => invoke<EditorJob[]>("get_changed_editor_jobs");
+export const getChangedEditorJobs = (preparePreviews = false) =>
+  invoke<EditorJob[]>("get_changed_editor_jobs", { preparePreviews });
+/** Partial batch exports return queued jobs even if a later edit fails. */
 export const exportMediaEdits = (assetIds: string[]) =>
-  invoke<number>("export_media_edits", { assetIds });
+  invoke<{ uploads: UploadJob[]; error: string | null }>("export_media_edits", { assetIds });
 export const getEditVersions = (assetId: string) =>
   invoke<AssetSummary[]>("get_edit_versions", { assetId });
 export const deleteEditVersion = (assetId: string) =>
@@ -67,7 +112,19 @@ export const trackMediaEvent = (event: string) =>
     },
   });
 export function requestMediaEdit(assetIds: string[], albumId?: string): void {
+  if (
+    !assetIds.length ||
+    editState.phase !== "idle" ||
+    assetIds.some((id) => editState.imports[id])
+  )
+    return;
+  updateMediaEditState({ assetIds, phase: "launching" });
   window.dispatchEvent(new CustomEvent("media:edit-request", { detail: { assetIds, albumId } }));
+}
+export function requestFinishMediaEdit(): void {
+  if (editState.phase !== "editing") return;
+  updateMediaEditState({ phase: "finishing" });
+  window.dispatchEvent(new Event("media:finish-edit"));
 }
 export function requestMediaImport(): void {
   window.dispatchEvent(new Event("media:import-request"));

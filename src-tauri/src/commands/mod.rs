@@ -1,5 +1,6 @@
 pub mod albums;
 pub mod assets;
+pub mod deletion;
 pub mod auth;
 pub mod browsing;
 pub mod folders;

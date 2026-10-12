@@ -72,6 +72,8 @@ pub struct AssetSummary {
     #[serde(default)]
     pub is_archived: bool,
     #[serde(default)]
+    pub is_trashed: bool,
+    #[serde(default)]
     pub visibility: Option<String>,
     #[serde(default)]
     pub rating: Option<i32>,
@@ -2828,10 +2830,16 @@ impl ImmichClient {
     /// Restore the original before trashing an active edit. Inspect the current
     /// server stack on replay so a newer primary is not overwritten.
     pub async fn trash_edit_version(&self, asset_id: &str, original: &str) -> Result<(), String> {
+        self.delete_edit_version_with_behavior(asset_id, original, crate::commands::settings::DeleteBehavior::Trash).await
+    }
+
+    pub async fn delete_edit_version_with_behavior(
+        &self, asset_id: &str, original: &str, behavior: crate::commands::settings::DeleteBehavior,
+    ) -> Result<(), String> {
         if asset_id == original {
             return Err("The original version cannot be deleted".into());
         }
-        log::info!("[media:version-delete] trash start edit={asset_id} original={original}");
+        log::info!("[media:version-delete] start edit={asset_id} original={original} mode={behavior:?}");
         let asset = self.get_asset_value(asset_id).await?;
         if let Some(stack_id) = asset
             .get("stack")
@@ -2904,8 +2912,13 @@ impl ImmichClient {
                 log::info!("[media:version-delete] restored server primary original={original} stack={stack_id}");
             }
         }
-        self.trash_asset(asset_id).await?;
-        log::info!("[media:version-delete] trash complete edit={asset_id}");
+        match behavior {
+            crate::commands::settings::DeleteBehavior::Trash => self.trash_asset(asset_id).await?,
+            crate::commands::settings::DeleteBehavior::Archive => {
+                self.update_asset_visibility(asset_id, "archive").await?;
+            }
+        }
+        log::info!("[media:version-delete] complete edit={asset_id} mode={behavior:?}");
         Ok(())
     }
 
@@ -2937,6 +2950,86 @@ impl ImmichClient {
             ));
         }
         Ok(())
+    }
+
+    pub async fn change_deleted_state(
+        &self, id: &str, mode: crate::commands::settings::DeleteBehavior, restore: bool,
+    ) -> Result<(), String> {
+        use crate::commands::settings::DeleteBehavior;
+        if mode == DeleteBehavior::Archive {
+            return self.update_asset_visibility(id, if restore { "timeline" } else { "archive" })
+                .await.map(|_| ());
+        }
+        if !restore { return self.trash_asset(id).await; }
+        let session = self.session.lock().await.clone().ok_or("Not authenticated")?;
+        let response = self.client.post(format!("{}/api/trash/restore/assets", normalize_base(&session.server_url)))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token)
+            .json(&serde_json::json!({"ids": [id]})).send().await
+            .map_err(|e| format!("Trash restore failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!("Immich trash restore unsupported or rejected (HTTP {})", response.status()));
+        }
+        Ok(())
+    }
+
+    pub async fn get_deleted_assets(
+        &self, mode: crate::commands::settings::DeleteBehavior,
+    ) -> Result<Vec<AssetSummary>, String> {
+        let session = self.session.lock().await.clone().ok_or("Not authenticated")?;
+        let base = normalize_base(&session.server_url);
+        let query = match mode {
+            crate::commands::settings::DeleteBehavior::Trash => vec![("isTrashed", "true"), ("size", "MONTH"), ("withStacked", "false")],
+            crate::commands::settings::DeleteBehavior::Archive => vec![("visibility", "archive"), ("size", "MONTH"), ("withStacked", "false")],
+        };
+        let response = self.client.get(format!("{base}/api/timeline/buckets"))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token).query(&query).send().await
+            .map_err(|e| format!("Deleted timeline listing failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!("Immich deleted timeline unsupported or rejected (HTTP {})", response.status()));
+        }
+        let buckets: Value = response.json().await.map_err(|e| format!("Invalid deleted timeline response: {e}"))?;
+        let buckets = buckets.as_array().ok_or("Invalid deleted timeline: expected buckets array")?;
+        let mut assets = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for bucket in buckets {
+            let time = bucket.get("timeBucket").and_then(Value::as_str).ok_or("Invalid deleted timeline: missing timeBucket")?;
+            let response = self.client.get(format!("{base}/api/timeline/bucket"))
+                .header(IMMICH_API_KEY_HEADER, &session.access_token).query(&query)
+                .query(&[("timeBucket", time)]).send().await
+                .map_err(|e| format!("Deleted bucket {time} failed: {e}"))?;
+            if !response.status().is_success() {
+                return Err(format!("Immich deleted bucket {time} unsupported or rejected (HTTP {})", response.status()));
+            }
+            let body: Value = response.json().await.map_err(|e| format!("Invalid deleted bucket {time}: {e}"))?;
+            // Modern timeline buckets are columnar, not AssetResponseDto arrays.
+            for id in deleted_bucket_ids(&body)? {
+                if !seen.insert(id.clone()) { continue; }
+                let asset = self.get_asset(&id).await.map_err(|e| format!("Deleted asset {id} metadata failed: {e}"))?;
+                let matches_mode = match mode {
+                    crate::commands::settings::DeleteBehavior::Trash => asset.is_trashed,
+                    crate::commands::settings::DeleteBehavior::Archive => !asset.is_trashed &&
+                        (asset.is_archived || asset.visibility.as_deref() == Some("archive")),
+                };
+                if !matches_mode {
+                    return Err(format!("Immich deleted timeline filter unsupported or changed during refresh: asset {id} does not match {mode:?}"));
+                }
+                assets.push(asset);
+            }
+        }
+        Ok(assets)
+    }
+
+    pub async fn get_asset_for_reconciliation(&self, id: &str) -> Result<Option<AssetSummary>, String> {
+        let session = self.session.lock().await.clone().ok_or("Not authenticated")?;
+        let response = self.client.get(format!("{}/api/assets/{id}", normalize_base(&session.server_url)))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token).send().await
+            .map_err(|e| format!("Deleted reconciliation asset {id} failed: {e}"))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
+        if !response.status().is_success() {
+            return Err(format!("Deleted reconciliation asset {id} rejected (HTTP {})", response.status()));
+        }
+        let body: Value = response.json().await.map_err(|e| format!("Invalid asset {id} response: {e}"))?;
+        parse_asset_summary_from_value(&body).map(Some)
     }
 
     pub async fn update_asset_favorite(
@@ -3362,6 +3455,127 @@ impl ImmichClient {
             assets_status,
             truncate_for_log(&assets_body)
         ))
+    }
+}
+
+fn deleted_bucket_ids(body: &Value) -> Result<Vec<String>, String> {
+    let ids = body.get("id").and_then(Value::as_array)
+        .ok_or("Unsupported Immich deleted bucket response: expected parallel id array")?;
+    ids.iter().map(|id| id.as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+        .ok_or_else(|| "Invalid Immich deleted bucket asset ID".to_string())).collect()
+}
+
+#[cfg(test)]
+mod deletion_api_tests {
+    use super::*;
+    use crate::commands::settings::DeleteBehavior;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn fixture(responses: Vec<(u16, &'static str)>) -> (ImmichClient, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let byte = stream.read_u8().await.unwrap();
+                    request.push(byte);
+                    if request.ends_with(b"\r\n\r\n") { break; }
+                }
+                let header_end = request.len();
+                let headers = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                let length = headers.lines().find_map(|line| line.strip_prefix("content-length: "))
+                    .map(|value| value.trim().parse::<usize>().unwrap()).unwrap_or(0);
+                request.resize(header_end + length, 0);
+                stream.read_exact(&mut request[header_end..]).await.unwrap();
+                requests.push(String::from_utf8_lossy(&request).into_owned());
+                let response = format!("HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        let client = ImmichClient::new();
+        client.hydrate_offline_session(&url, "fixture", false, "user", None).await.unwrap();
+        (client, requests)
+    }
+
+    #[test]
+    fn deletion_columnar_bucket_parser_never_accepts_errors_as_empty() {
+        assert_eq!(deleted_bucket_ids(&serde_json::json!({"id":["a","b"],"width":[600,800]})).unwrap(), ["a","b"]);
+        assert!(deleted_bucket_ids(&serde_json::json!({"id":[]})).unwrap().is_empty());
+        for bad in [serde_json::json!({"message":"unsupported"}), serde_json::json!([]), serde_json::json!({"id":[null]})] {
+            assert!(deleted_bucket_ids(&bad).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn deletion_trash_and_restore_use_distinct_real_immich_endpoints() {
+        let (client, requests) = fixture(vec![(204, ""), (204, "")]).await;
+        client.change_deleted_state("a", DeleteBehavior::Trash, false).await.unwrap();
+        client.change_deleted_state("a", DeleteBehavior::Trash, true).await.unwrap();
+        let requests = requests.await.unwrap();
+        assert!(requests[0].starts_with("DELETE /api/assets "));
+        assert!(requests[0].ends_with(r#"{"force":false,"ids":["a"]}"#));
+        assert!(requests[1].starts_with("POST /api/trash/restore/assets "));
+        assert!(requests[1].ends_with(r#"{"ids":["a"]}"#));
+    }
+
+    #[tokio::test]
+    async fn deletion_archive_and_restore_preserve_visibility_semantics() {
+        let body = r#"{"id":"a","originalFileName":"photo.jpg","fileCreatedAt":null,"checksum":null,"visibility":"archive"}"#;
+        let (client, requests) = fixture(vec![(200, body), (200, body), (200, body), (200, body)]).await;
+        client.change_deleted_state("a", DeleteBehavior::Archive, false).await.unwrap();
+        client.change_deleted_state("a", DeleteBehavior::Archive, true).await.unwrap();
+        let requests = requests.await.unwrap();
+        assert!(requests[1].ends_with(r#"{"visibility":"archive"}"#));
+        assert!(requests[3].ends_with(r#"{"visibility":"timeline"}"#));
+        assert!(requests.iter().all(|r| !r.starts_with("DELETE ")));
+    }
+
+    #[tokio::test]
+    async fn deletion_trash_listing_uses_columnar_timeline_not_metadata_search() {
+        let (client, requests) = fixture(vec![
+            (200, r#"[{"timeBucket":"2026-10-01T00:00:00Z"}]"#),
+            (200, r#"{"id":["a"],"width":[640],"height":[480],"thumbhash":[null]}"#),
+            (200, r#"{"id":"a","originalFileName":"photo.jpg","fileCreatedAt":"2026-10-01T00:00:00Z","checksum":null,"isTrashed":true,"width":640,"height":480}"#),
+        ]).await;
+        let assets = client.get_deleted_assets(DeleteBehavior::Trash).await.unwrap();
+        assert_eq!(assets.len(), 1);
+        assert!(assets[0].is_trashed);
+        assert_eq!(assets[0].width, Some(640));
+        let requests = requests.await.unwrap();
+        assert!(requests[0].starts_with("GET /api/timeline/buckets?"));
+        assert!(requests[1].starts_with("GET /api/timeline/bucket?"));
+        assert!(requests[..2].iter().all(|r| r.contains("isTrashed=true")));
+        assert!(requests.iter().all(|r| !r.contains("search/metadata")));
+    }
+
+    #[tokio::test]
+    async fn deletion_unsupported_timeline_and_restore_return_explicit_errors() {
+        let (client, requests) = fixture(vec![(404, r#"{"message":"unsupported"}"#), (405, "{}")]).await;
+        assert!(client.get_deleted_assets(DeleteBehavior::Trash).await.unwrap_err().contains("404"));
+        assert!(client.change_deleted_state("a", DeleteBehavior::Trash, true).await.unwrap_err().contains("405"));
+        requests.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn deletion_archive_listing_and_ignored_filters_are_checked() {
+        let (client, requests) = fixture(vec![
+            (200, r#"[{"timeBucket":"2026-10-01"}]"#),
+            (200, r#"{"id":["a"]}"#),
+            (200, r#"{"id":"a","originalFileName":"photo.jpg","fileCreatedAt":null,"checksum":null,"visibility":"archive","isArchived":true}"#),
+        ]).await;
+        assert!(client.get_deleted_assets(DeleteBehavior::Archive).await.unwrap()[0].is_archived);
+        assert!(requests.await.unwrap()[0].contains("visibility=archive"));
+        let (client, requests) = fixture(vec![
+            (200, r#"[{"timeBucket":"2026-10-01"}]"#),
+            (200, r#"{"id":["a"]}"#),
+            (200, r#"{"id":"a","originalFileName":"photo.jpg","fileCreatedAt":null,"checksum":null,"visibility":"timeline"}"#),
+        ]).await;
+        assert!(client.get_deleted_assets(DeleteBehavior::Trash).await.unwrap_err().contains("does not match"));
+        requests.await.unwrap();
     }
 }
 
@@ -3997,6 +4211,7 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
         .map(str::to_string);
 
     let mut asset = AssetSummary {
+        is_trashed: value.get("isTrashed").and_then(Value::as_bool).unwrap_or(false),
         id,
         stack_count: None,
         stack_original_id: None,

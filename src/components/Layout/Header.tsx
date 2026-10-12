@@ -1,5 +1,5 @@
 import { WindowHeader } from "./WindowHeader";
-import { Funnel, LogOut, Plus, Star, Trash2 } from "lucide-react";
+import { Funnel, LogOut, Plus, Settings, Star, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getProfileImage } from "../../api/tauri";
@@ -9,6 +9,8 @@ import type { SortPreference, ViewScope } from "../../types";
 import { useI18n } from "../../i18n";
 import { useAccounts } from "../../hooks/useAccounts";
 import { AddAccountModal } from "../Auth/AddAccountModal";
+import { requestMediaImport } from "../../api/media";
+import { useMediaLabels } from "../../i18n/media";
 
 interface HeaderProps {
   searchInput: string;
@@ -17,6 +19,7 @@ interface HeaderProps {
   userId: string;
   userName: string;
   onLogout: () => void;
+  onOpenSettings: () => void;
   searchPlaceholder?: string;
   /** Whether to show the Filter button (only on photo grid views). */
   showFilterButton?: boolean;
@@ -40,6 +43,7 @@ export function Header({
   userId,
   userName,
   onLogout,
+  onOpenSettings,
   searchPlaceholder,
   showFilterButton = false,
   searchScope,
@@ -51,6 +55,7 @@ export function Header({
   onSortChange,
 }: HeaderProps) {
   const { t } = useI18n();
+  const mediaLabels = useMediaLabels();
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const accounts = useAccounts();
   const [showAddAccount, setShowAddAccount] = useState(false);
@@ -121,145 +126,165 @@ export function Header({
 
   return (
     <WindowHeader>
-      <div className="flex min-w-0 items-center gap-4">
-        <MetadataSearchBar
-          value={searchInput}
-          onChange={onSearchChange}
-          placeholder={searchPlaceholder}
-          enableFilters={showFilterButton}
-          scope={searchScope}
-        />
-        {showFilterButton && (
+      <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
+        <div className="order-2 flex w-full min-w-0 flex-wrap items-center gap-2 sm:gap-4 lg:order-1 lg:w-auto lg:flex-1 [&>div:first-child]:min-w-0 [&>div:first-child]:flex-1">
+          <MetadataSearchBar
+            value={searchInput}
+            onChange={onSearchChange}
+            placeholder={searchPlaceholder}
+            enableFilters={showFilterButton}
+            scope={searchScope}
+          />
+          {showFilterButton && (
+            <button
+              className={`btn btn-sm ${filterActive || filterOpen ? "btn-primary" : "btn-outline"}`}
+              type="button"
+              onClick={onToggleFilter}
+              aria-pressed={filterOpen}
+              aria-label={t("header.filterAria")}
+            >
+              <Funnel size={14} className="shrink-0" />
+              <span>{t("header.filter")}</span>
+            </button>
+          )}
+          {showSortButton && sortPreference && onSortChange && (
+            <SortButton preference={sortPreference} onChange={onSortChange} />
+          )}
+        </div>
+
+        <div className="order-1 ml-auto flex shrink-0 items-center gap-2 lg:order-2">
           <button
-            className={`btn btn-sm ${filterActive || filterOpen ? "btn-primary" : "btn-outline"}`}
             type="button"
-            onClick={onToggleFilter}
-            aria-pressed={filterOpen}
-            aria-label={t("header.filterAria")}
+            className="btn btn-sm btn-ghost btn-square"
+            aria-label={t("nav.settings")}
+            title={t("nav.settings")}
+            onClick={onOpenSettings}
           >
-            <Funnel size={14} className="shrink-0" />
-            <span>{t("header.filter")}</span>
+            <Settings size={16} aria-hidden="true" />
           </button>
-        )}
-        {showSortButton && sortPreference && onSortChange && (
-          <SortButton preference={sortPreference} onChange={onSortChange} />
-        )}
-      </div>
-
-      <div className="order-2 flex shrink-0 items-center gap-2">
-        <details className="dropdown dropdown-end">
-          <summary
-            className="btn btn-ghost btn-circle list-none"
-            aria-label={t("header.accountMenuAria")}
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            aria-label={mediaLabels.import}
+            onClick={requestMediaImport}
           >
-            {profileImage ? (
-              <div className="avatar">
-                <div className="w-8 rounded-full">
-                  <img src={profileImage} alt={t("header.profileAlt")} className="object-cover" />
+            <Upload size={16} className="shrink-0" aria-hidden="true" />
+            <span>{mediaLabels.import}</span>
+          </button>
+          <details className="dropdown dropdown-end">
+            <summary
+              className="btn btn-ghost btn-circle list-none"
+              aria-label={t("header.accountMenuAria")}
+            >
+              {profileImage ? (
+                <div className="avatar">
+                  <div className="w-8 rounded-full">
+                    <img src={profileImage} alt={t("header.profileAlt")} className="object-cover" />
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="avatar placeholder">
-                <div className="w-8 rounded-full bg-primary text-primary-content text-xs font-bold flex justify-center items-center">
-                  {initials}
+              ) : (
+                <div className="avatar placeholder">
+                  <div className="w-8 rounded-full bg-primary text-primary-content text-xs font-bold flex justify-center items-center">
+                    {initials}
+                  </div>
                 </div>
-              </div>
-            )}
-          </summary>
-          <div className="dropdown-content z-20 mt-2 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow">
-            <p className="m-0 text-sm font-semibold text-base-content">{userName}</p>
-            <p className="m-0 truncate text-xs text-base-content/60">{serverUrl}</p>
+              )}
+            </summary>
+            <div className="dropdown-content z-20 mt-2 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow">
+              <p className="m-0 text-sm font-semibold text-base-content">{userName}</p>
+              <p className="m-0 truncate text-xs text-base-content/60">{serverUrl}</p>
 
-            {accounts.accounts.length > 0 ? (
-              <>
-                <div className="divider my-2 text-xs text-base-content/50">
-                  {t("account.accountsTitle")}
-                </div>
-                <ul className="max-h-64 space-y-1 overflow-y-auto">
-                  {accounts.accounts.map((account) => {
-                    const label = account.userName || account.userEmail || account.userId;
-                    const seed = (account.userName || account.userEmail || "U").trim();
-                    const accountInitials = seed.slice(0, 2).toUpperCase() || "U";
-                    return (
-                      <li
-                        key={account.id}
-                        className="flex items-center gap-2 rounded-box px-1 py-1"
-                      >
-                        <div className="avatar placeholder shrink-0">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-content">
-                            {accountInitials}
+              {accounts.accounts.length > 0 ? (
+                <>
+                  <div className="divider my-2 text-xs text-base-content/50">
+                    {t("account.accountsTitle")}
+                  </div>
+                  <ul className="max-h-64 space-y-1 overflow-y-auto">
+                    {accounts.accounts.map((account) => {
+                      const label = account.userName || account.userEmail || account.userId;
+                      const seed = (account.userName || account.userEmail || "U").trim();
+                      const accountInitials = seed.slice(0, 2).toUpperCase() || "U";
+                      return (
+                        <li
+                          key={account.id}
+                          className="flex items-center gap-2 rounded-box px-1 py-1"
+                        >
+                          <div className="avatar placeholder shrink-0">
+                            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-content">
+                              {accountInitials}
+                            </div>
                           </div>
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="m-0 flex items-center gap-1 truncate text-sm font-medium text-base-content">
-                            {label}
-                            {account.isPrimary ? (
-                              <span className="badge badge-primary badge-xs gap-1">
-                                <Star size={9} />
-                                {t("account.primaryBadge")}
-                              </span>
-                            ) : null}
-                          </p>
-                          <p className="m-0 truncate text-xs text-base-content/50">
-                            {account.serverUrl}
-                          </p>
-                        </div>
-                        {!account.isPrimary ? (
-                          <>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-xs btn-circle"
-                              title={t("account.makePrimary")}
-                              aria-label={t("account.makePrimary")}
-                              disabled={accountBusy}
-                              onClick={() => {
-                                void handleMakePrimary(account.id);
-                              }}
-                            >
-                              <Star size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-xs btn-circle text-error"
-                              title={t("account.removeAccount")}
-                              aria-label={t("account.removeAccount")}
-                              disabled={accountBusy}
-                              onClick={() => {
-                                void handleRemoveAccount(account.id);
-                              }}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            ) : null}
+                          <div className="min-w-0 flex-1">
+                            <p className="m-0 flex items-center gap-1 truncate text-sm font-medium text-base-content">
+                              {label}
+                              {account.isPrimary ? (
+                                <span className="badge badge-primary badge-xs gap-1">
+                                  <Star size={9} />
+                                  {t("account.primaryBadge")}
+                                </span>
+                              ) : null}
+                            </p>
+                            <p className="m-0 truncate text-xs text-base-content/50">
+                              {account.serverUrl}
+                            </p>
+                          </div>
+                          {!account.isPrimary ? (
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-xs btn-circle"
+                                title={t("account.makePrimary")}
+                                aria-label={t("account.makePrimary")}
+                                disabled={accountBusy}
+                                onClick={() => {
+                                  void handleMakePrimary(account.id);
+                                }}
+                              >
+                                <Star size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-xs btn-circle text-error"
+                                title={t("account.removeAccount")}
+                                aria-label={t("account.removeAccount")}
+                                disabled={accountBusy}
+                                onClick={() => {
+                                  void handleRemoveAccount(account.id);
+                                }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              ) : null}
 
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost mt-2 w-full justify-start"
-              disabled={accountBusy}
-              onClick={() => setShowAddAccount(true)}
-            >
-              <Plus size={14} className="shrink-0" />
-              <span>{t("account.addAccount")}</span>
-            </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost mt-2 w-full justify-start"
+                disabled={accountBusy}
+                onClick={() => setShowAddAccount(true)}
+              >
+                <Plus size={14} className="shrink-0" />
+                <span>{t("account.addAccount")}</span>
+              </button>
 
-            <div className="divider my-2" />
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost justify-start text-error"
-              onClick={onLogout}
-            >
-              <LogOut size={14} className="shrink-0" />
-              <span>{t("header.signOut")}</span>
-            </button>
-          </div>
-        </details>
+              <div className="divider my-2" />
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost justify-start text-error"
+                onClick={onLogout}
+              >
+                <LogOut size={14} className="shrink-0" />
+                <span>{t("header.signOut")}</span>
+              </button>
+            </div>
+          </details>
+        </div>
       </div>
 
       {showAddAccount ? (

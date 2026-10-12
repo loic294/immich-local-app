@@ -33,6 +33,15 @@ title bar.
 - Cache library data locally and browse cached content while offline.
 - Queue supported changes to favorites, visibility, ratings, and descriptions
   while offline, then replay them when the server reconnects.
+- Choose **Settings → General → Delete behavior**: Archive (the default) or
+  Immich trash. This preference applies to every account and to edited versions;
+  originals in edit stacks remain protected. Archive restore returns photos to
+  the timeline; trash restore uses Immich's trash-restore endpoint. Delete and
+  restore actions also queue offline.
+- Open Deleted to browse the selected dataset from SQLite first, then refresh
+  just archived or trashed items. Offline or unsupported-API failures preserve
+  cached results and show a warning; no full-library sync or permanent
+  empty-trash action is triggered.
 - Run a full library sync when needed, or use quick and view-specific refreshes
   to check only for new assets or update the current album/month.
 - Save album assets locally and detect changes to saved files.

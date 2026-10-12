@@ -17,11 +17,11 @@ import {
   fetchAssetsByMonth,
   getCachedCalendarFullGridLayout,
   getCachedTimelineMonths,
-  updateAssetVisibility,
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 import { criteriaWithQuery, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
+import { deleteAssets } from "../api/deletion";
 
 interface CalendarPageProps {
   session: Session;
@@ -81,7 +81,7 @@ export function CalendarPage({ session, onNavigate, onLogout }: CalendarPageProp
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage="calendar" onNavigate={onNavigate} />
+      <Sidebar activePage="calendar" onNavigate={onNavigate} onNavigateRoot={() => {}} />
 
       <section className="flex min-h-0 min-w-0 h-screen flex-col overflow-hidden">
         <AppTopBar
@@ -270,7 +270,14 @@ function MonthView({ session, onNavigate, onLogout, year, month, onBack }: Month
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage="calendar" onNavigate={onNavigate} />
+      <Sidebar
+        activePage="calendar"
+        onNavigate={onNavigate}
+        onNavigateRoot={() => {
+          console.info("[navigation] returning to calendar collection", { year, month });
+          onBack();
+        }}
+      />
 
       <section className="flex min-h-0 min-w-0 h-screen flex-col overflow-hidden">
         <AppTopBar
@@ -297,10 +304,12 @@ function MonthView({ session, onNavigate, onLogout, year, month, onBack }: Month
           }}
           onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
           onArchiveSelected={async () => {
-            await Promise.all(
-              selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
-            );
-            await assetsQuery.refetch();
+            try {
+              await deleteAssets(selectedAssetIds);
+            } finally {
+              await assetsQuery.refetch();
+              setMonthRefreshNonce((nonce) => nonce + 1);
+            }
           }}
           onClearSelection={() => {
             setSelectionCommand({ type: "clear", nonce: Date.now() });

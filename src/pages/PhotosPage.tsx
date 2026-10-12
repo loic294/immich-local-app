@@ -13,7 +13,6 @@ import {
   getCachedAssetJumpTarget,
   getCachedTimelineLayout,
   getFullGridLayout,
-  updateAssetVisibility,
 } from "../api/tauri";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { toMemoryItem, type MemoryItem } from "../utils/memory";
@@ -25,10 +24,13 @@ import { FilterBar } from "../components/Filters/FilterBar";
 import { useRef } from "react";
 import { criteriaWithQuery, type AssetFilter, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
+import { useDeletedRefresh } from "../hooks/useDeletedRefresh";
+import { deleteAssets, restoreDeletedAssets } from "../api/deletion";
 
 interface PhotosPageProps {
   session: Session;
   onNavigate: (page: AppPage) => void;
+  onNavigateRoot?: () => void;
   onLogout: () => void;
   activePage?: AppPage;
   assetFilter?: AssetFilter;
@@ -41,6 +43,7 @@ interface PhotosPageProps {
 export function PhotosPage({
   session,
   onNavigate,
+  onNavigateRoot,
   onLogout,
   activePage = "photos",
   assetFilter = "all",
@@ -65,7 +68,9 @@ export function PhotosPage({
     assetIndex: number;
   } | null>(null);
   const { syncStatus } = useSyncStatus();
-  const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}:${archiveRefreshNonce}`;
+  const deletedRefresh = useDeletedRefresh(assetFilter);
+  const isDeletedView = assetFilter === "archived" || assetFilter === "trashed";
+  const refreshToken = `${syncStatus?.lastSyncCompletedAt ?? ""}:${syncStatus?.lastCheckedAt ?? ""}:${archiveRefreshNonce}:${deletedRefresh.nonce}`;
 
   const filters = useAssetFilters(
     initialPersonId ? `person:${initialPersonId}` : `photos:${assetFilter}`,
@@ -99,7 +104,7 @@ export function PhotosPage({
     filterPayload,
     sortPreference,
   );
-  const memoriesQuery = useMemories(true);
+  const memoriesQuery = useMemories(!isDeletedView);
 
   const assets = assetsWindow.assets;
 
@@ -199,7 +204,7 @@ export function PhotosPage({
         filterPayload,
         sortPreference,
       ),
-    [assetFilter, searchTerm, filterPayload, sortPreference],
+    [assetFilter, searchTerm, filterPayload, sortPreference, refreshToken],
   );
   const loadTimelineLayout = useCallback(
     (containerWidth: number) =>
@@ -210,12 +215,12 @@ export function PhotosPage({
         filterPayload,
         sortPreference,
       ),
-    [assetFilter, searchTerm, filterPayload, sortPreference],
+    [assetFilter, searchTerm, filterPayload, sortPreference, refreshToken],
   );
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage={activePage} onNavigate={onNavigate} />
+      <Sidebar activePage={activePage} onNavigate={onNavigate} onNavigateRoot={onNavigateRoot} />
 
       <section className="flex min-h-0 w-full flex-col">
         <AppTopBar
@@ -242,22 +247,27 @@ export function PhotosPage({
           }}
           onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
           onArchiveSelected={
-            assetFilter === "archived"
+            isDeletedView
               ? undefined
               : async () => {
-                  await Promise.all(
-                    selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
-                  );
-                  setArchiveRefreshNonce((current) => current + 1);
+                  try {
+                    await deleteAssets(selectedAssetIds);
+                  } finally {
+                    setArchiveRefreshNonce((current) => current + 1);
+                  }
                 }
           }
           onUnarchiveSelected={
-            assetFilter === "archived"
+            isDeletedView
               ? async () => {
-                  await Promise.all(
-                    selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "timeline")),
-                  );
-                  setArchiveRefreshNonce((current) => current + 1);
+                  try {
+                    await restoreDeletedAssets(
+                      selectedAssetIds,
+                      assetFilter === "trashed" ? "trash" : "archive",
+                    );
+                  } finally {
+                    setArchiveRefreshNonce((current) => current + 1);
+                  }
                 }
               : undefined
           }
@@ -334,6 +344,19 @@ export function PhotosPage({
             </div>
           ) : null}
 
+          {deletedRefresh.error && (
+            <div
+              role="status"
+              className="alert alert-warning alert-soft text-sm"
+              title={deletedRefresh.error}
+            >
+              {t(
+                deletedRefresh.error.includes("offline:")
+                  ? "settings.deletedOffline"
+                  : "settings.deletedRefreshFailed",
+              )}
+            </div>
+          )}
           {(assetsWindow.error || memoriesQuery.isError) && assets.length === 0 ? (
             <div
               role="alert"
@@ -349,7 +372,7 @@ export function PhotosPage({
           ) : (
             <PhotoGrid
               assets={assets}
-              hideArchivedAssets={assetFilter !== "archived"}
+              hideArchivedAssets={!isDeletedView}
               viewScope={filterScope}
               viewCriteria={fixTimeCriteria}
               onSelectedCountChange={setSelectedCount}

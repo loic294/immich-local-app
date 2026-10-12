@@ -56,9 +56,7 @@ export function FullscreenMetadataBar({
             >
               <Star
                 size={14}
-                className={
-                  isActive ? "fill-warning text-warning" : "text-white/70"
-                }
+                className={isActive ? "fill-warning text-warning" : "text-white/70"}
               />
             </button>
           );
@@ -69,11 +67,7 @@ export function FullscreenMetadataBar({
       <div className="join">
         <div
           className="tooltip"
-          data-tip={
-            asset.isFavorite
-              ? t("photoGrid.removeFavorite")
-              : t("photoGrid.addFavorite")
-          }
+          data-tip={asset.isFavorite ? t("photoGrid.removeFavorite") : t("photoGrid.addFavorite")}
         >
           <button
             type="button"
@@ -84,9 +78,7 @@ export function FullscreenMetadataBar({
           >
             <Heart
               size={14}
-              className={
-                asset.isFavorite ? "fill-error text-error" : "text-white/80"
-              }
+              className={asset.isFavorite ? "fill-error text-error" : "text-white/80"}
             />
           </button>
         </div>
@@ -94,7 +86,9 @@ export function FullscreenMetadataBar({
         <div
           className="tooltip"
           data-tip={
-            asset.isArchived ? t("photoGrid.unarchive") : t("photoGrid.archive")
+            asset.isArchived || asset.isTrashed
+              ? t("settings.restoreDeleted")
+              : t("settings.deleteBehaviorTitle")
           }
         >
           <button
@@ -104,7 +98,7 @@ export function FullscreenMetadataBar({
             disabled={isUpdatingArchive}
             aria-label={t("photoGrid.toggleArchiveAria")}
           >
-            {asset.isArchived ? (
+            {asset.isArchived || asset.isTrashed ? (
               <Trash size={14} className="text-info" />
             ) : (
               <Trash2 size={14} className="text-white/80" />

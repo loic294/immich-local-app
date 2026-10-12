@@ -6,13 +6,10 @@ import {
   Image,
   Images,
   Map,
-  Settings,
   UsersRound,
-  Upload,
   type LucideIcon,
 } from "lucide-react";
-import { requestMediaImport } from "../../api/media";
-import { useMediaLabels } from "../../i18n/media";
+import { useEffect } from "react";
 import { SyncStatusCard } from "./SyncStatusCard";
 import { RecentAlbumsSection } from "../Albums/RecentAlbumsSection";
 import { OfflineBanner } from "./OfflineBanner";
@@ -32,6 +29,8 @@ interface SidebarProps {
   activePage: AppPage;
   activeAlbumId?: string | null;
   onNavigate?: (page: AppPage) => void;
+  /** Reselecting the current menu space returns to its root, not a recent album. */
+  onNavigateRoot?: () => void;
 }
 
 export type AppPage =
@@ -66,8 +65,8 @@ type MenuItemDef = {
 
 /**
  * Ordered, shared definition of the toggleable navigation items. Keep the keys
- * in sync with the backend `default_menu_items()` list. `settings` is always
- * shown (it lives in the footer) and is intentionally not part of this list.
+ * in sync with the backend `default_menu_items()` list. Settings is always
+ * available in the header and is intentionally not part of this list.
  */
 export const MENU_ITEMS: MenuItemDef[] = [
   { key: "photos", labelKey: "nav.photos", icon: Image, group: "main" },
@@ -90,9 +89,13 @@ export const MENU_ITEMS: MenuItemDef[] = [
   { key: "deleted", labelKey: "nav.deleted", icon: Archive, group: "library" },
 ];
 
-export function Sidebar({ activePage, activeAlbumId = null, onNavigate }: SidebarProps) {
+export function Sidebar({
+  activePage,
+  activeAlbumId = null,
+  onNavigate,
+  onNavigateRoot,
+}: SidebarProps) {
   const { t } = useI18n();
-  const mediaLabels = useMediaLabels();
   const bt = useBrowsingI18n();
   const { isOnline, pendingCount } = useConnectionContext();
   const settingsQuery = useSettings();
@@ -119,10 +122,29 @@ export function Sidebar({ activePage, activeAlbumId = null, onNavigate }: Sideba
     onNavigate?.("albums");
   };
 
+  const navigateToPage = (page: AppPage) => {
+    if (page === activePage && onNavigateRoot) {
+      onNavigateRoot();
+      return;
+    }
+    onNavigate?.(page);
+  };
+
   const isPageActive = (page: AppPage) =>
     page === activePage && (page !== "albums" || !hasActiveRecentAlbum);
 
   const mac = isMacPlatform();
+
+  useEffect(() => {
+    // Keep header navigation on the page's existing route callback, even when
+    // this sidebar is hidden on smaller windows.
+    const openSettings = () => {
+      console.info("[navigation] opening settings from header");
+      onNavigate?.("settings");
+    };
+    window.addEventListener("immich:open-settings", openSettings);
+    return () => window.removeEventListener("immich:open-settings", openSettings);
+  }, [onNavigate]);
 
   return (
     <aside className="hidden h-screen min-w-0 overflow-y-auto border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
@@ -143,7 +165,7 @@ export function Sidebar({ activePage, activeAlbumId = null, onNavigate }: Sideba
                   isActive={isPageActive(key)}
                   leading={<Icon size={16} />}
                   label={key === "people" || key === "maps" ? bt(key) : t(labelKey)}
-                  onClick={() => onNavigate?.(key)}
+                  onClick={() => navigateToPage(key)}
                 />
               ))}
             </nav>
@@ -167,7 +189,7 @@ export function Sidebar({ activePage, activeAlbumId = null, onNavigate }: Sideba
                     isActive={isPageActive(key)}
                     leading={<Icon size={16} />}
                     label={key === "people" || key === "maps" ? bt(key) : t(labelKey)}
-                    onClick={() => onNavigate?.(key)}
+                    onClick={() => navigateToPage(key)}
                   />
                 ))}
               </nav>
@@ -176,19 +198,6 @@ export function Sidebar({ activePage, activeAlbumId = null, onNavigate }: Sideba
         </div>
 
         <div className="shrink-0 w-full space-y-6 pb-2">
-          <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
-            <SidebarButton
-              leading={<Upload size={16} />}
-              label={mediaLabels.import}
-              onClick={requestMediaImport}
-            />
-            <SidebarButton
-              isActive={isPageActive("settings")}
-              leading={<Settings size={16} />}
-              label={t("nav.settings")}
-              onClick={() => onNavigate?.("settings")}
-            />
-          </nav>
           <div className="px-2">
             {isOnline === false ? (
               <OfflineBanner pendingCount={pendingCount} />

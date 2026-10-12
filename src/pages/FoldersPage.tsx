@@ -17,11 +17,11 @@ import {
   fetchAlbums,
   getCachedFolderFullGridLayout,
   getFoldersBaseDirectory,
-  updateAssetVisibility,
 } from "../api/tauri";
 import type { Session } from "../hooks/useSession";
 import { criteriaWithQuery, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
+import { deleteAssets } from "../api/deletion";
 
 interface FoldersPageProps {
   session: Session;
@@ -177,7 +177,7 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
   const loadFolderFullLayout = useCallback(
     (containerWidth: number) =>
       getCachedFolderFullGridLayout(currentPath, containerWidth, filterPayload, sortPreference),
-    [currentPath, filterPayload, sortPreference, baseDirectoryNonce],
+    [currentPath, filterPayload, sortPreference, baseDirectoryNonce, assetsQuery.dataUpdatedAt],
   );
 
   useEffect(() => {
@@ -245,7 +245,18 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage="folders" onNavigate={onNavigate} />
+      <Sidebar
+        activePage="folders"
+        onNavigate={onNavigate}
+        onNavigateRoot={() => {
+          if (!baseDirectoryLoaded || currentPath === baseDirectory) return;
+          console.info("[navigation] returning to folders base directory", {
+            currentPath,
+            baseDirectory,
+          });
+          setCurrentPath(baseDirectory);
+        }}
+      />
 
       <section className="flex min-w-0 h-screen flex-col">
         <AppTopBar
@@ -272,10 +283,11 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
           }}
           onCreateShareLinkForSelected={async () => createShareLinkForAssets(selectedAssetIds)}
           onArchiveSelected={async () => {
-            await Promise.all(
-              selectedAssetIds.map((assetId) => updateAssetVisibility(assetId, "archive")),
-            );
-            await assetsQuery.refetch();
+            try {
+              await deleteAssets(selectedAssetIds);
+            } finally {
+              await assetsQuery.refetch();
+            }
           }}
           onClearSelection={() => {
             setSelectionCommand({ type: "clear", nonce: Date.now() });

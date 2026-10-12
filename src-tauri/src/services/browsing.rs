@@ -74,9 +74,14 @@ fn visible_assets(conn: &Connection, alias: &str) -> Result<String, String> {
             stack_column = true;
         }
     }
+    let trash_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='trashed_assets')",
+        [], |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
     Ok(format!(
-        "COALESCE({alias}.is_archived,0)=0 AND LOWER(COALESCE({alias}.visibility,'timeline')) NOT IN ('archive','hidden','locked'){}",
-        if stack_column { format!(" AND COALESCE({alias}.is_stack_secondary,0)=0") } else { String::new() }
+        "COALESCE({alias}.is_archived,0)=0 AND LOWER(COALESCE({alias}.visibility,'timeline')) NOT IN ('archive','hidden','locked'){}{}",
+        if stack_column { format!(" AND COALESCE({alias}.is_stack_secondary,0)=0") } else { String::new() },
+        if trash_table { format!(" AND NOT EXISTS(SELECT 1 FROM trashed_assets t WHERE t.asset_id={alias}.id AND t.account_id={alias}.account_id)") } else { String::new() }
     ))
 }
 
@@ -335,6 +340,7 @@ fn read_map_assets(
                         live_photo_video_id: None,
                         is_favorite: r.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0,
                         is_archived: r.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0,
+                        is_trashed: false,
                         visibility: r.get(9)?,
                         rating: r.get(10)?,
                         width: r.get(11)?,
@@ -427,6 +433,23 @@ mod tests {
         let assets = read_map_assets(&conn, &dateline, Some(&ids)).unwrap();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].id, "zero");
+    }
+    #[test]
+    fn cached_map_and_people_ignore_foreign_account_trash_markers() {
+        let conn = fixture();
+        conn.execute_batch(
+            "CREATE TABLE trashed_assets(asset_id TEXT,account_id TEXT,PRIMARY KEY(asset_id,account_id));
+             INSERT INTO trashed_assets(asset_id,account_id)
+             VALUES('zero','other'),('dateline','account');",
+        ).unwrap();
+        let assets = read_map_assets(&conn, &world(), None).unwrap();
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].id, "zero");
+        assert!(!assets[0].is_trashed);
+        let markers = read_markers(&conn).unwrap();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].id, "zero");
+        assert_eq!(read_people(&conn).unwrap()[0].asset_count, 1);
     }
     #[test]
     fn assignment_includes_named_people_without_visible_assets_but_never_hidden() {
