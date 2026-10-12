@@ -186,12 +186,15 @@ export function MemoryFullscreenViewer({
           <X size={16} />
         </button>
 
-        <p className="m-0 text-sm">{currentMemory.label}</p>
+        <p data-tauri-drag-region className="m-0 text-sm select-none">
+          {currentMemory.label}
+        </p>
 
-        <div className="flex items-center gap-1.5" aria-hidden="true">
+        <div data-tauri-drag-region className="flex items-center gap-1.5" aria-hidden="true">
           {currentMemory.assets.map((asset) => (
             <span
               key={asset.id}
+              data-tauri-drag-region
               className={`h-0.5 min-w-4 flex-1 rounded-full ${
                 asset.id === currentAsset.id ? "bg-white" : "bg-white/30"
               }`}
@@ -199,7 +202,7 @@ export function MemoryFullscreenViewer({
           ))}
         </div>
 
-        <p className="m-0 text-sm">
+        <p data-tauri-drag-region className="m-0 text-sm select-none">
           {assetIndex + 1}/{currentMemory.assets.length}
         </p>
       </header>

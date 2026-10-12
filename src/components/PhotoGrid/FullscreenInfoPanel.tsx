@@ -189,17 +189,17 @@ export function FullscreenInfoPanel({
         />
 
         {latitude !== null && longitude !== null ? (
-          <div className="relative mt-2 pt-12">
+          <div className="relative isolate mt-2">
             <button
               type="button"
-              className="btn btn-sm btn-outline absolute top-2 left-2 max-w-[calc(100%-1rem)] whitespace-normal"
+              className="btn btn-sm btn-outline absolute top-2 left-2 z-10 max-w-[calc(100%-1rem)] bg-zinc-950/80 whitespace-normal"
               onClick={() => openAssetOnMap({ id: asset.id, latitude, longitude })}
             >
               <MapPin size={14} /> {bt("openMap")}
             </button>
             <div>
               {isOnline === false ? (
-                <p role="status" className="mt-2 text-white/65">
+                <p role="status" className="px-2 pt-12 pb-2 text-white/65">
                   {bt("mapOffline")}
                 </p>
               ) : mapTilerApiKey ? (
@@ -212,7 +212,7 @@ export function FullscreenInfoPanel({
                 <iframe
                   title={t("photoGrid.mapTitle")}
                   src={mapSrc}
-                  className="h-90 w-full overflow-hidden rounded-lg border border-white/10 bg-zinc-950"
+                  className="block h-90 w-full overflow-hidden rounded-lg border border-white/10 bg-zinc-950"
                   loading="lazy"
                   referrerPolicy="no-referrer-when-downgrade"
                 />

@@ -233,10 +233,9 @@ export function PhotoGridFullscreenOverlay({
       aria-modal="true"
       aria-label={activeAsset.originalFileName}
     >
-      {mac && (
-        <div aria-hidden="true" data-tauri-drag-region className="absolute inset-x-0 top-0 h-16" />
-      )}
+      <div aria-hidden="true" data-tauri-drag-region className="absolute inset-x-0 top-0 h-16" />
       <div
+        data-tauri-drag-region
         className={`absolute inset-x-4 top-0 z-40 flex min-h-16 flex-wrap items-center gap-2 py-3 ${mac ? "pl-20" : ""}`}
       >
         <button
@@ -262,7 +261,8 @@ export function PhotoGridFullscreenOverlay({
         </div>
 
         <div
-          className="pointer-events-auto min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm font-medium text-white/95 select-text"
+          data-tauri-drag-region
+          className="pointer-events-auto min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm font-medium text-white/95 select-none"
           title={activeAsset.originalFileName}
           onClick={(event) => event.stopPropagation()}
         >
@@ -271,6 +271,7 @@ export function PhotoGridFullscreenOverlay({
 
         <div
           ref={toolbarRef}
+          data-tauri-drag-region
           className="pointer-events-auto ml-auto flex max-w-full flex-wrap items-center justify-end gap-1 sm:gap-2"
         >
           {!isVideoAsset(activeAsset) ? (

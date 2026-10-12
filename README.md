@@ -90,8 +90,10 @@ area. The map reads coordinates from SQLite and refreshes at most 100 photos in
 the current view, never the whole library. Without network access, the background
 map is unavailable but cached photo markers and photos remain usable. From the
 fullscreen info panel, choose the outline **Open in map** button at the top-left
-above the padded map to jump to that photo's location.
-Click the filename to reveal or hide its cached file path.
+overlaid on the rendered map, inset from its edges, to jump to that photo's location.
+In the info panel, click the filename to reveal or hide its cached file path.
+Photo and memory fullscreen headers remain draggable on macOS and Windows;
+their toolbar buttons retain normal click behavior.
 
 **Search** accepts text and metadata terms such as `camera:sony`, `person:Alex`,
 `after:2025-01-01`, `type:video`, and `-tag:private`. Use the search options
