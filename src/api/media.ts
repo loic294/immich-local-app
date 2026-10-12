@@ -45,7 +45,7 @@ export interface EditImportState {
 }
 export interface MediaEditState {
   assetIds: string[];
-  phase: "idle" | "launching" | "editing" | "finishing";
+  phase: "idle" | "launching" | "editing";
   imports: Record<string, EditImportState>;
 }
 let editState: MediaEditState = { assetIds: [], phase: "idle", imports: {} };
@@ -89,9 +89,19 @@ export const getMediaUploads = () =>
     ),
   });
 export const flushMediaUploads = () => invoke<number>("flush_media_uploads");
-export const retryMediaUploads = () => invoke<void>("retry_media_uploads");
+export const retryMediaUploads = async () => {
+  await invoke<void>("retry_media_uploads");
+  for (const [id, value] of Object.entries(editState.imports)) {
+    if (value.state === "failed")
+      updateEditImport(id, {
+        ...value,
+        state: value.versionId ? "loading" : "queued",
+        error: null,
+      });
+  }
+};
 export const beginMediaEdit = (assetIds: string[]) =>
-  invoke<void>("begin_media_edit", { assetIds });
+  invoke<string[]>("begin_media_edit", { assetIds });
 export const getChangedEditorJobs = (preparePreviews = false) =>
   invoke<EditorJob[]>("get_changed_editor_jobs", { preparePreviews });
 /** Partial batch exports return queued jobs even if a later edit fails. */
@@ -120,11 +130,6 @@ export function requestMediaEdit(assetIds: string[], albumId?: string): void {
     return;
   updateMediaEditState({ assetIds, phase: "launching" });
   window.dispatchEvent(new CustomEvent("media:edit-request", { detail: { assetIds, albumId } }));
-}
-export function requestFinishMediaEdit(): void {
-  if (editState.phase !== "editing") return;
-  updateMediaEditState({ phase: "finishing" });
-  window.dispatchEvent(new Event("media:finish-edit"));
 }
 export function requestMediaImport(): void {
   window.dispatchEvent(new Event("media:import-request"));

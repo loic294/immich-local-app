@@ -127,7 +127,7 @@ export function Header({
   return (
     <WindowHeader>
       <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
-        <div className="order-2 flex w-full min-w-0 flex-wrap items-center gap-2 sm:gap-4 lg:order-1 lg:w-auto lg:flex-1 [&>div:first-child]:min-w-0 [&>div:first-child]:flex-1">
+        <div className="order-2 flex min-w-0 flex-wrap items-center gap-4 lg:order-1">
           <MetadataSearchBar
             value={searchInput}
             onChange={onSearchChange}
@@ -155,21 +155,21 @@ export function Header({
         <div className="order-1 ml-auto flex shrink-0 items-center gap-2 lg:order-2">
           <button
             type="button"
-            className="btn btn-sm btn-ghost btn-square"
-            aria-label={t("nav.settings")}
-            title={t("nav.settings")}
-            onClick={onOpenSettings}
-          >
-            <Settings size={16} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
             className="btn btn-sm btn-ghost"
             aria-label={mediaLabels.import}
             onClick={requestMediaImport}
           >
             <Upload size={16} className="shrink-0" aria-hidden="true" />
             <span>{mediaLabels.import}</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost btn-square"
+            aria-label={t("nav.settings")}
+            title={t("nav.settings")}
+            onClick={onOpenSettings}
+          >
+            <Settings size={16} aria-hidden="true" />
           </button>
           <details className="dropdown dropdown-end">
             <summary

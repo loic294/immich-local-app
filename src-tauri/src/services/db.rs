@@ -3266,7 +3266,8 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
-    pub fn upsert_people(
+    /// Replace an account's complete, successfully fetched people snapshot.
+    pub fn replace_people(
         &self,
         account_id: &str,
         people: &[crate::services::immich_client::PersonSummary],
@@ -3274,8 +3275,12 @@ impl Database {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|err| err.to_string())?;
         let now = chrono::Local::now().to_rfc3339();
+        tx.execute("CREATE TEMP TABLE current_people(id TEXT PRIMARY KEY)", [])
+            .map_err(|err| err.to_string())?;
 
         for person in people {
+            tx.execute("INSERT OR IGNORE INTO current_people(id) VALUES(?1)", [&person.id])
+                .map_err(|err| err.to_string())?;
             tx.execute(
                 "
                 INSERT INTO people (id, account_id, name, is_hidden, thumbnail_path, updated_at)
@@ -3299,7 +3304,32 @@ impl Database {
             .map_err(|err| err.to_string())?;
         }
 
+        let removed = tx.execute(
+            "DELETE FROM people WHERE account_id=?1
+             AND id NOT IN (SELECT id FROM current_people)",
+            [account_id],
+        ).map_err(|err| err.to_string())?;
+        tx.execute(
+            "UPDATE assets SET people=(
+               SELECT GROUP_CONCAT(name, ', ') FROM (
+                 SELECT DISTINCT p.name FROM people p
+                 JOIN asset_people ap ON ap.person_id=p.id AND ap.account_id=p.account_id
+                 WHERE ap.asset_id=assets.id AND ap.account_id=?1 AND TRIM(COALESCE(p.name,''))<>''
+                 ORDER BY p.name COLLATE NOCASE
+               )
+             ) WHERE account_id=?1 AND EXISTS(
+               SELECT 1 FROM asset_people ap WHERE ap.asset_id=assets.id AND ap.account_id=?1
+               AND ap.person_id NOT IN (SELECT id FROM current_people)
+             )",
+            [account_id],
+        ).map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM asset_people WHERE account_id=?1
+             AND person_id NOT IN (SELECT id FROM current_people)",
+            [account_id],
+        ).map_err(|err| err.to_string())?;
         tx.commit().map_err(|err| err.to_string())
+            .map(|()| log::info!("[browsing.people] snapshot replaced account={} count={} removed={}", account_id, people.len(), removed))
     }
 
     pub fn replace_asset_people(
@@ -4482,6 +4512,46 @@ mod account_local_navigation_tests {
 
     fn cleanup_db(path: &PathBuf) {
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn complete_people_snapshot_removes_stale_people_and_only_their_account_links() {
+        use crate::services::immich_client::PersonSummary;
+        let path = test_db_path("people-snapshot");
+        let db = Database::test_database(path.clone()).unwrap();
+        let person = |id: &str, name: &str| PersonSummary {
+            id: id.into(),
+            name: Some(name.into()),
+            is_hidden: false,
+            thumbnail_path: None,
+        };
+        db.replace_people("account", &[person("stale", "Old"), person("kept", "Kept")]).unwrap();
+        db.replace_people("other", &[person("foreign", "Foreign")]).unwrap();
+        let conn = db.open().unwrap();
+        conn.execute_batch(
+            "INSERT INTO assets(id,account_id,original_file_name,updated_at,people)
+             VALUES('photo','account','photo.jpg',0,'Old, Kept'),
+                   ('other-photo','other','other.jpg',0,'Foreign');
+             INSERT INTO asset_people(asset_id,person_id,account_id)
+             VALUES('photo','stale','account'),('photo','kept','account'),
+                   ('other-photo','foreign','other');"
+        ).unwrap();
+        db.replace_people("account", &[person("kept", "Kept")]).unwrap();
+        let ids: Vec<String> = conn.prepare("SELECT id FROM people ORDER BY id").unwrap()
+            .query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(ids, ["foreign", "kept"]);
+        let names: String = conn.query_row("SELECT people FROM assets WHERE id='photo'", [], |row| row.get(0)).unwrap();
+        assert_eq!(names, "Kept");
+        let links: i64 = conn.query_row("SELECT COUNT(*) FROM asset_people", [], |row| row.get(0)).unwrap();
+        assert_eq!(links, 2);
+        db.replace_people("account", &[]).unwrap();
+        let links: i64 = conn.query_row("SELECT COUNT(*) FROM asset_people", [], |row| row.get(0)).unwrap();
+        assert_eq!(links, 1);
+        assert!(db.get_person_account_id("kept").unwrap().is_none());
+        assert_eq!(db.get_person_account_id("foreign").unwrap().as_deref(), Some("other"));
+        drop(conn);
+        drop(db);
+        cleanup_db(&path);
     }
 
     #[test]

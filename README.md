@@ -27,7 +27,8 @@ title bar.
   favorites, and deleted assets.
 - Filter and sort the library by available details such as people, camera,
   media type, rating, favorite status, and account.
-- View photos and videos with metadata, location maps, and memories.
+- View photos and videos with metadata, location maps, and all memories returned
+  by the server, without applying a date filter.
 - Manage multiple Immich accounts and sign in with an API key, password, or
   OAuth.
 - Cache library data locally and browse cached content while offline.
@@ -76,6 +77,8 @@ require connectivity; these controls are disabled offline with an explanation,
 while cached browsing and name search remain available. People mutations check
 the server API version, support Immich v2/v3, and update the local cache only
 after server confirmation. Merges cannot be undone from this app.
+Successful complete people refreshes remove stale face groups from the local
+cache. Merge rechecks that both people still exist before sending the mutation.
 Run the People sorting/filtering regression tests with
 `npm test` after installing project dependencies.
 The test loads the utility using the existing TypeScript compiler in memory,
@@ -86,7 +89,8 @@ or cluster to browse its photos on the right, or pan the map to browse the visib
 area. The map reads coordinates from SQLite and refreshes at most 100 photos in
 the current view, never the whole library. Without network access, the background
 map is unavailable but cached photo markers and photos remain usable. From the
-fullscreen info panel, choose **Open in map** to jump to that photo's location.
+fullscreen info panel, choose the outline **Open in map** button at the top-left
+above the padded map to jump to that photo's location.
 Click the filename to reveal or hide its cached file path.
 
 **Search** accepts text and metadata terms such as `camera:sony`, `person:Alex`,
@@ -100,7 +104,7 @@ Modify time and Delete are in the selection toolbar's three-dot menu; Delete
 still requires confirmation. Timeline month/year markers remain available for
 date navigation without a separate Go to date dialog.
 
-**Import** in the sidebar above Settings scans a chosen folder or suggests newly connected removable media.
+**Import**, to the left of Settings in the header, scans a chosen folder or suggests newly connected removable media.
 Choose an album with the shared thumbnail picker and select photos/videos in the
 virtualized grid; previously imported checksums are labelled. Click or Cmd/Ctrl-click
 toggles a tile; Shift-click selects a range. The footer explains the album requirement
@@ -119,7 +123,14 @@ Opening the configured editor or Explorer remains an intentional visible action.
 
 **Editing** opens the original image in RapidRAW (or the configured editor),
 downloading it first if needed. Editing is available per photo; the album-wide
-retouch action has been removed. Sidecar changes trigger an export suggestion. The default
+retouch action has been removed. The Edit button stays busy until a watched
+sidecar changes; no Finish editing action is required. Sidecar changes trigger
+an export suggestion. During import, a bottom pill with a small spinner appears
+on the image and its timeline thumbnail. It clears after the stack is confirmed
+and the new image has loaded, even if fullscreen was closed. Temporary thumbnail
+unavailability is retried for up to one minute. If the image still cannot load,
+the pill opens the upload queue for a retry without uploading a second copy.
+The default
 CLI export produces a quality-100 JPEG with metadata, retained beside the
 original as `<name>-edited-YYYYMMDD.jpg`, then queues an upload. The newest
 edit becomes the stack primary in Immich and local browsing, including the

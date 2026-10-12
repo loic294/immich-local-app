@@ -100,11 +100,26 @@ export function toPlayableSrc(value: string): string {
   return value;
 }
 
-export function preloadImage(src: string): Promise<void> {
+export function preloadImage(src: string, timeoutMs = 30_000): Promise<void> {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error("Failed to preload image"));
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+    };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Image loading timed out"));
+    }, timeoutMs);
+    image.onload = () => {
+      cleanup();
+      resolve();
+    };
+    image.onerror = () => {
+      cleanup();
+      reject(new Error("Failed to preload image"));
+    };
     image.src = src;
   });
 }

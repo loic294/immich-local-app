@@ -45,7 +45,7 @@ export function MetadataSearchBar({
   };
 
   return (
-    <div ref={containerRef} className="relative w-full min-w-[16rem] sm:min-w-[20rem] lg:min-w-md">
+    <div ref={containerRef} className="relative w-64 shrink-0 sm:w-80 lg:w-md">
       <label
         className="input input-bordered flex w-full items-center gap-2 rounded-full"
         htmlFor="asset-search"

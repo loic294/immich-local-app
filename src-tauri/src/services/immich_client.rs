@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use chrono::Local;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -997,14 +996,12 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        let request_date = Local::now().format("%Y-%m-%d").to_string();
         let url = format!("{}/api/memories", session.server_url);
 
         let response = self
             .client
             .get(url)
             .headers(headers)
-            .query(&[("for", request_date.as_str())])
             .send()
             .await
             .map_err(|err| err.to_string())?;
@@ -1862,8 +1859,7 @@ impl ImmichClient {
             let people_items = value
                 .get("people")
                 .and_then(Value::as_array)
-                .map(|items| items.as_slice())
-                .unwrap_or(&[]);
+                .ok_or_else(|| "Invalid Immich people response: expected people array".to_string())?;
 
             let mut parsed_page: Vec<PersonSummary> = Vec::new();
             for person in people_items {
@@ -1898,7 +1894,10 @@ impl ImmichClient {
                 .and_then(Value::as_bool)
                 .unwrap_or(parsed_count >= page_size as usize);
 
-            if !has_next || parsed_count == 0 {
+            if has_next && parsed_count == 0 {
+                return Err("Incomplete Immich people response: empty page with more pages remaining".into());
+            }
+            if !has_next {
                 break;
             }
 
@@ -3701,20 +3700,13 @@ mod memory_api_tests {
     }
 
     #[tokio::test]
-    async fn memories_request_uses_local_iso_date_and_preserves_response_shapes() {
+    async fn memories_request_is_unfiltered_and_preserves_response_shapes() {
         for body in [MEMORIES.to_string(), format!(r#"{{"items":{MEMORIES}}}"#)] {
             let (client, request) = fixture(200, body).await;
-            let before = Local::now().format("%Y-%m-%d").to_string();
             let memories = client.get_memories().await.unwrap();
-            let after = Local::now().format("%Y-%m-%d").to_string();
             let request = request.await.unwrap();
             let request_line = request.lines().next().unwrap();
-            // Either date is valid if the request crosses local midnight.
-            assert!(
-                request_line == format!("GET /api/memories?for={before} HTTP/1.1")
-                    || request_line == format!("GET /api/memories?for={after} HTTP/1.1"),
-                "unexpected memory request: {request_line}"
-            );
+            assert_eq!(request_line, "GET /api/memories HTTP/1.1");
             assert!(request
                 .to_ascii_lowercase()
                 .contains("x-api-key: memory-fixture\r\n"));
@@ -3742,6 +3734,18 @@ mod memory_api_tests {
             ImmichClient::new().get_memories().await.unwrap_err(),
             "not authenticated"
         );
+    }
+
+    #[tokio::test]
+    async fn people_refresh_rejects_invalid_or_incomplete_snapshots() {
+        for body in [r#"{}"#, r#"{"people":null}"#, r#"{"people":[],"hasNextPage":true}"#] {
+            let (client, request) = fixture(200, body.into()).await;
+            assert!(client.get_all_people().await.is_err());
+            request.await.unwrap();
+        }
+        let (client, request) = fixture(200, r#"{"people":[],"hasNextPage":false}"#.into()).await;
+        assert!(client.get_all_people().await.unwrap().is_empty());
+        request.await.unwrap();
     }
 
     #[test]
@@ -3861,6 +3865,7 @@ mod people_response_tests {
             ((3, 2, 1), true),
             ((3, 2, 2), true),
             ((3, 3, 0), true),
+            ((3, 3, 1), true),
         ] {
             let response = if bulk {
                 r#"[{"id":"target","success":true},{"id":"source","success":true}]"#

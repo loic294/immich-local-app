@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { changePerson } from "../../api/browsing";
+import { changePerson, refreshPeople } from "../../api/browsing";
 import { useConnectionContext } from "../../hooks/connectionContext";
 import { useNamedPeople } from "../../hooks/usePeople";
 import { useBrowsingI18n } from "../../i18n/browsing";
@@ -44,7 +44,17 @@ export function AssignPersonDialog({ person, onClose, onAssigned }: AssignPerson
       await queryClient.invalidateQueries({ queryKey: ["people-in-scope"] });
       onAssigned();
     },
-    onError: (error) => console.warn("[browsing.people] assignment failed", error),
+    onError: async (error) => {
+      console.warn("[browsing.people] assignment failed", error);
+      if (String(error).includes("offline:")) return;
+      try {
+        await refreshPeople();
+        await queryClient.invalidateQueries({ queryKey: ["browsing-people"] });
+        await queryClient.invalidateQueries({ queryKey: ["browsing-named-people"] });
+      } catch (refreshError) {
+        console.warn("[browsing.people] refresh after rejected assignment failed", refreshError);
+      }
+    },
   });
   useEffect(() => {
     dialog.current?.showModal();

@@ -12,6 +12,8 @@ pub async fn fetch_memories(
 
     let mut all_memories: Vec<MemorySummary> = Vec::new();
     let mut any_online = false;
+    let mut failures = Vec::new();
+    let mut successful_accounts = 0;
 
     for (account_id, client) in accounts {
         // Local-first: skip accounts whose server is currently unreachable so a
@@ -37,6 +39,7 @@ pub async fn fetch_memories(
 
         match client.get_memories().await {
             Ok(memories) => {
+                successful_accounts += 1;
                 log::info!(
                     "[memories.fetch_memories] account {} returned {} memories",
                     account_id,
@@ -54,12 +57,16 @@ pub async fn fetch_memories(
                     "[memories.fetch_memories] fetch failed for account {}: {}",
                     account_id, err
                 );
+                failures.push(format!("account {account_id}: {err}"));
             }
         }
     }
 
     if !any_online {
         return Err("offline: server unreachable".to_string());
+    }
+    if successful_accounts == 0 {
+        return Err(format!("Memory fetch failed: {}", failures.join("; ")));
     }
 
     // Newest memories first across all accounts.

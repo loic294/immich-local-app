@@ -282,7 +282,7 @@ async fn sync_all_assets_background(
         } else {
             match immich.get_all_people().await {
                 Ok(people) => {
-                    if let Err(err) = db.upsert_people(account_id, &people) {
+                    if let Err(err) = db.replace_people(account_id, &people) {
                         log::warn!(
                             "[sync] failed to cache people for account {}: {}",
                             account_id,
@@ -1164,7 +1164,9 @@ async fn quick_sync_one_account(
     let people_started_at = Instant::now();
     if let Ok(people) = immich.get_all_people().await {
         let people_count = people.len();
-        let _ = db.upsert_people(account_id, &people);
+        if let Err(error) = db.replace_people(account_id, &people) {
+            log::warn!("[browsing.people] quick sync cache refresh failed: {error}");
+        }
         log::warn!(
             "[sync.check_for_new_assets] account {} refreshed people count={} duration_ms={}",
             account_id,

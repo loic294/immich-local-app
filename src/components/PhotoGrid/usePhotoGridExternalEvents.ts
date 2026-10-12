@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getEditVersions } from "../../api/media";
+import { getEditVersions, getMediaEditState } from "../../api/media";
 import { ASSETS_TIME_SHIFTED_EVENT } from "../../api/time";
 import type { AssetSummary } from "../../types";
 
@@ -52,7 +52,6 @@ export function usePhotoGridExternalEvents(
     let request = 0;
     const replaceVersion = (detail: OpenVersionDetail, asset: AssetSummary) => {
       const current = latest.current;
-      if (current.activeIndex === null) return;
       const originalId = detail.original?.id ?? asset.stackOriginalId ?? asset.id;
       const index = current.displayAssets.findIndex(
         (slot, slotIndex) =>
@@ -74,7 +73,7 @@ export function usePhotoGridExternalEvents(
         ...previous,
         [slotId]: { ...asset, stackOriginalId: originalId },
       }));
-      current.openSlot(index);
+      if (current.activeIndex === index) current.openSlot(index);
     };
     const onOpenVersion = (event: Event) => {
       const detail = (event as CustomEvent<OpenVersionDetail>).detail;
@@ -155,6 +154,10 @@ export function usePhotoGridExternalEvents(
       (asset) => asset.id !== original.id && !previous.ids.has(asset.id),
     );
     if (!newEdit) return;
+    if (getMediaEditState().imports[originalId]) {
+      console.info(`[PhotoGrid.versions] waiting for imported image original=${originalId}`);
+      return;
+    }
     console.info(`[PhotoGrid.versions] new edit asset=${newEdit.id} original=${original.id}`);
     window.dispatchEvent(
       new CustomEvent(OPEN_VERSION_EVENT, {

@@ -309,6 +309,11 @@ export function PhotosPage({
           )}
           {activePage === "photos" && (
             <div data-test="memories-strip" className="shrink-0">
+              {memoriesQuery.isError && (
+                <div role="alert" className="alert alert-warning alert-soft mb-2 text-sm">
+                  <span>{String(memoriesQuery.error)}</span>
+                </div>
+              )}
               <MemoriesStrip
                 memories={memoryItems}
                 activeMemoryId={activeMemoryId}

@@ -719,7 +719,7 @@ fn edit_export_lock() -> &'static tokio::sync::Mutex<()> {
 pub async fn begin_media_edit(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let _guard = edit_export_lock().lock().await;
     if asset_ids.is_empty() {
         return Err("No images selected".into());
@@ -808,7 +808,7 @@ pub async fn begin_media_edit(
         }
     });
     log::info!("[media:editor] GUI launched original_count={count}");
-    Ok(())
+    Ok(roots.into_iter().collect())
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { getAssetThumbnail } from "../../api/tauri";
 import { MemoryItem } from "../../utils/memory";
 import { formatMemoryDate } from "../../utils/date";
+import { isMacPlatform } from "../../utils/platform";
 
 interface MemoryFullscreenViewerProps {
   memories: MemoryItem[];
@@ -37,10 +38,7 @@ export function MemoryFullscreenViewer({
     let cancelled = false;
     async function load() {
       try {
-        const value = await getAssetThumbnail(
-          currentAsset.id,
-          currentMemory?.accountId,
-        );
+        const value = await getAssetThumbnail(currentAsset.id, currentMemory?.accountId);
         if (!cancelled) {
           setActiveSrc(value);
         }
@@ -73,10 +71,7 @@ export function MemoryFullscreenViewer({
     let cancelled = false;
     async function load() {
       try {
-        const value = await getAssetThumbnail(
-          cover.id,
-          previousMemory.accountId,
-        );
+        const value = await getAssetThumbnail(cover.id, previousMemory.accountId);
         if (!cancelled) {
           setPreviousSrc(value);
         }
@@ -178,7 +173,10 @@ export function MemoryFullscreenViewer({
       role="dialog"
       aria-modal="true"
     >
-      <header className="grid h-14 grid-cols-[auto_auto_minmax(120px,1fr)_auto] items-center gap-3 border-b border-white/10 px-3">
+      <header
+        data-tauri-drag-region
+        className={`grid h-16 grid-cols-[auto_auto_minmax(120px,1fr)_auto] items-center gap-3 border-b border-white/10 px-3 ${isMacPlatform() ? "pl-24" : ""}`}
+      >
         <button
           type="button"
           className="btn btn-ghost btn-xs text-white"
@@ -212,9 +210,7 @@ export function MemoryFullscreenViewer({
             <button
               type="button"
               className="relative h-[min(50vh,360px)] w-full overflow-hidden rounded-xl bg-black opacity-70 transition hover:opacity-95"
-              onClick={() =>
-                onChange({ memoryIndex: memoryIndex - 1, assetIndex: 0 })
-              }
+              onClick={() => onChange({ memoryIndex: memoryIndex - 1, assetIndex: 0 })}
             >
               {previousSrc ? (
                 <img
@@ -231,12 +227,8 @@ export function MemoryFullscreenViewer({
                 <ChevronLeft size={20} />
               </span>
               <div className="absolute bottom-2 right-2 text-right text-white drop-shadow">
-                <p className="m-0 text-[10px] tracking-wide text-white/80">
-                  PREVIOUS
-                </p>
-                <p className="m-0 text-lg font-semibold">
-                  {previousMemory.label}
-                </p>
+                <p className="m-0 text-[10px] tracking-wide text-white/80">PREVIOUS</p>
+                <p className="m-0 text-lg font-semibold">{previousMemory.label}</p>
               </div>
             </button>
           ) : null}
@@ -244,9 +236,7 @@ export function MemoryFullscreenViewer({
 
         <article className="max-h-[calc(100vh-110px)] overflow-hidden rounded-xl border border-white/15 bg-black">
           <div className="space-y-0.5 bg-black px-3 py-2">
-            <p className="m-0 text-xs">
-              {formatMemoryDate(currentAsset.fileCreatedAt)}
-            </p>
+            <p className="m-0 text-xs">{formatMemoryDate(currentAsset.fileCreatedAt)}</p>
             <p className="m-0 text-xs">{currentAsset.originalFileName}</p>
           </div>
 
@@ -268,9 +258,7 @@ export function MemoryFullscreenViewer({
             <button
               type="button"
               className="relative h-[min(50vh,360px)] w-full overflow-hidden rounded-xl bg-black opacity-70 transition hover:opacity-95"
-              onClick={() =>
-                onChange({ memoryIndex: memoryIndex + 1, assetIndex: 0 })
-              }
+              onClick={() => onChange({ memoryIndex: memoryIndex + 1, assetIndex: 0 })}
             >
               {upNextSrc ? (
                 <img
@@ -287,9 +275,7 @@ export function MemoryFullscreenViewer({
                 <ChevronRight size={20} />
               </span>
               <div className="absolute bottom-2 left-2 text-left text-white drop-shadow">
-                <p className="m-0 text-[10px] tracking-wide text-white/80">
-                  UP NEXT
-                </p>
+                <p className="m-0 text-[10px] tracking-wide text-white/80">UP NEXT</p>
                 <p className="m-0 text-lg font-semibold">{nextMemory.label}</p>
               </div>
             </button>

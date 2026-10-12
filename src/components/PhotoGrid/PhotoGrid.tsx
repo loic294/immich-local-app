@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AssetThumbnail } from "./AssetThumbnail";
+import { EditImportPill } from "../Media/EditImportPill";
 import { PhotoGridFullscreenOverlay } from "./PhotoGridFullscreenOverlay";
 import { VerticalTimeline } from "./VerticalTimeline";
 import type {
@@ -1639,6 +1640,7 @@ export function PhotoGrid({
                           suppressFullThumbnail={isTimelineScrubbing}
                           jumpMetrics={jumpMetricsRef.current}
                         />
+                        <EditImportPill originalId={asset.stackOriginalId ?? asset.id} />
                       </article>
                     );
                   })}

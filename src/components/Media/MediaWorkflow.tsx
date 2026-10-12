@@ -23,6 +23,8 @@ import { useConnectionContext } from "../../hooks/connectionContext";
 import { useMediaLabels } from "../../i18n/media";
 import { useSessionReplay } from "../../hooks/useSessionReplay";
 import { ImportDialog } from "./ImportDialog";
+import { getAssetThumbnail } from "../../api/tauri";
+import { preloadImage } from "../PhotoGrid/photoGridUtils";
 
 interface MediaWorkflowProps {
   enabled: boolean;
@@ -47,6 +49,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   const flushing = useRef(false);
   const previousUploads = useRef<UploadJob[]>([]);
   const openingVersions = useRef(new Set<string>());
+  const imageWaitStarted = useRef(new Map<string, number>());
   const importingEdits = useRef(false);
   const launchedSession = useRef(false);
   const [editPhase, setEditPhase] = useState(getMediaEditState().phase);
@@ -59,13 +62,24 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
         previousUploads.current.some((job) => !remaining.has(job.id)) ||
         jobs.some((job) => job.state === "complete" && previousStates.get(job.id) !== "complete");
       previousUploads.current = jobs;
-      setUploads(jobs.filter((job) => job.state !== "complete"));
+      setUploads(
+        jobs.flatMap((job) => {
+          if (job.state !== "complete") return [job];
+          const importing = job.originalAssetId
+            ? getMediaEditState().imports[job.originalAssetId]
+            : undefined;
+          return importing?.state === "failed"
+            ? [{ ...job, state: "failed" as const, error: importing.error ?? null }]
+            : [];
+        }),
+      );
       for (const job of jobs) {
         if (!job.originalAssetId) continue;
         const id = job.originalAssetId;
         const current = getMediaEditState().imports[id];
         if (!current && job.state === "complete") continue;
         if (current?.uploadJobId && current.uploadJobId !== job.id) continue;
+        if (current?.state === "failed" && job.state === "complete") continue;
         updateEditImport(id, {
           ...current,
           previewSrc: current?.previewSrc ?? editPreviewSrc(job.localPath),
@@ -80,31 +94,53 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
                   : "importing",
           error: job.error,
         });
-        if (
-          job.state !== "complete" ||
-          !job.serverAssetId ||
-          current?.versionId === job.serverAssetId ||
-          openingVersions.current.has(job.id)
-        )
+        if (job.state !== "complete" || !job.serverAssetId || openingVersions.current.has(job.id))
           continue;
         openingVersions.current.add(job.id);
+        const waitStarted = imageWaitStarted.current.get(job.id) ?? Date.now();
+        imageWaitStarted.current.set(job.id, waitStarted);
         void getEditVersions(id)
-          .then((versions) => {
+          .then(async (versions) => {
             const version = versions.find((asset) => asset.id === job.serverAssetId);
             if (!version) throw new Error("Imported edit is not yet cached");
             const latest = getMediaEditState().imports[id];
             if (!latest || latest.uploadJobId !== job.id) return;
             updateEditImport(id, { ...latest, state: "loading", versionId: version.id });
+            const source = await getAssetThumbnail(version.id, job.accountId);
+            await preloadImage(source);
+            if (getMediaEditState().imports[id]?.uploadJobId !== job.id) return;
             window.dispatchEvent(
               new CustomEvent("media:open-version", {
                 detail: { assetId: version.id, sourceAssetId: id, asset: version },
               }),
             );
             console.info(
-              `[media:edit-import] stacked version ready original=${id} version=${version.id}`,
+              `[media:edit-import] stack and image ready original=${id} version=${version.id}`,
             );
+            updateEditImport(id, null);
+            imageWaitStarted.current.delete(job.id);
+            setUploads((pending) => pending.filter((item) => item.id !== job.id));
           })
-          .catch((error) => console.error("[media:edit-import] version lookup failed", error))
+          .catch((error) => {
+            const latest = getMediaEditState().imports[id];
+            if (latest?.uploadJobId === job.id) {
+              if (Date.now() - waitStarted < 60_000) {
+                console.warn(
+                  `[media:edit-import] waiting for stack/image original=${id} version=${job.serverAssetId}`,
+                  error,
+                );
+                return;
+              }
+              console.error(`[media:edit-import] image wait expired original=${id}`, error);
+              imageWaitStarted.current.delete(job.id);
+              const message = String(error);
+              updateEditImport(id, { ...latest, state: "failed", error: message });
+              setUploads((pending) => [
+                ...pending.filter((item) => item.id !== job.id),
+                { ...job, state: "failed", error: message },
+              ]);
+            }
+          })
           .finally(() => openingVersions.current.delete(job.id));
       }
       if (completed) {
@@ -143,7 +179,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
     try {
       const [roots, edited, jobs] = await Promise.all([
         listMediaDevices(),
-        getChangedEditorJobs(getMediaEditState().phase === "idle"),
+        getChangedEditorJobs(false),
         getMediaUploads(),
       ]);
       if (deviceRoots.current) {
@@ -153,12 +189,25 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
           setMountedDevice((current) => current ?? mountedQueue.current.shift() ?? null);
       }
       deviceRoots.current = new Set(roots);
+      const state = getMediaEditState();
+      const pending = edited.filter((job) => !state.imports[job.assetId]);
+      const detectedSession =
+        state.phase === "editing" && pending.some((job) => state.assetIds.includes(job.assetId));
+      if (detectedSession) {
+        console.info("[media:editor] modified sidecar detected; edit session complete");
+        updateMediaEditState({ phase: "idle", assetIds: [] });
+        launchedSession.current = false;
+        dismissedEdits.current = false;
+      }
       if (
+        pending.length > 0 &&
         !dismissedEdits.current &&
         getMediaEditState().phase === "idle" &&
         !importingEdits.current
-      )
-        setChanges(edited);
+      ) {
+        const previews = await getChangedEditorJobs(true);
+        setChanges(previews.filter((job) => !getMediaEditState().imports[job.assetId]));
+      }
       updateUploads(jobs);
     } catch (error) {
       console.error("[media:scan] inspection failed", error);
@@ -170,7 +219,10 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   useEffect(() => {
     if (!enabled) return;
     void inspect();
-    const timer = window.setInterval(() => void inspect(), 10_000);
+    const timer = window.setInterval(
+      () => void inspect(),
+      editPhase === "editing" ? 2_000 : 10_000,
+    );
     const focus = () => {
       dismissedEdits.current = false;
       void inspect();
@@ -180,7 +232,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
       window.clearInterval(timer);
       window.removeEventListener("focus", focus);
     };
-  }, [enabled, inspect]);
+  }, [enabled, inspect, editPhase]);
   useEffect(() => {
     if (enabled && isOnline === true) void flush();
   }, [enabled, isOnline, flush]);
@@ -221,8 +273,8 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
       setError(null);
       console.info("[media:editor] launching session", detail.assetIds.length);
       void beginMediaEdit(detail.assetIds)
-        .then(() => {
-          updateMediaEditState({ phase: "editing" });
+        .then((originalIds) => {
+          updateMediaEditState({ phase: "editing", assetIds: originalIds });
           dismissedEdits.current = false;
           trackFeature("edit");
         })
@@ -233,30 +285,13 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
           setError(`${labels.editFailed} ${String(error)}`);
         });
     };
-    const finish = () => {
-      console.info("[media:editor] explicit finish; final sidecar scan");
-      void getChangedEditorJobs(true)
-        .then((edited) => {
-          dismissedEdits.current = false;
-          setChanges(edited);
-          updateMediaEditState({ phase: "idle", assetIds: [] });
-          launchedSession.current = false;
-        })
-        .catch((error) => {
-          console.error("[media:editor] final scan failed", error);
-          updateMediaEditState({ phase: "editing" });
-          setError(String(error));
-        });
-    };
     const importing = () => setImportRoot(null);
     const showUploadQueue = () => setShowQueue(true);
     window.addEventListener("media:edit-request", edit);
-    window.addEventListener("media:finish-edit", finish);
     window.addEventListener("media:show-upload-queue", showUploadQueue);
     window.addEventListener("media:import-request", importing);
     return () => {
       window.removeEventListener("media:edit-request", edit);
-      window.removeEventListener("media:finish-edit", finish);
       window.removeEventListener("media:show-upload-queue", showUploadQueue);
       window.removeEventListener("media:import-request", importing);
     };

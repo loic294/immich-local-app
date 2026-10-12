@@ -65,7 +65,7 @@ pub async fn refresh_people(state: tauri::State<'_, AppState>) -> Result<(), Str
             );
             e
         })?;
-        state.db.upsert_people(&account.id, &people)?;
+        state.db.replace_people(&account.id, &people)?;
         refreshed += 1;
         log::info!(
             "[browsing.people] account={} refreshed count={}",
@@ -89,11 +89,6 @@ pub async fn change_person(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let result = async {
-        let people = state.db.browsing_people()?;
-        let source = people
-            .iter()
-            .find(|person| person.person.id == person_id && person.account_id == account_id)
-            .ok_or_else(|| "Person is no longer visible in the local cache".to_string())?;
         let account = state
             .db
             .get_account(&account_id)?
@@ -102,6 +97,15 @@ pub async fn change_person(
         if !client.ping(&account.server_url).await {
             return Err("offline: connect to Immich to change people".into());
         }
+        if action == "merge" {
+            let people = client.get_all_people().await?;
+            state.db.replace_people(&account_id, &people)?;
+        }
+        let people = state.db.browsing_people()?;
+        let source = people
+            .iter()
+            .find(|person| person.person.id == person_id && person.account_id == account_id)
+            .ok_or_else(|| "This person no longer exists in Immich. The people list has been refreshed; select an existing person.".to_string())?;
         match action.as_str() {
             "hide" => {
                 client
