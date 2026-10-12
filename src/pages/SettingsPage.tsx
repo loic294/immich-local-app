@@ -1,5 +1,5 @@
 import { WindowHeader } from "../components/Layout/WindowHeader";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FolderOpen,
   LogOut,
@@ -42,6 +42,7 @@ interface SettingsPageProps {
 
 export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [section, setSection] = useState("general");
+  const settingsContentRef = useRef<HTMLDivElement>(null);
   const sections = [
     ["general", "settings.sectionGeneral"],
     ["navigation", "settings.sectionNavigation"],
@@ -82,6 +83,10 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   } = useSyncStatus();
   const appUpdate = useAppUpdate();
   const invalidateSettings = useInvalidateSettings();
+
+  useEffect(() => {
+    settingsContentRef.current?.scrollTo({ top: 0 });
+  }, [section]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -386,10 +391,10 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   }
 
   return (
-    <div className="h-screen overflow-y-auto bg-base-100">
+    <div className="h-screen overflow-hidden bg-base-100">
       <WindowHeader floating />
-      <div className="mx-auto max-w-6xl px-4 pb-12 pt-24">
-        <div className="mb-8">
+      <div className="mx-auto flex h-full max-w-6xl flex-col px-4 pt-14">
+        <div className="shrink-0 pb-4">
           <button
             type="button"
             className="btn btn-sm btn-ghost gap-2 mb-3"
@@ -402,17 +407,14 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
           <p className="text-base-content/60">{t("settings.subtitle")}</p>
         </div>
 
-        <div className="flex flex-col gap-6 md:flex-row">
-          <nav
-            className="md:sticky md:top-4 md:w-56 md:shrink-0 md:self-start"
-            aria-label={t("settings.sectionsAria")}
-          >
-            <ul className="menu rounded-lg bg-base-200">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row md:gap-6">
+          <nav className="shrink-0 md:w-56" aria-label={t("settings.sectionsAria")}>
+            <ul className="menu menu-horizontal w-full flex-nowrap overflow-x-auto rounded-lg bg-base-200 md:menu-vertical md:flex-wrap">
               {sections.map(([key, labelKey]) => (
                 <li key={key}>
                   <button
                     type="button"
-                    className={section === key ? "menu-active" : ""}
+                    className={`whitespace-nowrap ${section === key ? "menu-active" : ""}`}
                     aria-current={section === key ? "page" : undefined}
                     onClick={() => setSection(key)}
                   >
@@ -422,7 +424,13 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
               ))}
             </ul>
           </nav>
-          <div className="min-w-0 flex-1">
+          <div
+            ref={settingsContentRef}
+            className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-12"
+            role="region"
+            aria-label={t("settings.title")}
+            tabIndex={0}
+          >
             {section === "storage" && <StorageSettings section="storage" />}
             {section === "video" && <StorageSettings section="video" />}
             {section === "editing" && <MediaSettings section="editing" />}

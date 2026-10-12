@@ -358,7 +358,7 @@ impl Database {
         let conn = self.open()?;
         conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM edit_versions ev JOIN assets a ON a.id=ev.asset_id
-             WHERE ev.asset_id=?1 AND COALESCE(a.is_stack_secondary,0)=1)",
+             WHERE ev.asset_id=?1 AND ev.asset_id<>ev.original_asset_id)",
             [asset_id],
             |row| row.get::<_, i64>(0),
         )
@@ -366,10 +366,54 @@ impl Database {
         .map_err(|error| error.to_string())
     }
 
-    pub fn remove_edit_version_from_cache(&self, asset_id: &str) -> Result<(), String> {
+    pub fn remove_edit_version_from_cache(
+        &self,
+        asset_id: &str,
+        queued_account: Option<&str>,
+    ) -> Result<(), String> {
         self.init_media()?;
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let (original, secondary, account): (String, bool, String) = tx
+            .query_row(
+                "SELECT ev.original_asset_id,COALESCE(a.is_stack_secondary,0),a.account_id
+                 FROM edit_versions ev JOIN assets a ON a.id=ev.asset_id
+                 WHERE ev.asset_id=?1 AND ev.asset_id<>ev.original_asset_id",
+                [asset_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or("Only an edited version can be deleted; the original is protected")?;
+        if !secondary {
+            let restored = tx
+                .execute(
+                    "UPDATE assets SET is_stack_secondary=0 WHERE id=?1",
+                    [&original],
+                )
+                .map_err(|error| error.to_string())?;
+            if restored != 1 {
+                return Err("Cannot restore the missing original version".into());
+            }
+            tx.execute(
+                "INSERT OR IGNORE INTO album_assets(album_id,asset_id,account_id)
+                 SELECT album_id,?1,account_id FROM album_assets WHERE asset_id=?2",
+                params![original, asset_id],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        if let Some(queued_account) = queued_account {
+            if queued_account != account {
+                return Err("Cannot queue deletion for a different account".into());
+            }
+            let payload = serde_json::json!({ "originalAssetId": original }).to_string();
+            tx.execute(
+                "INSERT INTO pending_mutations(asset_id,account_id,kind,payload_json,created_at)
+                 VALUES(?1,?2,'delete_version',?3,?4)",
+                params![asset_id, account, payload, chrono::Utc::now().to_rfc3339()],
+            )
+            .map_err(|error| error.to_string())?;
+        }
         tx.execute("DELETE FROM edit_versions WHERE asset_id=?1", [asset_id])
             .map_err(|error| error.to_string())?;
         tx.execute("DELETE FROM asset_people WHERE asset_id=?1", [asset_id])
@@ -378,7 +422,13 @@ impl Database {
             .map_err(|error| error.to_string())?;
         tx.execute("DELETE FROM assets WHERE id=?1", [asset_id])
             .map_err(|error| error.to_string())?;
-        tx.commit().map_err(|error| error.to_string())
+        tx.commit().map_err(|error| error.to_string())?;
+        log::info!(
+            "[media:version-delete] removed cached edit={asset_id} original={original} restored={} queued={}",
+            !secondary,
+            queued_account.is_some()
+        );
+        Ok(())
     }
 
     pub fn edit_version_ids(&self, original: &str) -> Result<Vec<String>, String> {
@@ -448,7 +498,26 @@ impl Database {
                 stack.primary_asset_id
             ));
         }
-        let mut candidates = stack.assets.clone();
+        // A server refresh can race offline replay. Do not resurrect queued
+        // deletions or let their old server primary hide the local fallback.
+        let pending = self.list_pending_mutations()?;
+        let deletions: Vec<_> = pending
+            .iter()
+            .filter(|mutation| mutation.account_id == account && mutation.kind == "delete_version")
+            .collect();
+        let assets: Vec<_> = stack
+            .assets
+            .iter()
+            .filter(|asset| !deletions.iter().any(|mutation| mutation.asset_id == asset.id))
+            .cloned()
+            .collect();
+        if assets.len() != stack.assets.len() {
+            log::info!(
+                "[media:stack] suppressing queued deletions account={account} count={}",
+                stack.assets.len() - assets.len()
+            );
+        }
+        let mut candidates = assets.clone();
         candidates.sort_by_key(|asset| {
             (
                 asset.original_file_name.contains("-edited-"),
@@ -457,19 +526,38 @@ impl Database {
             )
         });
         let mut original = candidates.first().ok_or("Stack has no assets")?.id.clone();
-        for asset in &stack.assets {
+        for mutation in &deletions {
+            if stack.assets.iter().any(|asset| asset.id == mutation.asset_id) {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&mutation.payload_json).map_err(|error| error.to_string())?;
+                if let Some(root) = payload
+                    .get("originalAssetId")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    if assets.iter().any(|asset| asset.id == root) {
+                        original = root.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        for asset in &assets {
             let known = self.original_edit_asset(&asset.id)?;
-            if known != asset.id && stack.assets.iter().any(|asset| asset.id == known) {
+            if known != asset.id && assets.iter().any(|asset| asset.id == known) {
                 original = known;
                 break;
             }
         }
-        self.upsert_assets(account, &stack.assets)?;
+        let primary = if assets.iter().any(|asset| asset.id == stack.primary_asset_id) {
+            &stack.primary_asset_id
+        } else {
+            &original
+        };
+        self.upsert_assets(account, &assets)?;
         self.record_edit_stack(
             &original,
-            &stack.primary_asset_id,
-            &stack
-                .assets
+            primary,
+            &assets
                 .iter()
                 .map(|asset| asset.id.clone())
                 .collect::<Vec<_>>(),
@@ -576,6 +664,10 @@ impl ImmichClient {
     }
 
     pub async fn create_edit_stack(&self, ids: &[String]) -> Result<(), String> {
+        // Immich POST /stacks merges existing stacks and makes the first ID primary.
+        if ids.len() < 2 {
+            return Err("An edited-photo stack requires at least two versions".into());
+        }
         let session = self
             .session
             .lock()
@@ -683,13 +775,13 @@ mod tests {
             "account",
             &AssetStack {
                 primary_asset_id: "second".into(),
-                assets: vec![second, first, original],
+                assets: vec![second.clone(), first.clone(), original.clone()],
             },
         )
         .unwrap();
         assert_eq!(db.original_edit_asset("second").unwrap(), "original");
         assert!(db.is_deletable_edit_version("first").unwrap());
-        assert!(!db.is_deletable_edit_version("second").unwrap());
+        assert!(db.is_deletable_edit_version("second").unwrap());
         assert!(!db.is_deletable_edit_version("original").unwrap());
         let album_items = db.get_album_assets("album", 0, 100, None, None).unwrap().0;
         assert_eq!(album_items[0].stack_count, Some(3));
@@ -716,6 +808,71 @@ mod tests {
         let db = Database::test_database(path.clone()).unwrap();
         assert_eq!(db.original_edit_asset("second").unwrap(), "original");
         assert_eq!(db.edit_version_ids("original").unwrap().len(), 2);
+        assert!(db.remove_edit_version_from_cache("original", None).is_err());
+        assert!(db
+            .remove_edit_version_from_cache("second", Some("wrong-account"))
+            .is_err());
+        assert_eq!(
+            db.get_assets(0, 100, None, None, None, None).unwrap().0[0].id,
+            "second"
+        );
+        db.open().unwrap().execute(
+            "INSERT INTO album_assets(album_id,asset_id,account_id) VALUES('primary-only','second','account')",
+            [],
+        ).unwrap();
+        db.remove_edit_version_from_cache("second", Some("account"))
+            .unwrap();
+        db.sync_asset_stack(
+            "account",
+            &AssetStack {
+                primary_asset_id: "second".into(),
+                assets: vec![second, first, original],
+            },
+        )
+        .unwrap();
+        assert!(db.get_asset_summary("second").unwrap().is_none());
+        assert_eq!(
+            db.get_assets(0, 100, None, None, None, None).unwrap().0[0].id,
+            "original"
+        );
+        assert_eq!(
+            db.get_album_assets("primary-only", 0, 100, None, None)
+                .unwrap()
+                .0[0]
+                .id,
+            "original"
+        );
+        assert!(
+            db.get_asset_summary("first")
+                .unwrap()
+                .unwrap()
+                .is_stack_secondary
+        );
+        assert_eq!(
+            db.get_asset_summary("original")
+                .unwrap()
+                .unwrap()
+                .stack_count,
+            Some(2)
+        );
+        let pending = db.list_pending_mutations().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].kind, "delete_version");
+        assert_eq!(pending[0].asset_id, "second");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&pending[0].payload_json).unwrap()
+                ["originalAssetId"],
+            "original"
+        );
+        db.remove_edit_version_from_cache("first", None).unwrap();
+        assert!(db.edit_version_ids("original").unwrap().is_empty());
+        assert_eq!(
+            db.get_asset_summary("original")
+                .unwrap()
+                .unwrap()
+                .stack_count,
+            None
+        );
         drop(db);
         for name in ["db.sqlite", "db.sqlite-wal", "db.sqlite-shm"] {
             let path = folder.join(name);
@@ -764,6 +921,98 @@ mod tests {
             requests
         });
         (url, requests)
+    }
+
+    async fn fixture_client(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (ImmichClient, tokio::task::JoinHandle<Vec<String>>) {
+        let (url, requests) = mock_server(responses).await;
+        let client = ImmichClient::new();
+        *client.session.lock().await = Some(crate::services::immich_client::AuthSession {
+            server_url: url,
+            access_token: "fixture-token".into(),
+            refresh_token: None,
+            user_id: "fixture-user".into(),
+            user_name: None,
+        });
+        (client, requests)
+    }
+
+    #[tokio::test]
+    async fn deleting_active_edit_restores_original_before_trash() {
+        let (client, requests) = fixture_client(vec![
+            (200, r#"{"stack":{"id":"stack"}}"#),
+            (200, r#"{"primaryAssetId":"edit","assets":[{"id":"edit"},{"id":"original"},{"id":"older"}]}"#),
+            (200, "{}"),
+            (204, ""),
+        ]).await;
+        client.trash_edit_version("edit", "original").await.unwrap();
+        let requests = requests.await.unwrap();
+        assert!(requests[0].starts_with("GET /api/assets/edit "));
+        assert!(requests[1].starts_with("GET /api/stacks/stack "));
+        assert!(requests[2].starts_with("PUT /api/stacks/stack "));
+        assert!(requests[2].ends_with(r#"{"primaryAssetId":"original"}"#));
+        assert!(requests[3].starts_with("DELETE /api/assets "));
+        assert!(requests[3].ends_with(r#"{"force":false,"ids":["edit"]}"#));
+    }
+
+    #[tokio::test]
+    async fn deleting_secondary_or_replaying_old_edit_preserves_newer_primary() {
+        let (client, requests) = fixture_client(vec![
+            (200, r#"{"stack":{"id":"stack"}}"#),
+            (200, r#"{"primaryAssetId":"newer","assets":[{"id":"edit"},{"id":"original"},{"id":"newer"}]}"#),
+            (204, ""),
+        ]).await;
+        client.trash_edit_version("edit", "original").await.unwrap();
+        let requests = requests.await.unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[2].starts_with("DELETE /api/assets "));
+    }
+
+    #[tokio::test]
+    async fn restore_rejection_prevents_trash_and_original_is_protected() {
+        let (client, requests) = fixture_client(vec![
+            (200, r#"{"stack":{"id":"stack"}}"#),
+            (
+                200,
+                r#"{"primaryAssetId":"edit","assets":[{"id":"edit"},{"id":"original"}]}"#,
+            ),
+            (403, "{}"),
+        ])
+        .await;
+        assert!(client
+            .trash_edit_version("original", "original")
+            .await
+            .unwrap_err()
+            .contains("cannot be deleted"));
+        assert!(client
+            .trash_edit_version("edit", "original")
+            .await
+            .unwrap_err()
+            .contains("restore rejected"));
+        let requests = requests.await.unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(!requests
+            .iter()
+            .any(|request| request.starts_with("DELETE ")));
+    }
+
+    #[tokio::test]
+    async fn missing_original_prevents_active_edit_deletion() {
+        let (client, requests) = fixture_client(vec![
+            (200, r#"{"stack":{"id":"stack"}}"#),
+            (
+                200,
+                r#"{"primaryAssetId":"edit","assets":[{"id":"edit"},{"id":"other"}]}"#,
+            ),
+        ])
+        .await;
+        assert!(client
+            .trash_edit_version("edit", "original")
+            .await
+            .unwrap_err()
+            .contains("missing from the server stack"));
+        assert_eq!(requests.await.unwrap().len(), 2);
     }
 
     #[tokio::test]

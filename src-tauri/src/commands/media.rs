@@ -838,31 +838,44 @@ pub async fn export_media_edits(
     Ok(count)
 }
 
+/// The original is protected independently of the current primary. Deleting
+/// the active edit restores the original locally and on the server (or replay).
 #[tauri::command]
 pub async fn delete_edit_version(
     asset_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
     if !state.db.is_deletable_edit_version(&asset_id)? {
-        return Err("Only a non-primary edited version can be deleted".into());
+        return Err("Only an edited version can be deleted; the original is protected".into());
     }
     let (account_id, client) = state.account_and_client_for_asset(&asset_id);
     if account_id.is_empty() {
         return Err("offline: Cannot identify the account for this version".into());
     }
+    let original = state.db.original_edit_asset(&asset_id)?;
     let account = state.db.get_account(&account_id)?.ok_or("Unknown account")?;
     if client.ping(&account.server_url).await {
-        client.trash_asset(&asset_id).await?;
-        state.db.remove_edit_version_from_cache(&asset_id)?;
-        log::info!("[media:version-delete] moved version to Immich trash asset={asset_id}");
-        Ok(false)
-    } else {
-        let payload = serde_json::json!({ "ids": [asset_id] });
-        state.db.enqueue_mutation(&account_id, &asset_id, "delete_version", &payload.to_string())?;
-        state.db.remove_edit_version_from_cache(&asset_id)?;
-        log::info!("[media:version-delete] queued offline trash asset={asset_id}");
-        Ok(true)
+        match client.trash_edit_version(&asset_id, &original).await {
+            Ok(()) => {
+                state.db.remove_edit_version_from_cache(&asset_id, None)?;
+                log::info!("[media:version-delete] moved version to Immich trash asset={asset_id}");
+                return Ok(false);
+            }
+            Err(error) => {
+                log::warn!(
+                    "[media:version-delete] server operation failed asset={asset_id}: {error}"
+                );
+                if client.ping(&account.server_url).await {
+                    return Err(error);
+                }
+            }
+        }
     }
+    state
+        .db
+        .remove_edit_version_from_cache(&asset_id, Some(&account_id))?;
+    log::info!("[media:version-delete] queued offline trash asset={asset_id}");
+    Ok(true)
 }
 
 #[tauri::command]

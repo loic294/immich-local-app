@@ -37,6 +37,14 @@ pub async fn get_cached_people(
 }
 
 #[tauri::command]
+pub async fn get_cached_named_people(
+    account_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<BrowsingPerson>, String> {
+    state.db.browsing_named_people(&account_id)
+}
+
+#[tauri::command]
 pub async fn refresh_people(state: tauri::State<'_, AppState>) -> Result<(), String> {
     log::info!("[browsing.people] refresh start");
     let mut refreshed = 0;
@@ -69,6 +77,114 @@ pub async fn refresh_people(state: tauri::State<'_, AppState>) -> Result<(), Str
         return Err("offline: people refresh unavailable; using cached people".into());
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn change_person(
+    account_id: String,
+    person_id: String,
+    action: String,
+    name: Option<String>,
+    target_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let result = async {
+        let people = state.db.browsing_people()?;
+        let source = people
+            .iter()
+            .find(|person| person.person.id == person_id && person.account_id == account_id)
+            .ok_or_else(|| "Person is no longer visible in the local cache".to_string())?;
+        let account = state
+            .db
+            .get_account(&account_id)?
+            .ok_or_else(|| "Person account is no longer configured".to_string())?;
+        let client = state.client_for(Some(&account_id));
+        if !client.ping(&account.server_url).await {
+            return Err("offline: connect to Immich to change people".into());
+        }
+        match action.as_str() {
+            "hide" => {
+                client
+                    .mutate_person(&person_id, None, Some(true), None)
+                    .await?;
+                state
+                    .db
+                    .apply_person_update(&account_id, &person_id, None, Some(true))?;
+            }
+            "name" | "merge" => {
+                if source
+                    .person
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| !name.trim().is_empty())
+                {
+                    return Err("Only unnamed people can be assigned".into());
+                }
+                if action == "name" {
+                    let name = name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .ok_or_else(|| "A person name is required".to_string())?;
+                    client
+                        .mutate_person(&person_id, Some(name), None, None)
+                        .await?;
+                    state
+                        .db
+                        .apply_person_update(&account_id, &person_id, Some(name), None)?;
+                } else {
+                    let target = target_id
+                        .as_deref()
+                        .ok_or_else(|| "A merge target is required".to_string())?;
+                    if !state
+                        .db
+                        .browsing_named_people(&account_id)?
+                        .iter()
+                        .any(|person| {
+                            person.person.id == target
+                                && person.account_id == account_id
+                                && target != person_id
+                                && person
+                                    .person
+                                    .name
+                                    .as_deref()
+                                    .is_some_and(|name| !name.trim().is_empty())
+                        })
+                    {
+                        return Err(
+                            "Merge target must be a visible named person from the same account"
+                                .into(),
+                        );
+                    }
+                    client
+                        .mutate_person(&person_id, None, None, Some(target))
+                        .await?;
+                    state
+                        .db
+                        .apply_person_merge(&account_id, &person_id, target)?;
+                }
+            }
+            _ => return Err("Unsupported person action".into()),
+        }
+        log::info!(
+            "[browsing.people] mutation complete account={} person={} action={}",
+            account_id,
+            person_id,
+            action
+        );
+        Ok(())
+    }
+    .await;
+    if let Err(error) = &result {
+        log::warn!(
+            "[browsing.people] mutation failed account={} person={} action={} error={}",
+            account_id,
+            person_id,
+            action,
+            error
+        );
+    }
+    result
 }
 
 #[tauri::command]

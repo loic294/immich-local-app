@@ -1,5 +1,5 @@
 import { WindowHeader } from "./WindowHeader";
-import { X, Trash2, ArchiveRestore } from "lucide-react";
+import { X, ArchiveRestore } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Session } from "../../hooks/useSession";
 import type { AlbumSummary, SortPreference, ViewScope } from "../../types";
@@ -160,19 +160,11 @@ export function AppTopBar({
                   onAddSelectedToAlbum={onAddSelectedToAlbum}
                   onCreateShareLinkForSelected={onCreateShareLinkForSelected}
                   onSelectionActionCompleted={onClearSelection}
-                />
-                <div className="h-5 w-px bg-base-300" />
-                <button
-                  type="button"
-                  className="btn btn-sm btn-error"
-                  onClick={() => {
+                  onDeleteSelected={() => {
                     setSelectionError(null);
                     setShowArchiveModal(true);
                   }}
-                >
-                  <Trash2 size={16} />
-                  {t("topBar.delete")}
-                </button>
+                />
               </>
             )}
           </div>

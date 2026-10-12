@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ZoomIn } from "lucide-react";
+import { useAlbumPickerLabels } from "../../i18n/albumPicker";
 
 interface ZoomControlProps {
   zoomLevel: number;
@@ -8,8 +9,15 @@ interface ZoomControlProps {
 
 export function ZoomControl({ zoomLevel, onZoomChange }: ZoomControlProps) {
   const [showSlider, setShowSlider] = useState(false);
+  const labels = useAlbumPickerLabels();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hideTimeoutRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (hideTimeoutRef.current !== null) clearTimeout(hideTimeoutRef.current);
+    },
+    [],
+  );
 
   const handleMouseEnter = () => {
     if (hideTimeoutRef.current !== null) {
@@ -21,6 +29,7 @@ export function ZoomControl({ zoomLevel, onZoomChange }: ZoomControlProps) {
 
   const handleMouseLeave = () => {
     hideTimeoutRef.current = window.setTimeout(() => {
+      if (containerRef.current?.contains(document.activeElement)) return;
       setShowSlider(false);
       hideTimeoutRef.current = null;
     }, 100);
@@ -32,12 +41,20 @@ export function ZoomControl({ zoomLevel, onZoomChange }: ZoomControlProps) {
       className="relative"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onFocus={handleMouseEnter}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setShowSlider(false);
+      }}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") setShowSlider(false);
+      }}
       onClick={(e) => e.stopPropagation()}
     >
       <button
         type="button"
         className="btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white flex items-center gap-1"
-        aria-label="Zoom"
+        aria-label={labels.zoom}
         onClick={() => onZoomChange(100)}
       >
         <ZoomIn size={16} />
@@ -48,6 +65,7 @@ export function ZoomControl({ zoomLevel, onZoomChange }: ZoomControlProps) {
         <div className="absolute top-full mt-1 left-1/2 -translate-x-1/2 bg-zinc-800 border border-white/15 rounded-lg p-1 shadow-lg z-50 whitespace-nowrap">
           <input
             type="range"
+            aria-label={labels.zoom}
             min="5"
             max="800"
             value={zoomLevel}

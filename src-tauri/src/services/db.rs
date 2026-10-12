@@ -16,6 +16,34 @@ pub(crate) mod metadata_search;
 /// positional `?N` placeholders in the assembled SQL.
 type DynParams = Vec<Box<dyn rusqlite::ToSql>>;
 
+fn normalize_folder_path(path: &str) -> Result<String, String> {
+    let path = path.trim().replace('\\', "/");
+    if path.chars().any(char::is_control) {
+        return Err("Folder paths must not contain control characters".into());
+    }
+    if path.is_empty() || path.chars().all(|character| character == '/') {
+        return Ok(String::new());
+    }
+    let drive = path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes()[0].is_ascii_alphabetic()
+        && (path.len() == 2 || path.as_bytes().get(2) == Some(&b'/'));
+    if !path.starts_with('/') && !drive {
+        return Err("Use an absolute folder path from the cached library".into());
+    }
+    let parts: Vec<_> = path.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.iter().any(|part| *part == "." || *part == "..") {
+        return Err("Folder paths must not contain '.' or '..' segments".into());
+    }
+    let prefix = if path.starts_with("//") {
+        "//"
+    } else if path.starts_with('/') {
+        "/"
+    } else {
+        ""
+    };
+    Ok(format!("{prefix}{}", parts.join("/")))
+}
+
 /// Structured, combinable filter criteria applied on top of the base
 /// search/filter for every photo-grid view (All Photos, albums, folders,
 /// calendar months). All fields are optional and combine with AND. Filtering is
@@ -3407,7 +3435,9 @@ impl Database {
                 |row| row.get::<_, String>(0),
             )
             .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => format!("album not found in local cache: {album_id}"),
+                rusqlite::Error::QueryReturnedNoRows => {
+                    format!("album not found in local cache: {album_id}")
+                }
                 other => other.to_string(),
             })?;
         conn.execute(
@@ -3477,8 +3507,7 @@ impl Database {
         account_id: &str,
         base_directory: &str,
     ) -> Result<String, String> {
-        let normalized = base_directory.trim().replace('\\', "/");
-        let normalized = normalized.trim_end_matches('/');
+        let normalized = normalize_folder_path(base_directory)?;
         let conn = self.open()?;
         if !normalized.is_empty() {
             let prefix = format!("{normalized}/");
@@ -3490,13 +3519,16 @@ impl Database {
                 .map_err(|error| error.to_string())?;
             let mut found = false;
             for path in paths {
-                if path.map_err(|error| error.to_string())?.replace('\\', "/").starts_with(&prefix) {
+                let path = path.map_err(|error| error.to_string())?;
+                if normalize_folder_path(&path).is_ok_and(|path| path.starts_with(&prefix)) {
                     found = true;
                     break;
                 }
             }
             if !found {
-                return Err("Choose a folder path present in this account's local asset cache".into());
+                return Err(
+                    "Choose a folder path present in this account's local asset cache".into(),
+                );
             }
         }
         conn.execute(
@@ -3505,7 +3537,7 @@ impl Database {
             params![account_id, normalized],
         )
         .map_err(|error| error.to_string())?;
-        Ok(normalized.to_string())
+        Ok(normalized)
     }
 
     pub fn get_unique_original_paths(&self) -> Result<Vec<String>, String> {
@@ -3530,10 +3562,16 @@ impl Database {
         let mut dir_set = std::collections::BTreeSet::new();
         for row in rows {
             let file_path = row.map_err(|err| err.to_string())?;
-            if let Some(parent) = std::path::Path::new(&file_path).parent() {
-                let parent_str = parent.to_string_lossy().into_owned();
+            // Cached paths belong to the server, not the desktop host's filesystem.
+            let file_path = file_path.replace('\\', "/");
+            if let Some((parent_str, _)) = file_path.rsplit_once('/') {
+                let parent_str = if parent_str.is_empty() {
+                    "/"
+                } else {
+                    parent_str
+                };
                 if !parent_str.is_empty() && parent_str != "." {
-                    dir_set.insert(parent_str);
+                    dir_set.insert(parent_str.to_string());
                 }
             }
         }
@@ -3584,7 +3622,7 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'{}
+                    WHERE replace(original_path, char(92), '/') LIKE '/%' AND replace(original_path, char(92), '/') NOT LIKE '/%/%'{}
                     ORDER BY {}
                     LIMIT ?1 OFFSET ?2
                     ",
@@ -3604,9 +3642,8 @@ impl Database {
         } else {
             // Non-root: match paths starting with "{path}/" where the rest has no "/"
             let path_prefix = format!("{}/", path);
-            let like_pattern = format!("{}%", path_prefix);
             // 1-based position of the first character after the prefix (for substr)
-            let remaining_start = (path_prefix.len() + 1) as i64;
+            let remaining_start = (path_prefix.chars().count() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining, ?3=limit, ?4=offset.
             let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 5);
 
@@ -3628,8 +3665,8 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE original_path LIKE ?1
-                      AND instr(substr(original_path, ?2), '/') = 0{}
+                    WHERE substr(replace(original_path, char(92), '/'), 1, ?2 - 1) = ?1
+                      AND instr(substr(replace(original_path, char(92), '/'), ?2), '/') = 0{}
                     ORDER BY {}
                     LIMIT ?3 OFFSET ?4
                     ",
@@ -3638,7 +3675,7 @@ impl Database {
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
             let mut bind: DynParams = vec![
-                Box::new(like_pattern),
+                Box::new(path_prefix),
                 Box::new(remaining_start),
                 Box::new(limit),
                 Box::new(offset),
@@ -3697,7 +3734,7 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'{}
+                    WHERE replace(original_path, char(92), '/') LIKE '/%' AND replace(original_path, char(92), '/') NOT LIKE '/%/%'{}
                     ORDER BY {}
                     ",
                 criteria_sql, order_by
@@ -3712,8 +3749,7 @@ impl Database {
             }
         } else {
             let path_prefix = format!("{}/", path);
-            let like_pattern = format!("{}%", path_prefix);
-            let remaining_start = (path_prefix.len() + 1) as i64;
+            let remaining_start = (path_prefix.chars().count() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining.
             let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3);
 
@@ -3735,15 +3771,15 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE original_path LIKE ?1
-                      AND instr(substr(original_path, ?2), '/') = 0{}
+                    WHERE substr(replace(original_path, char(92), '/'), 1, ?2 - 1) = ?1
+                      AND instr(substr(replace(original_path, char(92), '/'), ?2), '/') = 0{}
                     ORDER BY {}
                     ",
                 criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
-            let mut bind: DynParams = vec![Box::new(like_pattern), Box::new(remaining_start)];
+            let mut bind: DynParams = vec![Box::new(path_prefix), Box::new(remaining_start)];
             bind.extend(criteria_params);
 
             let rows = stmt
@@ -4038,7 +4074,9 @@ impl Database {
             .unwrap_or_default();
 
         let recent_albums_limit = stmt
-            .query_row(params!["recent_albums_limit"], |row| row.get::<_, String>(0))
+            .query_row(params!["recent_albums_limit"], |row| {
+                row.get::<_, String>(0)
+            })
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .filter(|value| (1..=20).contains(value))
@@ -4388,7 +4426,6 @@ fn asset_filter_where_clause(filter: Option<&str>) -> &'static str {
     }
 }
 
-
 #[cfg(test)]
 mod account_local_navigation_tests {
     use super::*;
@@ -4401,7 +4438,10 @@ mod account_local_navigation_tests {
             .as_nanos();
         std::env::current_dir()
             .expect("working directory")
-            .join(format!(".test-{name}-{}-{nonce}.sqlite", std::process::id()))
+            .join(format!(
+                ".test-{name}-{}-{nonce}.sqlite",
+                std::process::id()
+            ))
     }
 
     fn cleanup_db(path: &PathBuf) {
@@ -4419,19 +4459,37 @@ mod account_local_navigation_tests {
         ] {
             let path = test_db_path(name);
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
-            conn.execute("INSERT INTO settings(key, value) VALUES('menu_items', ?1)", [raw]).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO settings(key, value) VALUES('menu_items', ?1)",
+                [raw],
+            )
+            .unwrap();
             drop(conn);
 
             let db = Database::test_database(path.clone()).unwrap();
-            let migrated: String = db.open().unwrap().query_row(
-                "SELECT value FROM settings WHERE key='menu_items'",
-                [],
-                |row| row.get(0),
-            ).unwrap();
+            let migrated: String = db
+                .open()
+                .unwrap()
+                .query_row(
+                    "SELECT value FROM settings WHERE key='menu_items'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
             let preferences: Vec<MenuItemPreference> = serde_json::from_str(&migrated).unwrap();
             assert_eq!(preferences[0].key, "albums");
-            assert_eq!(preferences[0].group, if name == "grouped-menu" { "library" } else { "main" });
+            assert_eq!(
+                preferences[0].group,
+                if name == "grouped-menu" {
+                    "library"
+                } else {
+                    "main"
+                }
+            );
             assert_eq!(preferences[1].key, "photos");
             cleanup_db(&path);
         }
@@ -4477,10 +4535,88 @@ mod account_local_navigation_tests {
         ).unwrap();
 
         assert_eq!(db.get_folders_base_directory("account-a").unwrap(), "");
-        assert_eq!(db.set_folders_base_directory("account-a", "/photos/2024/").unwrap(), "/photos/2024");
-        assert_eq!(db.get_folders_base_directory("account-a").unwrap(), "/photos/2024");
+        assert_eq!(
+            db.set_folders_base_directory("account-a", "/photos/2024/")
+                .unwrap(),
+            "/photos/2024"
+        );
+        assert_eq!(
+            db.get_folders_base_directory("account-a").unwrap(),
+            "/photos/2024"
+        );
         assert_eq!(db.get_folders_base_directory("account-b").unwrap(), "");
-        assert!(db.set_folders_base_directory("account-a", "/missing").is_err());
+        assert!(db
+            .set_folders_base_directory("account-a", "/missing")
+            .is_err());
+        assert!(db
+            .set_folders_base_directory("account-b", "/photos/2024")
+            .is_err());
+        for invalid in [
+            "photos/2024",
+            "/photos/../2024",
+            "/photos/./2024",
+            "/photos/\0",
+        ] {
+            assert!(db.set_folders_base_directory("account-a", invalid).is_err());
+            assert_eq!(
+                db.get_folders_base_directory("account-a").unwrap(),
+                "/photos/2024"
+            );
+        }
+        assert_eq!(
+            db.set_folders_base_directory("account-a", " /photos//2024/// ")
+                .unwrap(),
+            "/photos/2024"
+        );
+        assert_eq!(
+            db.set_folders_base_directory("account-a", "/photos")
+                .unwrap(),
+            "/photos"
+        );
+        assert!(db
+            .set_folders_base_directory("account-a", "/photos/202")
+            .is_err());
+        assert_eq!(db.set_folders_base_directory("account-a", "/").unwrap(), "");
+        assert_eq!(db.set_folders_base_directory("account-a", "").unwrap(), "");
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn folder_paths_support_windows_unicode_and_literal_sql_wildcards() {
+        let path = test_db_path("folders-paths");
+        let db = Database::test_database(path.clone()).unwrap();
+        for (id, original_path) in [
+            ("windows", r"C:\photos\été_100%\image.jpg"),
+            ("other", r"C:\photos\étéX100Y\other.jpg"),
+            ("root", "/root.jpg"),
+        ] {
+            db.open().unwrap().execute(
+                "INSERT INTO assets(id, account_id, original_file_name, original_path, updated_at) VALUES(?1, 'account-a', 'image.jpg', ?2, 0)",
+                params![id, original_path],
+            ).unwrap();
+        }
+        assert_eq!(
+            db.set_folders_base_directory("account-a", r" C:\photos\été_100%\ ")
+                .unwrap(),
+            "C:/photos/été_100%"
+        );
+        let dirs = db.get_unique_original_paths().unwrap();
+        assert!(dirs.contains(&"C:/photos/été_100%".to_string()));
+        assert!(dirs.contains(&"/".to_string()));
+        let (assets, _) = db
+            .get_folder_assets("C:/photos/été_100%", 0, 40, None, None)
+            .unwrap();
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].id, "windows");
+        let layout_assets = db
+            .get_all_folder_assets("C:/photos/été_100%", None, None)
+            .unwrap();
+        assert_eq!(layout_assets.len(), 1);
+        assert_eq!(layout_assets[0].id, "windows");
+        assert_eq!(
+            db.set_folders_base_directory("account-a", "C:/").unwrap(),
+            "C:"
+        );
         cleanup_db(&path);
     }
 }

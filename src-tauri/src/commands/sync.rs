@@ -760,6 +760,26 @@ pub async fn get_saved_local_file_changes(
         .collect())
 }
 
+fn apply_modified_local_snapshot(
+    db: &crate::services::db::Database,
+    change: &crate::services::db::LocalSavedAssetChange,
+) -> Result<(), String> {
+    let (mtime_ms, size_bytes) = get_file_snapshot(Path::new(&change.local_path));
+    db.update_local_saved_asset_snapshot(
+        &change.asset_id,
+        &change.local_path,
+        mtime_ms,
+        size_bytes,
+    )?;
+    db.resolve_local_saved_asset_changes_by_ids(&[change.id])?;
+    log::info!(
+        "[saved-local-files] refreshed snapshot asset={} change={} without modifying description",
+        change.asset_id,
+        change.id
+    );
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn apply_saved_local_file_changes(
     input: ApplySavedLocalFileChangesInput,
@@ -778,11 +798,9 @@ pub async fn apply_saved_local_file_changes(
             continue;
         }
 
-        // Route mutations to the account that owns this asset.
-        let (account_id, client) = state.account_and_client_for_asset(&change.asset_id);
-
         match change.change_kind.as_str() {
             "deleted" => {
+                let (account_id, client) = state.account_and_client_for_asset(&change.asset_id);
                 // Archive in local cache immediately.
                 if let Err(err) = state
                     .db
@@ -904,116 +922,20 @@ pub async fn apply_saved_local_file_changes(
                 applied_count += 1;
             }
             "modified" => {
-                let path = Path::new(&change.local_path);
-                let (mtime_ms, size_bytes) = get_file_snapshot(path);
-                if let Err(err) = state.db.update_local_saved_asset_snapshot(
-                    &change.asset_id,
-                    &change.local_path,
-                    mtime_ms,
-                    size_bytes,
-                ) {
+                if let Err(err) = apply_modified_local_snapshot(&state.db, &change) {
                     failed_count += 1;
                     errors.push(format!(
-                        "failed to update local snapshot for asset {}: {}",
+                        "failed to apply local snapshot for asset {}: {}",
                         change.asset_id, err
                     ));
+                    log::warn!(
+                        "[saved-local-files] snapshot apply failed asset={} change={}: {}",
+                        change.asset_id,
+                        change.id,
+                        err
+                    );
                     continue;
                 }
-
-                // Record the applied local metadata drift on the asset
-                // description so the change is reflected both in local cache
-                // and on the Immich server (or queued if offline).
-                let applied_note = format!(
-                    "[local-file-sync] Applied local file metadata change for '{}' (path: {}).",
-                    change.file_name, change.local_path
-                );
-                let next_description = match state.db.get_asset_details(&change.asset_id) {
-                    Ok(Some(details)) => match details.description {
-                        Some(existing) if !existing.trim().is_empty() => {
-                            format!("{}\n\n{}", existing, applied_note)
-                        }
-                        _ => applied_note.clone(),
-                    },
-                    _ => applied_note.clone(),
-                };
-
-                if let Err(err) = state
-                    .db
-                    .update_asset_description(&change.asset_id, Some(&next_description))
-                {
-                    failed_count += 1;
-                    errors.push(format!(
-                        "failed to persist local metadata note for asset {}: {}",
-                        change.asset_id, err
-                    ));
-                    continue;
-                }
-
-                match client
-                    .update_asset_description(&change.asset_id, Some(next_description.as_str()))
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(err) => {
-                        let server_reachable = if let Ok(Some((server_url, _token, _is_oauth))) =
-                            state.db.get_auth_credentials()
-                        {
-                            client.ping(&server_url).await
-                        } else {
-                            false
-                        };
-
-                        if server_reachable {
-                            log::warn!(
-                                "[sync.apply_saved_local_file_changes] metadata-note update rejected while online asset_id={} err={}",
-                                change.asset_id,
-                                err
-                            );
-                            failed_count += 1;
-                            let err_lc = err.to_ascii_lowercase();
-                            let reason = if err_lc.contains("asset.update access") {
-                                "asset update permission denied (shared/read-only asset)"
-                                    .to_string()
-                            } else {
-                                err.clone()
-                            };
-                            errors.push(format!(
-                                "failed to update asset {} metadata note while server is reachable: {}",
-                                change.asset_id, reason
-                            ));
-                            continue;
-                        }
-
-                        let payload_json = json!({ "description": next_description }).to_string();
-                        log::warn!(
-                            "[sync.apply_saved_local_file_changes] offline while updating metadata note asset_id={} queueing mutation",
-                            change.asset_id
-                        );
-                        if let Err(queue_err) = state.db.enqueue_mutation(
-                            &account_id,
-                            &change.asset_id,
-                            "description",
-                            &payload_json,
-                        ) {
-                            failed_count += 1;
-                            errors.push(format!(
-                                "failed to queue metadata-note mutation for asset {} offline: {} / {}",
-                                change.asset_id, err, queue_err
-                            ));
-                            continue;
-                        }
-                    }
-                }
-
-                if let Err(err) = state
-                    .db
-                    .resolve_local_saved_asset_changes_by_ids(&[change.id])
-                {
-                    failed_count += 1;
-                    errors.push(format!("failed to resolve change {}: {}", change.id, err));
-                    continue;
-                }
-
                 applied_count += 1;
             }
             other => {
@@ -1625,4 +1547,71 @@ fn parse_asset_created_at_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|timestamp| timestamp.with_timezone(&Utc))
+}
+
+#[cfg(test)]
+mod local_snapshot_tests {
+    use super::*;
+    use crate::services::{db::Database, immich_client::AssetSummary};
+
+    #[test]
+    fn modified_snapshot_preserves_description_and_never_queues_mutations() {
+        let folder = std::env::current_dir()
+            .unwrap()
+            .join(format!("immich-local-snapshot-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let db = Database::test_database(folder.join("db.sqlite")).unwrap();
+        let file = folder.join("photo.jpg");
+        std::fs::write(&file, b"updated local file").unwrap();
+        let path = file.to_str().unwrap();
+        let asset: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id":"photo","originalFileName":"photo.jpg","type":"IMAGE"
+        }))
+        .unwrap();
+        db.upsert_assets("account", &[asset]).unwrap();
+        db.upsert_local_saved_asset(
+            "photo",
+            None,
+            path,
+            "photo.jpg",
+            "download",
+            Some(0),
+            Some(0),
+        )
+        .unwrap();
+        for description in [Some("User description"), None] {
+            db.update_asset_description("photo", description).unwrap();
+            db.upsert_unresolved_local_saved_asset_change(
+                "photo",
+                path,
+                "photo.jpg",
+                "modified",
+                "{}",
+            )
+            .unwrap();
+            let changes = db.list_unresolved_local_saved_asset_changes().unwrap();
+            apply_modified_local_snapshot(&db, &changes[0]).unwrap();
+            assert!(db
+                .list_unresolved_local_saved_asset_changes()
+                .unwrap()
+                .is_empty());
+            assert_eq!(db.count_pending_mutations().unwrap(), 0);
+            assert_eq!(
+                db.get_asset_details("photo")
+                    .unwrap()
+                    .unwrap()
+                    .description
+                    .as_deref(),
+                description
+            );
+            let snapshot: (Option<i64>, Option<i64>) = db.open().unwrap().query_row(
+                "SELECT last_known_mtime_ms,last_known_size_bytes FROM local_saved_assets WHERE asset_id='photo'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            assert_eq!(snapshot, get_file_snapshot(&file));
+        }
+        drop(db);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 }

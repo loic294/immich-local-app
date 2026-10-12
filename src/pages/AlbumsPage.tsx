@@ -10,7 +10,6 @@ import { PageBackButton } from "../components/Layout/PageBackButton";
 import { PhotoGrid } from "../components/PhotoGrid/PhotoGrid";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { FilterBar } from "../components/Filters/FilterBar";
-import { EditAllPhotosButton } from "../components/Albums/EditAllPhotosButton";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
 import { useAssetFilters } from "../hooks/useAssetFilters";
@@ -192,7 +191,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     };
   }, [selectedAlbumId, isOnline, queryClient]);
 
-  // Calculate PhotoGrid height dynamically
+  // Measure only the space remaining below the fixed album header.
   useEffect(() => {
     if (!contentRef.current) {
       return;
@@ -203,54 +202,17 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         return;
       }
 
-      const container = contentRef.current;
-      const albumHeader = container.querySelector('[data-test="album-header"]') as HTMLElement;
-      const albumDescription = container.querySelector(
-        '[data-test="album-description"]',
-      ) as HTMLElement;
-      const errorAlert = container.querySelector('[data-test="error-alert"]') as HTMLElement;
-
-      const padding = 16; // padding from p-2 sm:p-3 lg:p-4 (bottom only)
-      let usedHeight = padding;
-
-      if (albumHeader) {
-        usedHeight += albumHeader.offsetHeight + 8; // gap
-      }
-      if (albumDescription) {
-        usedHeight += albumDescription.offsetHeight + 8; // gap
-      }
-      if (errorAlert) {
-        usedHeight += errorAlert.offsetHeight + 8; // gap
-      }
-
-      // Get the position of container element
-      const containerTop = container.getBoundingClientRect().top;
-      const containerHeight = window.innerHeight - containerTop - padding;
-      const availableHeight = containerHeight - (usedHeight - padding);
-      setPhotoGridHeight(Math.max(300, availableHeight));
+      setPhotoGridHeight(contentRef.current.clientHeight);
     };
 
     // Calculate on mount and when window is resized
     calculateHeight();
     const resizeObserver = new ResizeObserver(calculateHeight);
     resizeObserver.observe(contentRef.current);
-    const mutationObserver = new MutationObserver(() => {
-      // Recalculate after mutations
-      requestAnimationFrame(calculateHeight);
-    });
-    mutationObserver.observe(contentRef.current, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-    });
-    window.addEventListener("resize", calculateHeight);
-
     return () => {
       resizeObserver.disconnect();
-      mutationObserver.disconnect();
-      window.removeEventListener("resize", calculateHeight);
     };
-  }, [selectedAlbumId]);
+  }, [selectedAlbum?.id]);
 
   const filteredAlbumAssets = useMemo(
     () => albumAssetsQuery.data?.pages.flatMap((page) => page.items) ?? [],
@@ -525,9 +487,9 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
 
   return (
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
-      <Sidebar activePage="albums" onNavigate={onNavigate} />
+      <Sidebar activePage="albums" activeAlbumId={selectedAlbumId} onNavigate={onNavigate} />
 
-      <section className="flex min-w-0 h-screen flex-col">
+      <section className="flex min-h-0 min-w-0 h-screen flex-col overflow-hidden">
         <AppTopBar
           session={session}
           onLogout={onLogout}
@@ -588,12 +550,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           />
         )}
 
-        <section
-          ref={contentRef}
-          className={`p-2 sm:p-3 lg:p-4 ${
-            selectedAlbum ? "flex min-h-0 flex-1 flex-col gap-2" : "min-h-0 flex-1 overflow-y-auto"
-          }`}
-        >
+        <section className="flex min-h-0 flex-1 flex-col gap-2 p-2 sm:p-3 lg:p-4">
           {selectedAlbum ? (
             <>
               <div
@@ -614,7 +571,6 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <EditAllPhotosButton albumId={selectedAlbum.id} />
                   {!isAlbumSavedLocally ? (
                     <button
                       type="button"
@@ -699,34 +655,36 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 </div>
               ) : null}
 
-              {albumRefreshError ||
-              (albumAssetsQuery.isError && filteredAlbumAssets.length === 0) ? (
-                <div
-                  role="alert"
-                  data-test="error-alert"
-                  className="shrink-0 alert alert-error alert-soft text-sm"
-                >
-                  <span>
-                    {albumRefreshError ??
-                      (albumAssetsQuery.error as Error | null)?.message ??
-                      t("albums.loadAlbumFailed")}
-                  </span>
-                </div>
-              ) : (
-                <PhotoGrid
-                  assets={filteredAlbumAssets}
-                  onSelectedCountChange={setSelectedCount}
-                  onSelectedIdsChange={setSelectedAssetIds}
-                  selectionCommand={selectionCommand}
-                  isFetching={albumAssetsQuery.isFetchingNextPage}
-                  hasNextPage={Boolean(albumAssetsQuery.hasNextPage)}
-                  maxHeight={photoGridHeight}
-                  onLoadMore={() => albumAssetsQuery.fetchNextPage().then(() => undefined)}
-                  loadFullLayout={albumLoadFullLayout}
-                  viewScope={filterScope}
-                  viewCriteria={filterPayload}
-                />
-              )}
+              <div ref={contentRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                {albumRefreshError ||
+                (albumAssetsQuery.isError && filteredAlbumAssets.length === 0) ? (
+                  <div
+                    role="alert"
+                    data-test="error-alert"
+                    className="shrink-0 alert alert-error alert-soft text-sm"
+                  >
+                    <span>
+                      {albumRefreshError ??
+                        (albumAssetsQuery.error as Error | null)?.message ??
+                        t("albums.loadAlbumFailed")}
+                    </span>
+                  </div>
+                ) : (
+                  <PhotoGrid
+                    assets={filteredAlbumAssets}
+                    onSelectedCountChange={setSelectedCount}
+                    onSelectedIdsChange={setSelectedAssetIds}
+                    selectionCommand={selectionCommand}
+                    isFetching={albumAssetsQuery.isFetchingNextPage}
+                    hasNextPage={Boolean(albumAssetsQuery.hasNextPage)}
+                    maxHeight={photoGridHeight}
+                    onLoadMore={() => albumAssetsQuery.fetchNextPage().then(() => undefined)}
+                    loadFullLayout={albumLoadFullLayout}
+                    viewScope={filterScope}
+                    viewCriteria={filterPayload}
+                  />
+                )}
+              </div>
 
               <AlbumShareModal
                 open={showShareAlbumModal}
@@ -741,8 +699,8 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
               />
             </>
           ) : (
-            <section className="space-y-4 pb-2">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <>
+              <div className="mb-2 shrink-0 flex flex-wrap items-center justify-between gap-3">
                 <h1 className="m-0 text-2xl font-bold text-base-content">{t("albums.title")}</h1>
                 <div className="join">
                   <button
@@ -769,58 +727,60 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                 </div>
               </div>
 
-              {albumsQuery.isError || albumsQuery.refreshError ? (
-                <div role="alert" className="alert alert-error alert-soft text-sm">
-                  <span>
-                    {albumsQuery.refreshError ??
-                      (albumsQuery.error as Error | null)?.message ??
-                      t("albums.loadAlbumsFailed")}
-                  </span>
-                </div>
-              ) : null}
+              <section className="min-h-0 flex-1 overflow-y-auto space-y-4 pb-2">
+                {albumsQuery.isError || albumsQuery.refreshError ? (
+                  <div role="alert" className="alert alert-error alert-soft text-sm">
+                    <span>
+                      {albumsQuery.refreshError ??
+                        (albumsQuery.error as Error | null)?.message ??
+                        t("albums.loadAlbumsFailed")}
+                    </span>
+                  </div>
+                ) : null}
 
-              {albumsQuery.isLoading ? (
-                <div className="flex items-center gap-2 px-1 py-8 text-sm text-base-content/70">
-                  <span className="loading loading-spinner loading-sm" />
-                  {t("albums.loadingAlbums")}
-                </div>
-              ) : null}
+                {albumsQuery.isLoading ? (
+                  <div className="flex items-center gap-2 px-1 py-8 text-sm text-base-content/70">
+                    <span className="loading loading-spinner loading-sm" />
+                    {t("albums.loadingAlbums")}
+                  </div>
+                ) : null}
 
-              {!albumsQuery.isLoading && groups.length === 0 ? (
-                <div className="alert alert-info alert-soft text-sm">
-                  <span>{t("albums.noAlbumsForFilter")}</span>
-                </div>
-              ) : null}
+                {!albumsQuery.isLoading && groups.length === 0 ? (
+                  <div className="alert alert-info alert-soft text-sm">
+                    <span>{t("albums.noAlbumsForFilter")}</span>
+                  </div>
+                ) : null}
 
-              <div className="space-y-6">
-                {groups.map((group) => (
-                  <section key={group.year}>
-                    <h2 className="mb-3 mt-0 text-3xl font-semibold text-base-content">
-                      {group.year}{" "}
-                      <span className="text-sm font-medium text-base-content/60">
-                        {t("albums.albumsCount", {
-                          count: group.albums.length,
-                        })}
-                      </span>
-                    </h2>
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-                      {group.albums.map((album) => (
-                        <AlbumCard
-                          key={album.id}
-                          album={album}
-                          isOwned={album.ownerId === session.userId}
-                          dateLabel={getAlbumDateLabel(album, locale, t("albums.unknownDate"))}
-                          onClick={() => {
-                            setSelectedAlbumId(album.id);
-                            setSearchInput("");
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            </section>
+                <div className="space-y-6">
+                  {groups.map((group) => (
+                    <section key={group.year}>
+                      <h2 className="mb-3 mt-0 text-3xl font-semibold text-base-content">
+                        {group.year}{" "}
+                        <span className="text-sm font-medium text-base-content/60">
+                          {t("albums.albumsCount", {
+                            count: group.albums.length,
+                          })}
+                        </span>
+                      </h2>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+                        {group.albums.map((album) => (
+                          <AlbumCard
+                            key={album.id}
+                            album={album}
+                            isOwned={album.ownerId === session.userId}
+                            dateLabel={getAlbumDateLabel(album, locale, t("albums.unknownDate"))}
+                            onClick={() => {
+                              setSelectedAlbumId(album.id);
+                              setSearchInput("");
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </section>
+            </>
           )}
         </section>
       </section>

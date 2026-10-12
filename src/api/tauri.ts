@@ -579,31 +579,33 @@ export async function getPeopleInScope(scope: ViewScope): Promise<PersonSummary[
   return invoke<PersonSummary[]>("get_people_in_scope", { scope });
 }
 
-// Person face thumbnail cache: person ID -> data URL
+// Only scoped callers use the in-memory face cache.
 const personThumbnailCache = new Map<string, string>();
 const personThumbnailRequests = new Map<string, Promise<string>>();
 
 /** Data URL for a person's face thumbnail (deduped + memoized in-memory). */
-export async function getPersonThumbnail(personId: string): Promise<string> {
-  const cached = personThumbnailCache.get(personId);
+export async function getPersonThumbnail(personId: string, accountScope?: string): Promise<string> {
+  if (!accountScope) return invoke<string>("get_person_thumbnail", { personId });
+  const cacheKey = JSON.stringify([accountScope, personId]);
+  const cached = personThumbnailCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  const inFlight = personThumbnailRequests.get(personId);
+  const inFlight = personThumbnailRequests.get(cacheKey);
   if (inFlight) {
     return inFlight;
   }
 
   const promise = invoke<string>("get_person_thumbnail", { personId });
-  personThumbnailRequests.set(personId, promise);
+  personThumbnailRequests.set(cacheKey, promise);
 
   try {
     const result = await promise;
-    personThumbnailCache.set(personId, result);
+    personThumbnailCache.set(cacheKey, result);
     return result;
   } finally {
-    personThumbnailRequests.delete(personId);
+    personThumbnailRequests.delete(cacheKey);
   }
 }
 
@@ -644,7 +646,11 @@ export async function setFoldersBaseDirectory(
   accountId: string,
   baseDirectory: string,
 ): Promise<string> {
-  return invoke<string>("set_folders_base_directory", { accountId, baseDirectory });
+  const result = await invoke<string>("set_folders_base_directory", { accountId, baseDirectory });
+  window.dispatchEvent(
+    new CustomEvent("folders-base-directory-changed", { detail: { accountId } }),
+  );
+  return result;
 }
 
 export async function fetchAlbums(): Promise<AlbumSummary[]> {

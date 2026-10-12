@@ -1,20 +1,23 @@
 import { useEffect, useState } from "react";
 import { Images } from "lucide-react";
 import { getAssetThumbnail } from "../../api/tauri";
-import { useRecentAlbums } from "../../hooks/useRecentAlbums";
 import { useI18n } from "../../i18n";
 import type { AlbumSummary } from "../../types";
+import { SidebarButton } from "../Layout/SidebarButton";
 
 interface RecentAlbumsSectionProps {
-  limit: number;
+  albums: AlbumSummary[];
+  activeAlbumId?: string | null;
   onOpenAlbum: (albumId: string) => void;
 }
 
-export function RecentAlbumsSection({ limit, onOpenAlbum }: RecentAlbumsSectionProps) {
+export function RecentAlbumsSection({
+  albums,
+  activeAlbumId = null,
+  onOpenAlbum,
+}: RecentAlbumsSectionProps) {
   const { t } = useI18n();
-  const recentAlbums = useRecentAlbums(limit);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
-  const albums = recentAlbums.data ?? [];
 
   useEffect(() => {
     let cancelled = false;
@@ -36,35 +39,35 @@ export function RecentAlbumsSection({ limit, onOpenAlbum }: RecentAlbumsSectionP
     };
   }, [albums]);
 
-  if (limit <= 0 || albums.length === 0) return null;
+  if (albums.length === 0) return null;
   return (
-    <section className="mt-3" aria-label={t("albums.recentTitle")}>
-      <h2 className="px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-base-content/50">
+    <section className="shrink-0 space-y-1" aria-label={t("albums.recentTitle")}>
+      <h2 className="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/50">
         {t("albums.recentTitle")}
       </h2>
       <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
         {albums.map((album) => (
-          <button
+          <SidebarButton
             key={album.id}
-            type="button"
-            className="btn btn-md btn-block w-full max-w-none btn-ghost justify-start gap-3 text-left text-sm font-medium"
-            aria-label={t("albums.openRecent", { name: album.albumName })}
+            isActive={album.id === activeAlbumId}
+            label={album.albumName}
+            ariaLabel={t("albums.openRecent", { name: album.albumName })}
             onClick={() => onOpenAlbum(album.id)}
-          >
-            {thumbnails[album.id] ? (
-              <img
-                src={thumbnails[album.id]}
-                alt=""
-                className="h-8 w-8 shrink-0 rounded object-cover"
-                loading="lazy"
-              />
-            ) : (
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-base-200 text-base-content/50">
-                <Images size={16} />
-              </span>
-            )}
-            <span className="truncate">{album.albumName}</span>
-          </button>
+            leading={
+              thumbnails[album.id] ? (
+                <img
+                  src={thumbnails[album.id]}
+                  alt=""
+                  className="h-8 w-8 rounded object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <span className="flex h-8 w-8 items-center justify-center rounded bg-base-200 text-base-content/50">
+                  <Images size={16} />
+                </span>
+              )
+            }
+          />
         ))}
       </nav>
     </section>

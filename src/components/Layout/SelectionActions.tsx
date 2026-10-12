@@ -1,4 +1,4 @@
-import { Check, Clock, Copy, Folder, Link, Plus, BookImage } from "lucide-react";
+import { Clock, Copy, Folder, Link, BookImage, MoreHorizontal, Trash2 } from "lucide-react";
 import { useRef, useState, type MouseEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -10,14 +10,15 @@ import {
   createShareLinkForAssets,
   fetchAlbums,
   getSettings,
-  getAssetThumbnail,
   openFolderInFileExplorer,
 } from "../../api/tauri";
 import type { AlbumSummary } from "../../types";
 import { useI18n } from "../../i18n";
 import { requestFixTime } from "../../api/time";
 import { useSearchTimeI18n } from "../../i18n/searchTime";
-import { AlbumPicker } from "../Albums/AlbumPicker";
+import { AlbumPickerModal } from "../Albums/AlbumPickerModal";
+import type { AlbumChoice } from "../Albums/AlbumPicker";
+import { useAlbumPickerLabels } from "../../i18n/albumPicker";
 
 type SelectionActionsProps = {
   selectedAssetIds: string[];
@@ -32,6 +33,7 @@ type SelectionActionsProps = {
   modalZIndexClass?: string;
   stopPropagation?: boolean;
   showTimeButton?: boolean;
+  onDeleteSelected?: () => void;
 };
 
 export function SelectionActions({
@@ -47,15 +49,13 @@ export function SelectionActions({
   modalZIndexClass = "z-[120]",
   stopPropagation = false,
   showTimeButton = true,
+  onDeleteSelected,
 }: SelectionActionsProps) {
   const [showAlbumModal, setShowAlbumModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [availableAlbums, setAvailableAlbums] = useState<AlbumSummary[]>([]);
-  const [albumThumbnailMap, setAlbumThumbnailMap] = useState<Record<string, string>>({});
   const [isLoadingAlbums, setIsLoadingAlbums] = useState(false);
-  const [selectedAlbumId, setSelectedAlbumId] = useState("");
-  const [newAlbumName, setNewAlbumName] = useState("");
-  const [isSubmittingAlbum, setIsSubmittingAlbum] = useState(false);
+  const [albumLoadError, setAlbumLoadError] = useState<string | null>(null);
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [isCopyingImages, setIsCopyingImages] = useState(false);
   const [isCopyingToLocalFolder, setIsCopyingToLocalFolder] = useState(false);
@@ -80,6 +80,9 @@ export function SelectionActions({
   const { t } = useI18n();
   const canRunSelectionAction = selectedAssetIds.length > 0;
   const tTime = useSearchTimeI18n();
+  const albumLabels = useAlbumPickerLabels();
+  const moreMenuRef = useRef<HTMLDetailsElement>(null);
+  const shareMenuRef = useRef<HTMLDetailsElement>(null);
 
   const getLocalCopyProgress = (
     currentStep: number,
@@ -106,16 +109,9 @@ export function SelectionActions({
 
   const addButtonClass =
     variant === "preview"
-      ? "btn btn-sm border border-white/15 bg-zinc-900 text-white hover:bg-zinc-800"
+      ? "btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white hover:bg-zinc-800"
       : "btn btn-sm btn-outline";
-  // Time correction is local-first (SQLite + offline mutation queue), so it is
-  // only gated on having a selection, never on connectivity or album loading.
-  const updateTimeButtonClass =
-    variant === "preview"
-      ? "btn btn-sm border border-white/15 bg-zinc-900 text-white hover:bg-zinc-800"
-      : addButtonClass;
-  const shareButtonClass =
-    variant === "preview" ? "btn btn-sm btn-primary" : "btn btn-sm btn-primary";
+  const shareButtonClass = variant === "preview" ? addButtonClass : "btn btn-sm btn-primary";
   const shareMenuClass =
     "menu dropdown-content z-[130] mt-2 w-58 rounded-box border border-base-300 bg-base-100 p-1 shadow";
 
@@ -128,37 +124,16 @@ export function SelectionActions({
 
   const loadAlbumsForModal = async () => {
     setIsLoadingAlbums(true);
+    setAlbumLoadError(null);
     try {
       const albums = fetchAlbumsForSelection
         ? await fetchAlbumsForSelection()
         : await fetchAlbums();
-      setAvailableAlbums(albums);
-
-      const thumbnails = await Promise.all(
-        albums.map(async (album) => {
-          if (!album.albumThumbnailAssetId) {
-            return [album.id, null] as const;
-          }
-
-          try {
-            const src = await getAssetThumbnail(album.albumThumbnailAssetId);
-            return [album.id, src] as const;
-          } catch {
-            return [album.id, null] as const;
-          }
-        }),
-      );
-
-      const nextMap: Record<string, string> = {};
-      for (const [albumId, src] of thumbnails) {
-        if (src) {
-          nextMap[albumId] = src;
-        }
-      }
-      setAlbumThumbnailMap(nextMap);
+      setAvailableAlbums(albums.filter((album) => !album.isReadOnly));
+      console.info("[album-picker] loaded cached albums", { count: albums.length });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not load albums";
-      setSelectionError(message);
+      console.error("[album-picker] cached album load failed", error);
+      setAlbumLoadError(error instanceof Error ? error.message : albumLabels.loadFailed);
     } finally {
       setIsLoadingAlbums(false);
     }
@@ -171,54 +146,16 @@ export function SelectionActions({
     await loadAlbumsForModal();
   };
 
-  const submitAddToAlbum = async () => {
-    if (!canRunSelectionAction || !selectedAlbumId) {
-      return;
+  const submitAlbumChoice = async (choice: AlbumChoice | null) => {
+    if (!canRunSelectionAction || !choice) return;
+    if (onAddSelectedToAlbum) {
+      await onAddSelectedToAlbum(choice);
+    } else if (choice.albumId) {
+      await addAssetsToAlbum(choice.albumId, selectedAssetIds);
+    } else if (choice.newAlbumName) {
+      await createAlbumWithAssets(choice.newAlbumName, selectedAssetIds);
     }
-
-    setSelectionError(null);
-    setIsSubmittingAlbum(true);
-    try {
-      if (onAddSelectedToAlbum) {
-        await onAddSelectedToAlbum({ albumId: selectedAlbumId });
-      } else {
-        await addAssetsToAlbum(selectedAlbumId, selectedAssetIds);
-      }
-      setShowAlbumModal(false);
-      setSelectedAlbumId("");
-      onSelectionActionCompleted?.();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to add to album";
-      setSelectionError(message);
-    } finally {
-      setIsSubmittingAlbum(false);
-    }
-  };
-
-  const submitCreateAlbum = async () => {
-    const albumName = newAlbumName.trim();
-    if (!canRunSelectionAction || !albumName) {
-      return;
-    }
-
-    setSelectionError(null);
-    setIsSubmittingAlbum(true);
-    try {
-      if (onAddSelectedToAlbum) {
-        await onAddSelectedToAlbum({ newAlbumName: albumName });
-      } else {
-        await createAlbumWithAssets(albumName, selectedAssetIds);
-      }
-      setShowAlbumModal(false);
-      setNewAlbumName("");
-      onSelectionActionCompleted?.();
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to create album and add photos";
-      setSelectionError(message);
-    } finally {
-      setIsSubmittingAlbum(false);
-    }
+    onSelectionActionCompleted?.();
   };
 
   const submitCreateShareLink = async () => {
@@ -498,6 +435,9 @@ export function SelectionActions({
       <button
         type="button"
         className={addButtonClass}
+        aria-label={t("selectionActions.addToAlbum")}
+        title={t("selectionActions.addToAlbum")}
+        disabled={!canRunSelectionAction}
         onClick={(event) => {
           triggerAction(event, () => {
             void openAlbumModal();
@@ -505,36 +445,42 @@ export function SelectionActions({
         }}
       >
         <BookImage size={16} />
-        {t("selectionActions.addToAlbum")}
+        <span className={variant === "preview" ? "hidden lg:inline" : ""}>
+          {t("selectionActions.addToAlbum")}
+        </span>
       </button>
 
-      {showTimeButton ? (
-        <button
-          type="button"
-          className={updateTimeButtonClass}
-          data-test="selection-update-time"
-          aria-label={tTime("updateTime")}
-          disabled={!canRunSelectionAction}
-          onClick={(event) => {
-            triggerAction(event, () => requestFixTime(selectedAssetIds));
-          }}
-        >
-          <Clock size={16} />
-          {tTime("updateTime")}
-        </button>
-      ) : null}
-
       <details
+        ref={shareMenuRef}
         className="dropdown dropdown-end"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget) && shareMenuRef.current)
+            shareMenuRef.current.open = false;
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && shareMenuRef.current) {
+            event.stopPropagation();
+            shareMenuRef.current.open = false;
+            shareMenuRef.current.querySelector("summary")?.focus();
+          }
+        }}
         onClick={(event) => {
+          if ((event.target as HTMLElement).closest("button") && shareMenuRef.current)
+            shareMenuRef.current.open = false;
           if (stopPropagation) {
             event.stopPropagation();
           }
         }}
       >
-        <summary className={shareButtonClass}>
+        <summary
+          className={shareButtonClass}
+          aria-label={t("selectionActions.share")}
+          title={t("selectionActions.share")}
+        >
           <Link size={16} />
-          {t("selectionActions.share")}
+          <span className={variant === "preview" ? "hidden lg:inline" : ""}>
+            {t("selectionActions.share")}
+          </span>
         </summary>
         <ul className={shareMenuClass}>
           <li>
@@ -596,89 +542,78 @@ export function SelectionActions({
         </ul>
       </details>
 
-      {showAlbumModal ? (
-        <div
-          className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
+      {showTimeButton || onDeleteSelected ? (
+        <details
+          ref={moreMenuRef}
+          className="dropdown dropdown-end ml-auto"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget) && moreMenuRef.current)
+              moreMenuRef.current.open = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && moreMenuRef.current) {
+              event.stopPropagation();
+              moreMenuRef.current.open = false;
+              moreMenuRef.current.querySelector("summary")?.focus();
+            }
+          }}
         >
-          <div className="w-full max-w-xl rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
-            <h3 className="m-0 text-lg font-semibold">{t("selectionActions.addToAlbum")}</h3>
-            <p className="mb-4 mt-1 text-sm text-base-content/70">
-              {t("selectionActions.addToAlbumSubtitle", { subject: shareSubject })}
-            </p>
+          <summary
+            className="btn btn-sm btn-ghost btn-square"
+            aria-label={t("photoGrid.moreActionsAria")}
+          >
+            <MoreHorizontal size={18} />
+          </summary>
+          <ul className={shareMenuClass}>
+            {showTimeButton && (
+              <li>
+                <button
+                  type="button"
+                  data-test="selection-update-time"
+                  disabled={!canRunSelectionAction}
+                  onClick={(event) =>
+                    triggerAction(event, () => {
+                      if (moreMenuRef.current) moreMenuRef.current.open = false;
+                      requestFixTime(selectedAssetIds);
+                    })
+                  }
+                >
+                  <Clock size={16} />
+                  {tTime("updateTime")}
+                </button>
+              </li>
+            )}
+            {onDeleteSelected && (
+              <li>
+                <button
+                  type="button"
+                  disabled={!canRunSelectionAction}
+                  onClick={(event) =>
+                    triggerAction(event, () => {
+                      if (moreMenuRef.current) moreMenuRef.current.open = false;
+                      onDeleteSelected();
+                    })
+                  }
+                >
+                  <Trash2 size={16} />
+                  {t("topBar.delete")}
+                </button>
+              </li>
+            )}
+          </ul>
+        </details>
+      ) : null}
 
-            <div className="mb-3">
-              <label className="label px-0 pb-1 pt-0">
-                <span className="label-text">{t("selectionActions.existingAlbum")}</span>
-              </label>
-
-              <AlbumPicker
-                albums={availableAlbums}
-                value={selectedAlbumId}
-                onChange={setSelectedAlbumId}
-                thumbnails={albumThumbnailMap}
-                loading={isLoadingAlbums}
-                disabled={isSubmittingAlbum}
-              />
-            </div>
-
-            <div className="mb-4 flex gap-2">
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={!selectedAlbumId || isSubmittingAlbum}
-                onClick={() => {
-                  void submitAddToAlbum();
-                }}
-              >
-                <Plus size={16} />
-                {t("selectionActions.addToAlbum")}
-              </button>
-            </div>
-
-            <div className="divider my-2" />
-
-            <div className="mb-3">
-              <label className="label px-0 pb-1 pt-0">
-                <span className="label-text">{t("selectionActions.newAlbumName")}</span>
-              </label>
-              <input
-                type="text"
-                className="input input-bordered w-full"
-                value={newAlbumName}
-                onChange={(event) => setNewAlbumName(event.target.value)}
-                placeholder={t("selectionActions.newAlbumPlaceholder")}
-                disabled={isSubmittingAlbum}
-              />
-            </div>
-
-            {selectionError ? (
-              <div className="alert alert-error mb-3 py-2 text-sm">
-                <span>{selectionError}</span>
-              </div>
-            ) : null}
-
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setShowAlbumModal(false)}
-                disabled={isSubmittingAlbum}
-              >
-                {t("selectionActions.cancel")}
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={!newAlbumName.trim() || isSubmittingAlbum}
-                onClick={() => {
-                  void submitCreateAlbum();
-                }}
-              >
-                {t("selectionActions.createAlbum")}
-              </button>
-            </div>
-          </div>
-        </div>
+      {showAlbumModal ? (
+        <AlbumPickerModal
+          title={t("selectionActions.addToAlbum")}
+          subtitle={t("selectionActions.addToAlbumSubtitle", { subject: shareSubject })}
+          albums={availableAlbums}
+          loading={isLoadingAlbums}
+          error={albumLoadError}
+          onConfirm={submitAlbumChoice}
+          onClose={() => setShowAlbumModal(false)}
+        />
       ) : null}
 
       {showShareModal ? (

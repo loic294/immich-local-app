@@ -24,13 +24,13 @@ function VersionThumbnail({ assetId }: { assetId: string }) {
 function VersionCard({
   asset,
   assetId,
-  index,
-  versionCount,
+  original,
+  remainingCount,
 }: {
   asset: AssetSummary;
   assetId: string;
-  index: number;
-  versionCount: number;
+  original: AssetSummary;
+  remainingCount: number;
 }) {
   const labels = useMediaLabels();
   const queryClient = useQueryClient();
@@ -41,19 +41,24 @@ function VersionCard({
     onSuccess: async (wasQueued) => {
       setQueued(wasQueued);
       setConfirming(false);
+      console.info(`[media:versions] deleted asset=${asset.id} queued=${wasQueued}`);
+      window.dispatchEvent(
+        new CustomEvent("media:versions-changed", {
+          detail: { deletedAssetId: asset.id, sourceAssetId: assetId, original, remainingCount },
+        }),
+      );
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["edit-versions", assetId] }),
+        queryClient.invalidateQueries({ queryKey: ["edit-versions"] }),
         queryClient.invalidateQueries({ queryKey: ["assets"] }),
         queryClient.invalidateQueries({ queryKey: ["album-assets-paged"] }),
         queryClient.invalidateQueries({ queryKey: ["folder-assets-paged"] }),
         queryClient.invalidateQueries({ queryKey: ["calendar-assets-paged"] }),
       ]);
-      window.dispatchEvent(
-        new CustomEvent("media:versions-changed", { detail: { assetId: asset.id } }),
-      );
     },
+    onError: (error) => console.error(`[media:versions] delete failed asset=${asset.id}`, error),
   });
-  const canDelete = asset.isStackSecondary === true;
+  const isOriginal = asset.id === original.id;
+  const canDelete = !isOriginal;
   return (
     <div className="w-20 space-y-1">
       <div
@@ -62,10 +67,12 @@ function VersionCard({
         <button
           type="button"
           className="block w-full"
-          title={`${index === versionCount - 1 ? labels.original : labels.version}: ${asset.originalFileName}`}
+          title={`${isOriginal ? labels.original : labels.version}: ${asset.originalFileName}`}
           onClick={() =>
             window.dispatchEvent(
-              new CustomEvent("media:open-version", { detail: { assetId: asset.id } }),
+              new CustomEvent("media:open-version", {
+                detail: { assetId: asset.id, sourceAssetId: assetId, asset, original },
+              }),
             )
           }
         >
@@ -153,16 +160,16 @@ export function StackVersions({ assetId }: StackVersionsProps) {
     );
   if (!versions.data?.length) return null;
   return (
-    <section className="space-y-2">
+    <section className="mt-3 space-y-2">
       <h3 className="font-semibold">{labels.versions}</h3>
       <div className="flex flex-wrap gap-2">
-        {versions.data.map((asset, index) => (
+        {versions.data.map((asset) => (
           <VersionCard
             key={asset.id}
             asset={asset}
             assetId={assetId}
-            index={index}
-            versionCount={versions.data.length}
+            original={versions.data[versions.data.length - 1]}
+            remainingCount={versions.data.length - 1}
           />
         ))}
       </div>

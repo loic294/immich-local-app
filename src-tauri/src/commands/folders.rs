@@ -40,9 +40,18 @@ pub async fn set_folders_base_directory(
     if !account_exists {
         return Err("account not found".into());
     }
-    state
+    let result = state
         .db
-        .set_folders_base_directory(&account_id, &base_directory)
+        .set_folders_base_directory(&account_id, &base_directory);
+    match &result {
+        Ok(path) => {
+            log::info!("[folders.base_directory] saved account_id={account_id} path={path}")
+        }
+        Err(error) => {
+            log::error!("[folders.base_directory] save failed account_id={account_id}: {error}")
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -65,12 +74,14 @@ pub async fn get_folder_assets_paged(
     sort_direction: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetPage, String> {
-    let sort = SortParams { field: sort_field, direction: sort_direction };
-    let (cached_items, cached_has_next_page) =
-        state
-            .db
-            .get_folder_assets(&path, page, page_size, criteria.as_ref(), Some(&sort))
-            .map_err(|err| format!("folder asset cache read failed: {err}"))?;
+    let sort = SortParams {
+        field: sort_field,
+        direction: sort_direction,
+    };
+    let (cached_items, cached_has_next_page) = state
+        .db
+        .get_folder_assets(&path, page, page_size, criteria.as_ref(), Some(&sort))
+        .map_err(|err| format!("folder asset cache read failed: {err}"))?;
 
     Ok(AssetPage {
         page,
@@ -96,7 +107,10 @@ pub async fn get_cached_folder_full_grid_layout(
         });
     }
 
-    let sort = SortParams { field: sort_field, direction: sort_direction };
+    let sort = SortParams {
+        field: sort_field,
+        direction: sort_direction,
+    };
     let all_assets = state
         .db
         .get_all_folder_assets(&path, criteria.as_ref(), Some(&sort))

@@ -1086,7 +1086,17 @@ pub async fn flush_pending_mutations(state: tauri::State<'_, AppState>) -> Resul
         let client = state.client_for(Some(&mutation.account_id));
 
         let result = match mutation.kind.as_str() {
-            "delete_version" => client.trash_asset(&mutation.asset_id).await.map(|_| None),
+            "delete_version" => match payload
+                .get("originalAssetId")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(original) => client
+                    .trash_edit_version(&mutation.asset_id, original)
+                    .await
+                    .map(|_| None),
+                // Older queue entries only permitted deletion of secondary edits.
+                None => client.trash_asset(&mutation.asset_id).await.map(|_| None),
+            },
             "favorite" => {
                 let is_favorite = payload
                     .get("isFavorite")

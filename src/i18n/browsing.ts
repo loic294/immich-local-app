@@ -24,6 +24,18 @@ const messages = {
     openMap: "Open in map",
     location: "Location",
     retry: "Retry",
+    showUnnamed: "Show unnamed people",
+    assignPerson: "Assign a person",
+    assignPersonHelp:
+      "Select an existing person to merge these faces, or enter a new name to create a named person. Merging cannot be undone here.",
+    personName: "Search or enter a new name",
+    noNamedPeople: "No matching named people in the local cache.",
+    mergePerson: "Merge into selected person",
+    createPerson: "Create person",
+    hidePerson: "Hide person",
+    cancel: "Cancel",
+    peopleMutationOffline:
+      "Connect to Immich to create, merge, or hide people. Cached browsing and search remain available.",
   },
   "fr-CA": {
     people: "Personnes",
@@ -50,6 +62,18 @@ const messages = {
     openMap: "Ouvrir sur la carte",
     location: "Lieu",
     retry: "Réessayer",
+    showUnnamed: "Afficher les personnes sans nom",
+    assignPerson: "Attribuer une personne",
+    assignPersonHelp:
+      "Sélectionnez une personne existante pour fusionner ces visages, ou entrez un nouveau nom pour créer une personne nommée. La fusion ne peut pas être annulée ici.",
+    personName: "Rechercher ou entrer un nouveau nom",
+    noNamedPeople: "Aucune personne nommée correspondante dans le cache local.",
+    mergePerson: "Fusionner avec la personne sélectionnée",
+    createPerson: "Créer une personne",
+    hidePerson: "Masquer la personne",
+    cancel: "Annuler",
+    peopleMutationOffline:
+      "Connectez-vous à Immich pour créer, fusionner ou masquer des personnes. La navigation et la recherche en cache restent disponibles.",
   },
 };
 

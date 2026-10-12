@@ -9,6 +9,7 @@ pub struct BrowsingPerson {
     #[serde(flatten)]
     pub person: PersonSummary,
     pub asset_count: i64,
+    pub account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,9 +98,104 @@ fn coordinates(json: &str) -> Option<(f64, f64)> {
 }
 
 impl Database {
+    pub fn apply_person_update(
+        &self,
+        account_id: &str,
+        person_id: &str,
+        name: Option<&str>,
+        hidden: Option<bool>,
+    ) -> Result<(), String> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE people SET name=COALESCE(?1,name), is_hidden=COALESCE(?2,is_hidden)
+             WHERE id=?3 AND account_id=?4",
+            rusqlite::params![name, hidden, person_id, account_id],
+        )
+        .map_err(|e| e.to_string())?;
+        if name.is_some() {
+            Self::refresh_cached_person_names(&tx, account_id, person_id)?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    pub fn apply_person_merge(
+        &self,
+        account_id: &str,
+        source_id: &str,
+        target_id: &str,
+    ) -> Result<(), String> {
+        let mut conn = self.open()?;
+        Self::merge_people_cache(&mut conn, account_id, source_id, target_id)
+    }
+
+    fn merge_people_cache(
+        conn: &mut Connection,
+        account_id: &str,
+        source_id: &str,
+        target_id: &str,
+    ) -> Result<(), String> {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT OR IGNORE INTO asset_people(asset_id,person_id,account_id)
+             SELECT asset_id,?1,account_id FROM asset_people WHERE person_id=?2 AND account_id=?3",
+            rusqlite::params![target_id, source_id, account_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM asset_people WHERE person_id=?1 AND account_id=?2",
+            rusqlite::params![source_id, account_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM people WHERE id=?1 AND account_id=?2",
+            rusqlite::params![source_id, account_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Self::refresh_cached_person_names(&tx, account_id, target_id)?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    fn refresh_cached_person_names(
+        conn: &Connection,
+        account_id: &str,
+        person_id: &str,
+    ) -> Result<(), String> {
+        conn.execute(
+            "UPDATE assets SET people=(
+               SELECT GROUP_CONCAT(name, ', ') FROM (
+                 SELECT DISTINCT p.name FROM people p
+                 JOIN asset_people ap ON ap.person_id=p.id AND ap.account_id=p.account_id
+                 WHERE ap.asset_id=assets.id AND ap.account_id=?2 AND TRIM(COALESCE(p.name,''))<>''
+                 ORDER BY p.name COLLATE NOCASE
+               )
+             ) WHERE account_id=?2 AND id IN (
+               SELECT asset_id FROM asset_people WHERE person_id=?1 AND account_id=?2
+             )",
+            rusqlite::params![person_id, account_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn browsing_people(&self) -> Result<Vec<BrowsingPerson>, String> {
         let conn = self.open()?;
         read_people(&conn)
+    }
+
+    pub fn browsing_named_people(&self, account_id: &str) -> Result<Vec<BrowsingPerson>, String> {
+        let conn = self.open()?;
+        Ok(read_people_for_assignment(&conn, true)?
+            .into_iter()
+            .filter(|person| {
+                person.account_id == account_id
+                    && person
+                        .person
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| !name.trim().is_empty())
+            })
+            .collect())
     }
 
     pub fn browsing_map_markers(&self) -> Result<Vec<MapMarker>, String> {
@@ -119,19 +215,27 @@ impl Database {
 }
 
 fn read_people(conn: &Connection) -> Result<Vec<BrowsingPerson>, String> {
+    read_people_for_assignment(conn, false)
+}
+
+fn read_people_for_assignment(
+    conn: &Connection,
+    include_empty_named: bool,
+) -> Result<Vec<BrowsingPerson>, String> {
     let visible = visible_assets(conn, "a")?;
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT p.id, p.name, p.is_hidden, p.thumbnail_path, COUNT(DISTINCT a.id)
-             FROM people p LEFT JOIN asset_people ap ON ap.person_id=p.id
-             LEFT JOIN assets a ON a.id=ap.asset_id AND ({visible})
-             WHERE COALESCE(p.is_hidden,0)=0 GROUP BY p.id HAVING COUNT(DISTINCT a.id)>0
+            "SELECT p.id, p.name, p.is_hidden, p.thumbnail_path, COUNT(DISTINCT a.id), p.account_id
+             FROM people p LEFT JOIN asset_people ap ON ap.person_id=p.id AND ap.account_id=p.account_id
+             LEFT JOIN assets a ON a.id=ap.asset_id AND a.account_id=ap.account_id AND ({visible})
+             WHERE COALESCE(p.is_hidden,0)=0 GROUP BY p.id
+             HAVING COUNT(DISTINCT a.id)>0 OR (?1 AND TRIM(COALESCE(p.name,''))<>'')
              ORDER BY CASE WHEN TRIM(COALESCE(p.name,''))='' THEN 1 ELSE 0 END,
                 p.name COLLATE NOCASE, p.id"
         ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |row| {
+        .query_map([include_empty_named], |row| {
             Ok(BrowsingPerson {
                 person: PersonSummary {
                     id: row.get(0)?,
@@ -140,6 +244,7 @@ fn read_people(conn: &Connection) -> Result<Vec<BrowsingPerson>, String> {
                     thumbnail_path: row.get(3)?,
                 },
                 asset_count: row.get(4)?,
+                account_id: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -264,10 +369,11 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE assets(id TEXT PRIMARY KEY, original_file_name TEXT,original_path TEXT,
              file_created_at TEXT,checksum TEXT,asset_type TEXT,duration TEXT,is_favorite INTEGER,
-             is_archived INTEGER,visibility TEXT,rating INTEGER,width INTEGER,height INTEGER,thumbhash TEXT,exif_info_json TEXT);
-             CREATE TABLE people(id TEXT PRIMARY KEY,name TEXT,is_hidden INTEGER,thumbnail_path TEXT);
-             CREATE TABLE asset_people(asset_id TEXT,person_id TEXT,PRIMARY KEY(asset_id,person_id));
-             INSERT INTO people VALUES('alice','Alice',0,NULL),('private','Private',0,NULL),('hidden-person','Hidden',1,NULL);
+             is_archived INTEGER,visibility TEXT,rating INTEGER,width INTEGER,height INTEGER,thumbhash TEXT,exif_info_json TEXT,
+             people TEXT, account_id TEXT NOT NULL DEFAULT 'account');
+             CREATE TABLE people(id TEXT PRIMARY KEY,name TEXT,is_hidden INTEGER,thumbnail_path TEXT,account_id TEXT NOT NULL DEFAULT 'account');
+             CREATE TABLE asset_people(asset_id TEXT,person_id TEXT,account_id TEXT NOT NULL DEFAULT 'account',PRIMARY KEY(asset_id,person_id));
+             INSERT INTO people(id,name,is_hidden,thumbnail_path) VALUES('alice','Alice',0,NULL),('private','Private',0,NULL),('hidden-person','Hidden',1,NULL);
              INSERT INTO assets(id,original_file_name,file_created_at,width,height,thumbhash,exif_info_json)
              VALUES('zero','zero.jpg','2026-01-01',1000,600,'hash','{\"latitude\":\"0\",\"longitude\":0}'),
              ('dateline','dateline.jpg','2026-02-01',800,500,NULL,'{\"latitude\":1,\"longitude\":-175}'),
@@ -278,7 +384,7 @@ mod tests {
              VALUES('locked','locked.jpg','locked',0,'{\"latitude\":0,\"longitude\":0}'),
              ('hidden','hidden.jpg','hidden',0,'{\"latitude\":0,\"longitude\":0}'),
              ('archive','archive.jpg','timeline',1,'{\"latitude\":0,\"longitude\":0}');
-             INSERT INTO asset_people VALUES('zero','alice'),('locked','alice'),('locked','private'),
+             INSERT INTO asset_people(asset_id,person_id) VALUES('zero','alice'),('locked','alice'),('locked','private'),
              ('hidden','private'),('archive','private'),('zero','hidden-person');"
         ).unwrap();
         conn
@@ -300,6 +406,7 @@ mod tests {
         assert_eq!(people.len(), 1);
         assert_eq!(people[0].person.id, "alice");
         assert_eq!(people[0].asset_count, 1);
+        assert_eq!(people[0].account_id, "account");
         let assets = read_map_assets(&conn, &world(), None).unwrap();
         assert_eq!(assets.len(), 2);
         assert_eq!(assets[1].id, "zero");
@@ -320,6 +427,65 @@ mod tests {
         let assets = read_map_assets(&conn, &dateline, Some(&ids)).unwrap();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].id, "zero");
+    }
+    #[test]
+    fn assignment_includes_named_people_without_visible_assets_but_never_hidden() {
+        let conn = fixture();
+        let candidates = read_people_for_assignment(&conn, true).unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[1].person.id, "private");
+        assert_eq!(candidates[1].asset_count, 0);
+        assert!(!candidates.iter().any(|p| p.person.is_hidden));
+    }
+
+    #[test]
+    fn people_counts_ignore_junctions_and_assets_from_unrelated_accounts() {
+        let conn = fixture();
+        conn.execute_batch(
+            "INSERT INTO assets(id,original_file_name,account_id)
+             VALUES('foreign','foreign.jpg','other');
+             INSERT INTO asset_people(asset_id,person_id,account_id)
+             VALUES('dateline','alice','other'),('foreign','alice','account'),
+                   ('invalid','private','other'),('foreign','private','account');",
+        )
+        .unwrap();
+        let people = read_people(&conn).unwrap();
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].person.id, "alice");
+        assert_eq!(people[0].account_id, "account");
+        assert_eq!(people[0].asset_count, 1);
+        let candidates = read_people_for_assignment(&conn, true).unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].asset_count, 1);
+        assert_eq!(candidates[1].asset_count, 0);
+    }
+
+    #[test]
+    fn merge_cache_moves_faces_deduplicates_and_is_account_scoped() {
+        let mut conn = fixture();
+        conn.execute_batch(
+            "INSERT INTO people(id,name,is_hidden) VALUES('source','',0);
+             INSERT INTO asset_people(asset_id,person_id) VALUES('zero','source'),('dateline','source');
+             INSERT INTO asset_people(asset_id,person_id,account_id) VALUES('invalid','source','other');"
+        ).unwrap();
+        Database::merge_people_cache(&mut conn, "account", "source", "alice").unwrap();
+        let people = read_people(&conn).unwrap();
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].asset_count, 2);
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM asset_people WHERE person_id='source' AND account_id='other'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 1);
+        let names: String = conn
+            .query_row("SELECT people FROM assets WHERE id='dateline'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(names, "Alice");
     }
     #[test]
     fn optional_stack_column_excludes_secondary_versions() {

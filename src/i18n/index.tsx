@@ -138,7 +138,11 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       foldersBaseDirectoryPlaceholder: "For example: /photos/2024",
       saveFoldersBaseDirectory: "Save base directory",
       foldersBaseDirectorySaved: "Base directory saved.",
-      foldersBaseDirectoryInvalid: "Choose a folder path that exists in the cached library.",
+      foldersBaseDirectoryInvalid:
+        "Could not save. The previous directory is unchanged. Choose an absolute folder path that exists in the cached library.",
+      foldersBaseDirectoryLoadFailed:
+        "Could not read the saved base directory. Retry before editing.",
+      foldersBaseDirectoryRetry: "Retry loading",
       myPhotosDescription:
         "Define which photos are considered yours using date ranges and a camera. The My Photos filter will match assets that satisfy any rule below.",
       myPhotosEmpty:
@@ -419,8 +423,6 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
     photoGrid: {
       loaded: "{count} loaded",
       loadedAll: "{count} loaded (all)",
-      jumpToDateAria: "Jump to date",
-      jumpToDate: "Jump to Date",
       loadingMoreAssets: "Loading more assets...",
       noMoreAssets: "No more assets to load.",
       backAria: "Back",
@@ -468,12 +470,6 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       labelPeople: "People",
       labelTags: "Tags",
       unknownValue: "-",
-      datePickerTitle: "Jump to Date",
-      datePickerYear: "Year",
-      datePickerMonth: "Month",
-      datePickerNoPhotos: "No photos available for this month",
-      datePickerCancel: "Cancel",
-      closeDatePickerAria: "Close date picker",
       openThumbnailAria: "Open {name}",
       assetStatus: {
         unavailable: "Image unavailable",
@@ -670,7 +666,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       saveFoldersBaseDirectory: "Enregistrer le répertoire de base",
       foldersBaseDirectorySaved: "Répertoire de base enregistré.",
       foldersBaseDirectoryInvalid:
-        "Choisissez un chemin de dossier présent dans la bibliothèque en cache.",
+        "Échec de l’enregistrement. Le répertoire précédent est conservé. Choisissez un chemin absolu présent dans la bibliothèque en cache.",
+      foldersBaseDirectoryLoadFailed:
+        "Impossible de lire le répertoire enregistré. Réessayez avant de le modifier.",
+      foldersBaseDirectoryRetry: "Réessayer le chargement",
       myPhotosDescription:
         "Définissez quelles photos sont les vôtres avec des plages de dates et un appareil. Le filtre Mes photos correspondra aux éléments qui respectent au moins une règle.",
       myPhotosEmpty:
@@ -951,8 +950,6 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
     photoGrid: {
       loaded: "{count} charges",
       loadedAll: "{count} charges (tous)",
-      jumpToDateAria: "Aller à une date",
-      jumpToDate: "Aller à la date",
       loadingMoreAssets: "Chargement de plus d'éléments...",
       noMoreAssets: "Aucun autre élément à charger.",
       backAria: "Retour",
@@ -1000,12 +997,6 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       labelPeople: "Personnes",
       labelTags: "Étiquettes",
       unknownValue: "-",
-      datePickerTitle: "Aller à la date",
-      datePickerYear: "Année",
-      datePickerMonth: "Mois",
-      datePickerNoPhotos: "Aucune photo disponible pour ce mois",
-      datePickerCancel: "Annuler",
-      closeDatePickerAria: "Fermer le sélecteur de date",
       openThumbnailAria: "Ouvrir {name}",
       assetStatus: {
         unavailable: "Image indisponible",

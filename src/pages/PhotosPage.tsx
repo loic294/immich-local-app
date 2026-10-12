@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useAssetDays } from "../hooks/useAssetDays";
 import { useMemories } from "../hooks/useMemories";
 import { AppTopBar } from "../components/Layout/AppTopBar";
 import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
@@ -93,14 +92,6 @@ export function PhotosPage({
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
 
   const assetsWindow = useAssetWindow(
-    true,
-    searchTerm,
-    refreshToken,
-    assetFilter,
-    filterPayload,
-    sortPreference,
-  );
-  const assetDaysQuery = useAssetDays(
     true,
     searchTerm,
     refreshToken,
@@ -367,9 +358,6 @@ export function PhotosPage({
               isFetching={assetsWindow.isFetchingNextPage}
               isFetchingPrevious={assetsWindow.isFetchingPreviousPage}
               hasPreviousPage={assetsWindow.hasPreviousPage}
-              availableDates={
-                sortPreference.field === "filename" ? undefined : (assetDaysQuery.data ?? [])
-              }
               hasNextPage={assetsWindow.hasNextPage}
               maxHeight={photoGridHeight}
               onLoadMore={() => assetsWindow.loadNextPage()}

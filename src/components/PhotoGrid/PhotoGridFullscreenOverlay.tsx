@@ -9,6 +9,7 @@ import {
   Info,
   MoreHorizontal,
   Clock,
+  Pencil,
 } from "lucide-react";
 import { SelectionActions } from "../Layout/SelectionActions";
 import { useI18n } from "../../i18n";
@@ -31,6 +32,7 @@ import { requestMediaEdit } from "../../api/media";
 import { requestFixTime } from "../../api/time";
 import { useSearchTimeI18n } from "../../i18n/searchTime";
 import { useMediaLabels } from "../../i18n/media";
+import { isMacPlatform } from "../../utils/platform";
 
 interface PhotoGridFullscreenOverlayProps {
   activeAsset: AssetSummary;
@@ -102,6 +104,42 @@ export function PhotoGridFullscreenOverlay({
   const { t } = useI18n();
   const timeLabels = useSearchTimeI18n();
   const mediaLabels = useMediaLabels();
+  const mac = isMacPlatform();
+  const moreMenuRef = React.useRef<HTMLDetailsElement>(null);
+  const toolbarRef = React.useRef<HTMLDivElement>(null);
+  const editLabelRef = React.useRef<HTMLSpanElement>(null);
+  const [showEditLabel, setShowEditLabel] = React.useState(true);
+  React.useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    const label = editLabelRef.current;
+    const header = toolbar?.parentElement;
+    if (!toolbar || !label || !header) return;
+    const update = () => {
+      const gap = Number.parseFloat(getComputedStyle(toolbar).columnGap) || 0;
+      const button = label.parentElement!;
+      const labelSpace =
+        label.getBoundingClientRect().width +
+        (Number.parseFloat(getComputedStyle(button).columnGap) || 0);
+      const currentWidth =
+        Array.from(toolbar.children).reduce(
+          (width, child) => width + child.getBoundingClientRect().width,
+          0,
+        ) +
+        gap * (toolbar.children.length - 1);
+      const requiredWidth = currentWidth + (showEditLabel ? 0 : labelSpace);
+      setShowEditLabel(requiredWidth <= header.clientWidth);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [
+    showEditLabel,
+    mediaLabels.edit,
+    activeAsset.type,
+    activeAsset.livePhotoVideoId,
+    isPlayingLivePhoto,
+  ]);
   const [isDownloading, setIsDownloading] = React.useState(false);
   const downloadProgressRef = React.useRef<number>(0);
   const [downloadProgress, setDownloadProgress] = React.useState<number | null>(null);
@@ -184,116 +222,160 @@ export function PhotoGridFullscreenOverlay({
       className="group fixed inset-0 z-9999 flex items-center justify-center bg-black p-6"
       role="dialog"
       aria-modal="true"
+      aria-label={activeAsset.originalFileName}
     >
-      <button
-        type="button"
-        className="btn btn-circle btn-sm btn-ghost absolute left-4 top-4 border border-white/15 bg-zinc-900 text-white"
-        aria-label={t("photoGrid.backAria")}
-        onClick={(event) => {
-          event.stopPropagation();
-          onClose();
-          onSetIsPlayingLivePhoto(false);
-        }}
-      >
-        <ArrowLeft size={20} />
-      </button>
-
-      <div className="pointer-events-auto absolute left-20 top-4">
-        <AssetStatusBadge
-          assetState={assetState}
-          onDownloadClick={handleStatusBadgeDownload}
-          downloadProgress={downloadProgress}
-          shareProgress={shareProgress}
-        />
-      </div>
-
+      {mac && (
+        <div aria-hidden="true" data-tauri-drag-region className="absolute inset-x-0 top-0 h-12" />
+      )}
       <div
-        className="pointer-events-auto absolute left-[max(20rem,27vw)] right-[min(48vw,40rem)] top-4 z-40 truncate rounded-xl px-4 py-1.5 text-left text-sm font-medium text-white/95 select-text"
-        onClick={(event) => event.stopPropagation()}
+        className={`absolute inset-x-4 z-40 flex flex-wrap items-center gap-2 ${mac ? "top-12" : "top-4"}`}
       >
-        {activeAsset.originalFileName}
-      </div>
-
-      <div className="pointer-events-auto absolute right-4 top-4 z-40 flex items-center gap-2">
-        {activeAsset.livePhotoVideoId && isPlayingLivePhoto ? (
-          <button
-            type="button"
-            className="btn btn-circle btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
-            aria-label={t("photoGrid.playLiveAgainAria")}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSetIsPlayingLivePhoto(false);
-            }}
-          >
-            <CirclePlay size={20} />
-          </button>
-        ) : null}
-
-        {!isVideoAsset(activeAsset) ? (
-          <>
-            <div className="w-px bg-white/10" />
-            <div onClick={(event) => event.stopPropagation()}>
-              <ZoomControl zoomLevel={zoom} onZoomChange={onZoomChange} />
-            </div>
-          </>
-        ) : null}
-
-        {!isVideoAsset(activeAsset) && (
-          <button
-            type="button"
-            className="btn btn-sm border border-white/15 bg-zinc-900 text-white"
-            onClick={(event) => {
-              event.stopPropagation();
-              requestMediaEdit([activeAsset.id]);
-            }}
-          >
-            {mediaLabels.edit}
-          </button>
-        )}
-        <div className="h-4 border-l border-white/25" />
-        <SelectionActions
-          selectedAssetIds={[activeAsset.id]}
-          selectedCount={1}
-          variant="preview"
-          modalZIndexClass="z-[10010]"
-          stopPropagation
-          disableCopy={isVideoAsset(activeAsset)}
-          onCopyProgress={setShareProgress}
-          showTimeButton={false}
-        />
-
-        <details className="dropdown dropdown-end" onClick={(event) => event.stopPropagation()}>
-          <summary
-            className="btn btn-circle btn-sm border border-white/15 bg-zinc-900 text-white"
-            aria-label={t("photoGrid.moreActionsAria")}
-          >
-            <MoreHorizontal size={18} />
-          </summary>
-          <ul className="menu dropdown-content z-[10010] mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-1 text-base-content shadow-xl">
-            <li>
-              <button type="button" onClick={() => requestFixTime([activeAsset.id])}>
-                <Clock size={14} /> {timeLabels("updateTime")}
-              </button>
-            </li>
-          </ul>
-        </details>
-
         <button
           type="button"
-          className={`btn btn-sm border border-white/15 ${showInfoPanel ? "bg-white text-black hover:bg-white" : "bg-zinc-900 text-white"}`}
-          aria-label={t("photoGrid.toggleInfoAria")}
+          className="btn btn-circle btn-sm btn-ghost shrink-0 border border-white/15 bg-zinc-900 text-white"
+          aria-label={t("photoGrid.backAria")}
           onClick={(event) => {
             event.stopPropagation();
-            onToggleInfoPanel();
+            onClose();
+            onSetIsPlayingLivePhoto(false);
           }}
         >
-          <Info size={16} />
-          {t("photoGrid.info")}
+          <ArrowLeft size={20} />
         </button>
+
+        <div className="pointer-events-auto shrink-0">
+          <AssetStatusBadge
+            assetState={assetState}
+            onDownloadClick={handleStatusBadgeDownload}
+            downloadProgress={downloadProgress}
+            shareProgress={shareProgress}
+          />
+        </div>
+
+        <div
+          className="pointer-events-auto min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm font-medium text-white/95 select-text"
+          title={activeAsset.originalFileName}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {activeAsset.originalFileName}
+        </div>
+
+        <div
+          ref={toolbarRef}
+          className="pointer-events-auto ml-auto flex max-w-full flex-wrap items-center justify-end gap-1 sm:gap-2"
+        >
+          {!isVideoAsset(activeAsset) ? (
+            <>
+              <div onClick={(event) => event.stopPropagation()}>
+                <ZoomControl zoomLevel={zoom} onZoomChange={onZoomChange} />
+              </div>
+              <div aria-hidden="true" className="h-4 w-px bg-white/25" />
+            </>
+          ) : null}
+
+          <SelectionActions
+            selectedAssetIds={[activeAsset.id]}
+            selectedCount={1}
+            variant="preview"
+            modalZIndexClass="z-[10010]"
+            stopPropagation
+            disableCopy={isVideoAsset(activeAsset)}
+            onCopyProgress={setShareProgress}
+            showTimeButton={false}
+          />
+          <div aria-hidden="true" className="h-4 w-px bg-white/25" />
+          {!isVideoAsset(activeAsset) && (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost border border-white/15 bg-zinc-900 text-white"
+              aria-label={mediaLabels.edit}
+              title={mediaLabels.edit}
+              onClick={(event) => {
+                event.stopPropagation();
+                requestMediaEdit([activeAsset.id]);
+              }}
+            >
+              <Pencil size={16} />
+              <span
+                ref={editLabelRef}
+                className={showEditLabel ? "" : "pointer-events-none absolute invisible"}
+                aria-hidden={!showEditLabel}
+              >
+                {mediaLabels.edit}
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className={`btn btn-sm btn-ghost border border-white/15 ${showInfoPanel ? "bg-white text-black hover:bg-white" : "bg-zinc-900 text-white"}`}
+            aria-label={t("photoGrid.toggleInfoAria")}
+            aria-pressed={showInfoPanel}
+            title={t("photoGrid.info")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleInfoPanel();
+            }}
+          >
+            <Info size={16} />
+            <span className="hidden lg:inline">{t("photoGrid.info")}</span>
+          </button>
+
+          <details
+            ref={moreMenuRef}
+            className="dropdown dropdown-end"
+            onClick={(event) => event.stopPropagation()}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget) && moreMenuRef.current)
+                moreMenuRef.current.open = false;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && moreMenuRef.current) {
+                event.stopPropagation();
+                moreMenuRef.current.open = false;
+                moreMenuRef.current.querySelector("summary")?.focus();
+              }
+            }}
+          >
+            <summary
+              className="btn btn-square btn-sm btn-ghost text-white hover:bg-white/10"
+              aria-label={t("photoGrid.moreActionsAria")}
+            >
+              <MoreHorizontal size={18} />
+            </summary>
+            <ul className="menu dropdown-content z-[10010] mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-1 text-base-content shadow-xl">
+              {activeAsset.livePhotoVideoId && isPlayingLivePhoto && (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (moreMenuRef.current) moreMenuRef.current.open = false;
+                      onSetIsPlayingLivePhoto(false);
+                    }}
+                  >
+                    <CirclePlay size={16} />
+                    {t("photoGrid.playLiveAgainAria")}
+                  </button>
+                </li>
+              )}
+              <li>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (moreMenuRef.current) moreMenuRef.current.open = false;
+                    requestFixTime([activeAsset.id]);
+                  }}
+                >
+                  <Clock size={14} /> {timeLabels("updateTime")}
+                </button>
+              </li>
+            </ul>
+          </details>
+        </div>
       </div>
 
       <div
-        className="pointer-events-none flex h-full w-full items-stretch gap-4 pt-16"
+        className={`pointer-events-none flex h-full w-full items-stretch gap-4 ${mac ? "pt-40 lg:pt-20" : "pt-28 lg:pt-16"}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-2">
@@ -357,7 +439,7 @@ export function PhotoGridFullscreenOverlay({
                   {assetState.videoDownloadProgress !== null ? (
                     <div className="h-1.5 w-48 overflow-hidden rounded-full bg-white/20">
                       <div
-                        className="h-full bg-primary transition-all duration-300"
+                        className="h-full bg-white/70 transition-all duration-300"
                         style={{ width: `${assetState.videoDownloadProgress}%` }}
                       />
                     </div>
@@ -441,7 +523,7 @@ export function PhotoGridFullscreenOverlay({
             )}
           </div>
 
-          <div className="pointer-events-auto mx-auto w-full max-w-5xl">
+          <div className="pointer-events-auto mx-auto w-full max-w-5xl [&_svg]:text-white/80! [&_.fill-warning]:fill-white/80! [&_.fill-error]:fill-white/80!">
             <FullscreenMetadataBar
               asset={activeAsset}
               isUpdatingFavorite={favoriteUpdateId === activeAsset.id}

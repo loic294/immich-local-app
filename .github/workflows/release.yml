@@ -96,6 +96,7 @@ jobs:
         shell: bash
         run: |
           npm run build
+          npm test
           cargo test --manifest-path src-tauri/Cargo.toml --locked
 
       - name: Build and publish

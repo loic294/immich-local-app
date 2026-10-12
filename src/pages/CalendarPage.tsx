@@ -83,7 +83,7 @@ export function CalendarPage({ session, onNavigate, onLogout }: CalendarPageProp
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage="calendar" onNavigate={onNavigate} />
 
-      <section className="flex min-w-0 h-screen flex-col">
+      <section className="flex min-h-0 min-w-0 h-screen flex-col overflow-hidden">
         <AppTopBar
           session={session}
           onLogout={onLogout}
@@ -92,55 +92,58 @@ export function CalendarPage({ session, onNavigate, onLogout }: CalendarPageProp
           searchPlaceholder={t("calendar.monthSearchPlaceholder")}
         />
 
-        <section className="flex-1 min-h-0 overflow-y-auto p-2 sm:p-3 lg:p-4">
-          <h1 className="mb-4 text-2xl font-bold text-base-content">{t("calendar.title")}</h1>
+        <section className="flex min-h-0 flex-1 flex-col gap-4 p-2 sm:p-3 lg:p-4">
+          <h1 className="shrink-0 text-2xl font-bold text-base-content">{t("calendar.title")}</h1>
 
-          {timelineQuery.isError ? (
-            <div role="alert" className="alert alert-error alert-soft text-sm">
-              <span>
-                {(timelineQuery.error as Error | null)?.message ?? t("calendar.loadTimelineFailed")}
-              </span>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {timelineQuery.isError ? (
+              <div role="alert" className="alert alert-error alert-soft text-sm">
+                <span>
+                  {(timelineQuery.error as Error | null)?.message ??
+                    t("calendar.loadTimelineFailed")}
+                </span>
+              </div>
+            ) : null}
+
+            {timelineQuery.isLoading ? (
+              <div className="flex items-center gap-2 py-8 text-sm text-base-content/70">
+                <span className="loading loading-spinner loading-sm" />
+                {t("calendar.loadingTimeline")}
+              </div>
+            ) : null}
+
+            {!timelineQuery.isLoading && yearGroups.length === 0 ? (
+              <div className="alert alert-info alert-soft text-sm">
+                <span>{t("calendar.noPhotos")}</span>
+              </div>
+            ) : null}
+
+            <div className="space-y-8">
+              {yearGroups.map(({ year, months }) => (
+                <section key={year}>
+                  <h2 className="mb-3 text-3xl font-semibold text-base-content">{year}</h2>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+                    {months.map((month) => (
+                      <button
+                        key={month}
+                        type="button"
+                        onClick={() => setSelected({ year, month })}
+                        className="card card-sm bg-base-100 ring-1 ring-base-300/80 shadow-sm text-left transition hover:-translate-y-0.5 hover:shadow-md"
+                      >
+                        <div className="card-body p-4">
+                          <p className="text-base font-semibold text-base-content">
+                            {new Date(year, month - 1, 1).toLocaleString(locale, {
+                              month: "long",
+                            })}
+                          </p>
+                          <p className="text-xs text-base-content/50">{year}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
-          ) : null}
-
-          {timelineQuery.isLoading ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-base-content/70">
-              <span className="loading loading-spinner loading-sm" />
-              {t("calendar.loadingTimeline")}
-            </div>
-          ) : null}
-
-          {!timelineQuery.isLoading && yearGroups.length === 0 ? (
-            <div className="alert alert-info alert-soft text-sm">
-              <span>{t("calendar.noPhotos")}</span>
-            </div>
-          ) : null}
-
-          <div className="space-y-8">
-            {yearGroups.map(({ year, months }) => (
-              <section key={year}>
-                <h2 className="mb-3 text-3xl font-semibold text-base-content">{year}</h2>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
-                  {months.map((month) => (
-                    <button
-                      key={month}
-                      type="button"
-                      onClick={() => setSelected({ year, month })}
-                      className="card card-sm bg-base-100 ring-1 ring-base-300/80 shadow-sm text-left transition hover:-translate-y-0.5 hover:shadow-md"
-                    >
-                      <div className="card-body p-4">
-                        <p className="text-base font-semibold text-base-content">
-                          {new Date(year, month - 1, 1).toLocaleString(locale, {
-                            month: "long",
-                          })}
-                        </p>
-                        <p className="text-xs text-base-content/50">{year}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ))}
           </div>
         </section>
       </section>
@@ -230,7 +233,7 @@ function MonthView({ session, onNavigate, onLogout, year, month, onBack }: Month
     };
   }, [year, month, isOnline, queryClient]);
 
-  // Calculate PhotoGrid height dynamically
+  // Measure only the space remaining below the fixed month header.
   useEffect(() => {
     if (!contentRef.current) {
       return;
@@ -241,46 +244,15 @@ function MonthView({ session, onNavigate, onLogout, year, month, onBack }: Month
         return;
       }
 
-      const container = contentRef.current;
-      const title = container.querySelector('[data-test="month-title"]') as HTMLElement;
-      const errorAlert = container.querySelector('[data-test="error-alert"]') as HTMLElement;
-
-      const padding = 16; // padding from p-2 sm:p-3 lg:p-4 (bottom only)
-      let usedHeight = padding;
-
-      if (title) {
-        usedHeight += title.offsetHeight + 8; // gap
-      }
-      if (errorAlert) {
-        usedHeight += errorAlert.offsetHeight + 8; // gap
-      }
-
-      // Get the position of container element
-      const containerTop = container.getBoundingClientRect().top;
-      const containerHeight = window.innerHeight - containerTop - padding;
-      const availableHeight = containerHeight - (usedHeight - padding);
-      setPhotoGridHeight(Math.max(300, availableHeight));
+      setPhotoGridHeight(contentRef.current.clientHeight);
     };
 
     // Calculate on mount and when window is resized
     calculateHeight();
     const resizeObserver = new ResizeObserver(calculateHeight);
     resizeObserver.observe(contentRef.current);
-    const mutationObserver = new MutationObserver(() => {
-      // Recalculate after mutations
-      requestAnimationFrame(calculateHeight);
-    });
-    mutationObserver.observe(contentRef.current, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-    });
-    window.addEventListener("resize", calculateHeight);
-
     return () => {
       resizeObserver.disconnect();
-      mutationObserver.disconnect();
-      window.removeEventListener("resize", calculateHeight);
     };
   }, []);
 
@@ -300,7 +272,7 @@ function MonthView({ session, onNavigate, onLogout, year, month, onBack }: Month
     <main className="min-h-screen bg-base-200 lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
       <Sidebar activePage="calendar" onNavigate={onNavigate} />
 
-      <section className="flex min-w-0 h-screen flex-col">
+      <section className="flex min-h-0 min-w-0 h-screen flex-col overflow-hidden">
         <AppTopBar
           session={session}
           onLogout={onLogout}
@@ -358,7 +330,7 @@ function MonthView({ session, onNavigate, onLogout, year, month, onBack }: Month
           onReset={filters.reset}
         />
 
-        <section ref={contentRef} className="flex-1 min-h-0 flex flex-col gap-2 p-2 sm:p-3 lg:p-4">
+        <section className="flex-1 min-h-0 flex flex-col gap-2 p-2 sm:p-3 lg:p-4">
           <div data-test="month-title" className="mb-1 flex items-center gap-2 shrink-0">
             <PageBackButton ariaLabel={t("calendar.backAria")} onClick={onBack} />
             <h1 className="m-0 text-xl font-bold text-base-content">
@@ -377,31 +349,33 @@ function MonthView({ session, onNavigate, onLogout, year, month, onBack }: Month
             ) : null}
           </div>
 
-          {assetsQuery.isError && assets.length === 0 ? (
-            <div
-              role="alert"
-              data-test="error-alert"
-              className="shrink-0 alert alert-error alert-soft text-sm"
-            >
-              <span>
-                {(assetsQuery.error as Error | null)?.message ?? t("calendar.loadMonthFailed")}
-              </span>
-            </div>
-          ) : (
-            <PhotoGrid
-              assets={assets}
-              onSelectedCountChange={setSelectedCount}
-              onSelectedIdsChange={setSelectedAssetIds}
-              selectionCommand={selectionCommand}
-              isFetching={assetsQuery.isFetchingNextPage}
-              hasNextPage={Boolean(assetsQuery.hasNextPage)}
-              maxHeight={photoGridHeight}
-              onLoadMore={() => assetsQuery.fetchNextPage().then(() => undefined)}
-              loadFullLayout={loadFullLayout}
-              viewScope={filterScope}
-              viewCriteria={filterPayload}
-            />
-          )}
+          <div ref={contentRef} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {assetsQuery.isError && assets.length === 0 ? (
+              <div
+                role="alert"
+                data-test="error-alert"
+                className="shrink-0 alert alert-error alert-soft text-sm"
+              >
+                <span>
+                  {(assetsQuery.error as Error | null)?.message ?? t("calendar.loadMonthFailed")}
+                </span>
+              </div>
+            ) : (
+              <PhotoGrid
+                assets={assets}
+                onSelectedCountChange={setSelectedCount}
+                onSelectedIdsChange={setSelectedAssetIds}
+                selectionCommand={selectionCommand}
+                isFetching={assetsQuery.isFetchingNextPage}
+                hasNextPage={Boolean(assetsQuery.hasNextPage)}
+                maxHeight={photoGridHeight}
+                onLoadMore={() => assetsQuery.fetchNextPage().then(() => undefined)}
+                loadFullLayout={loadFullLayout}
+                viewScope={filterScope}
+                viewCriteria={filterPayload}
+              />
+            )}
+          </div>
         </section>
       </section>
     </main>

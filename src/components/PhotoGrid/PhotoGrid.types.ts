@@ -20,7 +20,6 @@ export type PhotoGridProps = {
   hasPreviousPage?: boolean;
   onLoadMore: () => Promise<void> | void;
   onLoadPrevious?: () => Promise<void> | void;
-  availableDates?: string[];
   onJumpToDate?: (dateKey: string) => Promise<void> | void;
   loadFullLayout?: (containerWidth: number) => Promise<GridLayoutResponse>;
   loadTimelineLayout?: (containerWidth: number) => Promise<TimelineLayoutResponse>;

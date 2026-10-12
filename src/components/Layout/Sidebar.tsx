@@ -22,9 +22,15 @@ import { useI18n } from "../../i18n";
 import logoUrl from "../../assets/logo_with_title.svg";
 import { isMacPlatform } from "../../utils/platform";
 import { useBrowsingI18n } from "../../i18n/browsing";
+import { SidebarButton } from "./SidebarButton";
+import { useRecentAlbums } from "../../hooks/useRecentAlbums";
+import type { AlbumSummary } from "../../types";
+
+const EMPTY_RECENT_ALBUMS: AlbumSummary[] = [];
 
 interface SidebarProps {
   activePage: AppPage;
+  activeAlbumId?: string | null;
   onNavigate?: (page: AppPage) => void;
 }
 
@@ -84,7 +90,7 @@ export const MENU_ITEMS: MenuItemDef[] = [
   { key: "deleted", labelKey: "nav.deleted", icon: Archive, group: "library" },
 ];
 
-export function Sidebar({ activePage, onNavigate }: SidebarProps) {
+export function Sidebar({ activePage, activeAlbumId = null, onNavigate }: SidebarProps) {
   const { t } = useI18n();
   const mediaLabels = useMediaLabels();
   const bt = useBrowsingI18n();
@@ -92,6 +98,12 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const settingsQuery = useSettings();
   // Until settings load, show every item so navigation is never empty.
   const savedItems = settingsQuery.data?.menuItems;
+  const recentAlbumsLimit = settingsQuery.data?.recentAlbumsLimit ?? 5;
+  const recentAlbumsQuery = useRecentAlbums(recentAlbumsLimit);
+  const recentAlbums =
+    recentAlbumsLimit > 0 ? (recentAlbumsQuery.data ?? EMPTY_RECENT_ALBUMS) : EMPTY_RECENT_ALBUMS;
+  const hasActiveRecentAlbum =
+    activePage === "albums" && recentAlbums.some((album) => album.id === activeAlbumId);
   const orderedItems = savedItems
     ? savedItems.flatMap((preference) => {
         const item = MENU_ITEMS.find((candidate) => candidate.key === preference.key);
@@ -107,16 +119,14 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
     onNavigate?.("albums");
   };
 
-  const navClass = (page: AppPage) =>
-    page === activePage
-      ? "btn btn-md btn-block w-full max-w-none btn-soft btn-primary justify-start text-base font-semibold"
-      : "btn btn-md btn-block w-full max-w-none btn-ghost justify-start text-base font-semibold";
+  const isPageActive = (page: AppPage) =>
+    page === activePage && (page !== "albums" || !hasActiveRecentAlbum);
 
   const mac = isMacPlatform();
 
   return (
-    <aside className="hidden h-screen border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
-      <div className="flex h-full min-h-0 w-full flex-col gap-3 p-3">
+    <aside className="hidden h-screen min-w-0 overflow-y-auto border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
+      <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-6 p-3">
         <div
           data-tauri-drag-region
           className={`flex h-10 items-center gap-2 text-3xl font-bold text-primary ${mac ? "pl-[78px] pr-2" : "px-2"}`}
@@ -124,70 +134,68 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
           <img src={logoUrl} alt="" className={`pointer-events-none ${mac ? "h-8" : "h-10"}`} />
         </div>
 
-        <div className="min-h-0 flex-1 w-full overflow-y-auto pr-1">
+        <div className="flex min-h-0 flex-1 w-full flex-col gap-6 overflow-y-auto pr-1">
           {mainItems.length > 0 ? (
-            <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
+            <nav className="menu menu-vertical w-full shrink-0 rounded-box bg-base-100 p-1">
               {mainItems.map(({ key, labelKey, icon: Icon }) => (
-                <button
+                <SidebarButton
                   key={key}
-                  className={navClass(key)}
-                  type="button"
+                  isActive={isPageActive(key)}
+                  leading={<Icon size={16} />}
+                  label={key === "people" || key === "maps" ? bt(key) : t(labelKey)}
                   onClick={() => onNavigate?.(key)}
-                >
-                  <Icon size={16} className="shrink-0" />
-                  <span>{key === "people" || key === "maps" ? bt(key) : t(labelKey)}</span>
-                </button>
+                />
               ))}
             </nav>
           ) : null}
 
           <RecentAlbumsSection
-            limit={settingsQuery.data?.recentAlbumsLimit ?? 5}
+            albums={recentAlbums}
+            activeAlbumId={activePage === "albums" ? activeAlbumId : null}
             onOpenAlbum={openRecentAlbum}
           />
 
           {libraryItems.length > 0 ? (
-            <>
-              <div className="mt-3 w-full px-2 text-sm font-semibold uppercase tracking-wide text-base-content/50">
+            <section className="shrink-0 space-y-1" aria-label={t("nav.library")}>
+              <h2 className="w-full px-3 text-xs font-semibold uppercase tracking-wide text-base-content/50">
                 {t("nav.library")}
-              </div>
+              </h2>
               <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
                 {libraryItems.map(({ key, labelKey, icon: Icon }) => (
-                  <button
+                  <SidebarButton
                     key={key}
-                    className={navClass(key)}
-                    type="button"
+                    isActive={isPageActive(key)}
+                    leading={<Icon size={16} />}
+                    label={key === "people" || key === "maps" ? bt(key) : t(labelKey)}
                     onClick={() => onNavigate?.(key)}
-                  >
-                    <Icon size={16} className="shrink-0" />
-                    <span>{key === "people" || key === "maps" ? bt(key) : t(labelKey)}</span>
-                  </button>
+                  />
                 ))}
               </nav>
-            </>
+            </section>
           ) : null}
         </div>
 
-        <div className="shrink-0 w-full space-y-3 px-2 pb-2">
+        <div className="shrink-0 w-full space-y-6 pb-2">
           <nav className="menu menu-vertical w-full rounded-box bg-base-100 p-1">
-            <button
-              className="btn btn-md btn-block w-full max-w-none btn-ghost justify-start text-base font-semibold"
-              type="button"
+            <SidebarButton
+              leading={<Upload size={16} />}
+              label={mediaLabels.import}
               onClick={requestMediaImport}
-            >
-              <Upload size={16} className="shrink-0" />
-              <span>{mediaLabels.import}</span>
-            </button>
-            <button
-              className={navClass("settings")}
-              type="button"
+            />
+            <SidebarButton
+              isActive={isPageActive("settings")}
+              leading={<Settings size={16} />}
+              label={t("nav.settings")}
               onClick={() => onNavigate?.("settings")}
-            >
-              <Settings size={16} className="shrink-0" />
-              <span>{t("nav.settings")}</span>
-            </button>
+            />
           </nav>
-          {isOnline === false ? <OfflineBanner pendingCount={pendingCount} /> : <SyncStatusCard />}
+          <div className="px-2">
+            {isOnline === false ? (
+              <OfflineBanner pendingCount={pendingCount} />
+            ) : (
+              <SyncStatusCard />
+            )}
+          </div>
         </div>
       </div>
     </aside>

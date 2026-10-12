@@ -1,107 +1,167 @@
-import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getEditVersions } from "../../api/media";
-import { getCachedAssetDetails } from "../../api/tauri";
 import { ASSETS_TIME_SHIFTED_EVENT } from "../../api/time";
-import type { AssetCacheDetails, AssetSummary } from "../../types";
+import type { AssetSummary } from "../../types";
 
 export const OPEN_VERSION_EVENT = "media:open-version";
 
-function summaryFromDetails(details: AssetCacheDetails): AssetSummary {
-  return {
-    id: details.id,
-    originalFileName: details.originalFileName,
-    fileCreatedAt: details.fileCreatedAt,
-    checksum: details.checksum,
-    type: details.type,
-    duration: details.duration,
-    livePhotoVideoId: null,
-    isFavorite: false,
-    isArchived: false,
-    visibility: null,
-    rating: null,
-    width: details.width,
-    height: details.height,
-    thumbhash: null,
-  };
+interface OpenVersionDetail {
+  assetId: string;
+  sourceAssetId?: string;
+  asset?: AssetSummary;
+  original?: AssetSummary;
 }
 
-/** Resolves a version asset from the local cache, falling back to the stack's versions. */
-async function resolveVersionAsset(assetId: string): Promise<AssetSummary | null> {
-  const versions = await getEditVersions(assetId);
-  const version = versions.find((asset) => asset.id === assetId);
-  if (version) return version;
-  const cached = await getCachedAssetDetails(assetId).catch((error) => {
-    console.warn(`[PhotoGrid.openVersion] cache lookup failed asset=${assetId}`, error);
-    return null;
-  });
-  if (cached) return summaryFromDetails(cached);
-  return null;
+interface VersionsChangedDetail {
+  deletedAssetId: string;
+  sourceAssetId: string;
+  original: AssetSummary;
+  remainingCount: number;
 }
 
 /**
- * Handles window events that target the grid from outside:
- * - `media:open-version` opens a stack version in the lightbox, even when it
- *   is not part of the loaded page (it is appended as an extra lightbox asset).
- * - `immich:assets-time-shifted` bumps a nonce so full layouts are reloaded.
+ * Keeps stack selections separate from layout inputs: a version replaces the
+ * image in its existing slot, never the timeline order, dimensions, or dates.
  */
 export function usePhotoGridExternalEvents(
   displayAssets: AssetSummary[],
-  openAsset: (assetId: string, assets: AssetSummary[]) => void,
+  activeIndex: number | null,
+  openSlot: (index: number) => void,
 ) {
-  const [extraLightboxAsset, setExtraLightboxAsset] = useState<AssetSummary | null>(null);
+  const [versionAssetsBySlotId, setVersionAssetsBySlotId] = useState<Record<string, AssetSummary>>(
+    {},
+  );
   const [layoutRefreshNonce, setLayoutRefreshNonce] = useState(0);
-  const displayAssetsRef = useRef(displayAssets);
-  displayAssetsRef.current = displayAssets;
-  const openAssetRef = useRef(openAsset);
-  openAssetRef.current = openAsset;
+  const lightboxAssets = useMemo(
+    () => displayAssets.map((asset) => versionAssetsBySlotId[asset.id] ?? asset),
+    [displayAssets, versionAssetsBySlotId],
+  );
+  const activeAsset = activeIndex === null ? null : lightboxAssets[activeIndex];
+  const versions = useQuery({
+    queryKey: ["edit-versions", activeAsset?.id],
+    queryFn: () => getEditVersions(activeAsset!.id),
+    enabled: !!activeAsset,
+  });
+  const knownVersions = useRef(new Map<string, { ids: Set<string>; updatedAt: number }>());
+  const latest = useRef({ displayAssets, lightboxAssets, activeIndex, openSlot });
+  latest.current = { displayAssets, lightboxAssets, activeIndex, openSlot };
 
   useEffect(() => {
     let disposed = false;
-    const onOpenVersion = (event: Event) => {
-      const assetId = (event as CustomEvent<{ assetId?: string }>).detail?.assetId;
-      if (!assetId) return;
-      const current = displayAssetsRef.current;
-      if (current.some((asset) => asset.id === assetId)) {
-        console.info(`[PhotoGrid.openVersion] open loaded asset=${assetId}`);
-        setExtraLightboxAsset(null);
-        openAssetRef.current(assetId, current);
+    let request = 0;
+    const replaceVersion = (detail: OpenVersionDetail, asset: AssetSummary) => {
+      const current = latest.current;
+      if (current.activeIndex === null) return;
+      const originalId = detail.original?.id ?? asset.stackOriginalId ?? asset.id;
+      const index = current.displayAssets.findIndex(
+        (slot, slotIndex) =>
+          slot.id === detail.sourceAssetId ||
+          current.lightboxAssets[slotIndex].id === detail.sourceAssetId ||
+          slot.id === originalId ||
+          slot.stackOriginalId === originalId ||
+          current.lightboxAssets[slotIndex].stackOriginalId === originalId,
+      );
+      if (index < 0) {
+        console.warn(
+          `[PhotoGrid.versions] no timeline slot asset=${asset.id} original=${originalId}`,
+        );
         return;
       }
-      void resolveVersionAsset(assetId)
-        .then((asset) => {
-          if (disposed) return;
-          if (!asset) {
-            console.warn(`[PhotoGrid.openVersion] asset not found asset=${assetId}`);
-            return;
-          }
-          console.info(`[PhotoGrid.openVersion] open extra asset=${assetId}`);
-          setExtraLightboxAsset(asset);
-          const loadedAssets = displayAssetsRef.current;
-          const originalIndex = loadedAssets.findIndex((item) => item.id === asset.stackOriginalId);
-          const insertionIndex = originalIndex >= 0 ? originalIndex + 1 : loadedAssets.length;
-          openAssetRef.current(assetId, [
-            ...loadedAssets.slice(0, insertionIndex),
-            asset,
-            ...loadedAssets.slice(insertionIndex),
-          ]);
+      const slotId = current.displayAssets[index].id;
+      console.info(`[PhotoGrid.versions] replace slot=${slotId} asset=${asset.id}`);
+      setVersionAssetsBySlotId((previous) => ({
+        ...previous,
+        [slotId]: { ...asset, stackOriginalId: originalId },
+      }));
+      current.openSlot(index);
+    };
+    const onOpenVersion = (event: Event) => {
+      const detail = (event as CustomEvent<OpenVersionDetail>).detail;
+      if (!detail?.assetId) return;
+      const token = ++request;
+      const loadedAsset =
+        detail.asset ??
+        latest.current.lightboxAssets.find((asset) => asset.id === detail.assetId) ??
+        latest.current.displayAssets.find((asset) => asset.id === detail.assetId);
+      if (loadedAsset) {
+        replaceVersion(detail, loadedAsset);
+        return;
+      }
+      void getEditVersions(detail.assetId)
+        .then((assets) => {
+          if (disposed || token !== request) return;
+          const asset = assets.find((item) => item.id === detail.assetId);
+          if (asset) replaceVersion(detail, asset);
+          else console.warn(`[PhotoGrid.versions] missing asset=${detail.assetId}`);
         })
-        .catch((error) => console.error(`[PhotoGrid.openVersion] failed asset=${assetId}`, error));
+        .catch((error) =>
+          console.error(`[PhotoGrid.versions] lookup failed asset=${detail.assetId}`, error),
+        );
+    };
+    const onVersionsChanged = (event: Event) => {
+      const detail = (event as CustomEvent<VersionsChangedDetail>).detail;
+      if (!detail?.original || !detail.deletedAssetId) return;
+      ++request;
+      const current = latest.current;
+      setVersionAssetsBySlotId((previous) =>
+        Object.fromEntries(
+          Object.entries(previous).map(([slotId, asset]) => [
+            slotId,
+            asset.stackOriginalId === detail.original.id
+              ? { ...asset, stackCount: detail.remainingCount }
+              : asset,
+          ]),
+        ),
+      );
+      const index = current.lightboxAssets.findIndex((asset) => asset.id === detail.deletedAssetId);
+      if (index >= 0) {
+        replaceVersion(
+          {
+            assetId: detail.original.id,
+            sourceAssetId: detail.sourceAssetId,
+            original: detail.original,
+          },
+          { ...detail.original, stackCount: detail.remainingCount },
+        );
+      }
     };
     const onTimeShifted = () => setLayoutRefreshNonce((value) => value + 1);
-    const onVersionsChanged = () => {
-      setExtraLightboxAsset(null);
-      setLayoutRefreshNonce((value) => value + 1);
-    };
     window.addEventListener(OPEN_VERSION_EVENT, onOpenVersion);
-    window.addEventListener(ASSETS_TIME_SHIFTED_EVENT, onTimeShifted);
     window.addEventListener("media:versions-changed", onVersionsChanged);
+    window.addEventListener(ASSETS_TIME_SHIFTED_EVENT, onTimeShifted);
     return () => {
       disposed = true;
       window.removeEventListener(OPEN_VERSION_EVENT, onOpenVersion);
-      window.removeEventListener(ASSETS_TIME_SHIFTED_EVENT, onTimeShifted);
       window.removeEventListener("media:versions-changed", onVersionsChanged);
+      window.removeEventListener(ASSETS_TIME_SHIFTED_EVENT, onTimeShifted);
     };
   }, []);
 
-  return { extraLightboxAsset, setExtraLightboxAsset, layoutRefreshNonce };
+  useEffect(() => {
+    if (!versions.data || !activeAsset) return;
+    // The local command returns edits newest-first and the protected original last.
+    const original = versions.data[versions.data.length - 1];
+    const originalId = original?.id ?? activeAsset.stackOriginalId ?? activeAsset.id;
+    const previous = knownVersions.current.get(originalId);
+    // Switching query keys can expose an older cached stack before it refetches.
+    if (previous && versions.dataUpdatedAt < previous.updatedAt) return;
+    knownVersions.current.set(originalId, {
+      ids: new Set(versions.data.map((asset) => asset.id)),
+      updatedAt: versions.dataUpdatedAt,
+    });
+    if (!original || !previous) return;
+    const newEdit = versions.data.find(
+      (asset) => asset.id !== original.id && !previous.ids.has(asset.id),
+    );
+    if (!newEdit) return;
+    console.info(`[PhotoGrid.versions] new edit asset=${newEdit.id} original=${original.id}`);
+    window.dispatchEvent(
+      new CustomEvent(OPEN_VERSION_EVENT, {
+        detail: { assetId: newEdit.id, sourceAssetId: activeAsset.id, asset: newEdit, original },
+      }),
+    );
+  }, [activeAsset, versions.data, versions.dataUpdatedAt]);
+
+  return { lightboxAssets, versionAssetsBySlotId, layoutRefreshNonce };
 }

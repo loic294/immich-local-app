@@ -11,9 +11,9 @@ import {
   listMediaDevices,
 } from "../../api/media";
 import { useMediaLabels } from "../../i18n/media";
-import { useConnectionContext } from "../../hooks/connectionContext";
 import { ImportTile } from "./ImportTile";
-import { AlbumPicker } from "../Albums/AlbumPicker";
+import { AlbumPickerModal } from "../Albums/AlbumPickerModal";
+import { useAlbumPickerLabels } from "../../i18n/albumPicker";
 
 interface ImportDialogProps {
   initialRoot: string | null;
@@ -22,11 +22,11 @@ interface ImportDialogProps {
 }
 export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogProps) {
   const labels = useMediaLabels();
-  const { isOnline } = useConnectionContext();
+  const albumLabels = useAlbumPickerLabels();
   const [root, setRoot] = useState(initialRoot);
   const [kind, setKind] = useState("all");
   const [albumId, setAlbumId] = useState("");
-  const [albumName, setAlbumName] = useState("");
+  const [showAlbumPicker, setShowAlbumPicker] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,13 +94,6 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
       const result = await open({ directory: true, multiple: false });
       if (typeof result === "string") setRoot(result);
     });
-  const createAlbum = () =>
-    action(async () => {
-      const album = await createAlbumWithAssets(albumName.trim(), []);
-      await albums.refetch();
-      setAlbumId(album.id);
-      setAlbumName("");
-    });
   const runImport = () =>
     action(async () => {
       const count = await importMedia([...selected], albumId || null);
@@ -131,35 +124,23 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
             <option value="photo">{labels.photos}</option>
             <option value="video">{labels.videos}</option>
           </select>
-          <div className="w-64 max-w-full">
-            <AlbumPicker
-              albums={albums.data?.filter((album) => !album.isReadOnly) ?? []}
-              value={albumId}
-              onChange={setAlbumId}
-              loading={albums.isLoading}
-              disabled={busy}
-              emptyLabel={preferences.data?.importRequiresAlbum ? labels.album : labels.unsorted}
-              allowEmpty={!preferences.data?.importRequiresAlbum}
-            />
-          </div>
+          <button
+            type="button"
+            className="btn btn-outline max-w-64"
+            aria-label={albumLabels.choose}
+            disabled={busy || !preferences.data}
+            onClick={() => setShowAlbumPicker(true)}
+          >
+            <span className="truncate">
+              {albums.data?.find((album) => album.id === albumId)?.albumName ??
+                (preferences.data?.importRequiresAlbum ? labels.album : labels.unsorted)}
+            </span>
+          </button>
           <button className="btn btn-ghost" disabled={busy} onClick={onClose}>
             {labels.close}
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            className="input input-sm"
-            value={albumName}
-            onChange={(e) => setAlbumName(e.target.value)}
-            placeholder={labels.newAlbum}
-          />
-          <button
-            className="btn btn-sm"
-            disabled={!albumName.trim() || busy || isOnline !== true}
-            onClick={() => void createAlbum()}
-          >
-            {labels.createAlbum}
-          </button>
           <button
             className="btn btn-sm btn-ghost"
             disabled={busy}
@@ -177,6 +158,28 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
             {labels.clear}
           </button>
         </div>
+        {showAlbumPicker && (
+          <AlbumPickerModal
+            title={albumLabels.choose}
+            albums={albums.data ?? []}
+            loading={albums.isLoading}
+            error={albums.isError ? albumLabels.loadFailed : null}
+            initialValue={albumId ? { albumId } : null}
+            requiresConnection={false}
+            allowEmpty={!!preferences.data && !preferences.data.importRequiresAlbum}
+            emptyLabel={labels.unsorted}
+            onClose={() => setShowAlbumPicker(false)}
+            onConfirm={async (choice) => {
+              if (choice?.newAlbumName) {
+                const album = await createAlbumWithAssets(choice.newAlbumName, []);
+                setAlbumId(album.id);
+                await albums.refetch();
+              } else {
+                setAlbumId(choice?.albumId ?? "");
+              }
+            }}
+          />
+        )}
         {root && (
           <p className="truncate text-xs" title={root}>
             {root}

@@ -1,7 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Calendar } from "lucide-react";
 import { AssetThumbnail } from "./AssetThumbnail";
-import { DatePickerModal } from "./DatePickerModal";
 import { PhotoGridFullscreenOverlay } from "./PhotoGridFullscreenOverlay";
 import { VerticalTimeline } from "./VerticalTimeline";
 import type {
@@ -54,7 +52,6 @@ export function PhotoGrid({
   hasPreviousPage = false,
   onLoadMore,
   onLoadPrevious,
-  availableDates: availableDatesProp,
   onJumpToDate,
   loadFullLayout,
   loadTimelineLayout,
@@ -93,7 +90,6 @@ export function PhotoGrid({
   const [imageContainerWidth, setImageContainerWidth] = useState(0);
   const [imageContainerHeight, setImageContainerHeight] = useState(0);
   const [isTimelineScrubbing, setIsTimelineScrubbing] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [showInfoPanel, setShowInfoPanel] = useState(() => {
     if (typeof window === "undefined") {
       return false;
@@ -412,22 +408,11 @@ export function PhotoGrid({
     [assetOverrides, assets, hideArchivedAssets],
   );
 
-  const { extraLightboxAsset, setExtraLightboxAsset, layoutRefreshNonce } =
-    usePhotoGridExternalEvents(displayAssets, (assetId, candidates) => {
-      const index = candidates.findIndex((asset) => asset.id === assetId);
-      if (index >= 0) {
-        showAssetAtIndex(index, true);
-      }
-    });
-  // Lightbox navigation list: the grid assets plus an out-of-page stack version, if one was opened.
-  const lightboxAssets = useMemo(
-    () =>
-      extraLightboxAsset && !displayAssets.some((asset) => asset.id === extraLightboxAsset.id)
-        ? [...displayAssets, extraLightboxAsset]
-        : displayAssets,
-    [displayAssets, extraLightboxAsset],
+  const { lightboxAssets, versionAssetsBySlotId, layoutRefreshNonce } = usePhotoGridExternalEvents(
+    displayAssets,
+    activeIndex,
+    (index) => showAssetAtIndex(index, true),
   );
-  const isViewingExtraAsset = lightboxAssets.length > displayAssets.length;
 
   // Full-layout mode only reloads when its effect dependencies change. Track
   // the currently hidden archived/visibility IDs so archive apply actions
@@ -471,13 +456,6 @@ export function PhotoGrid({
     onSelectedCountChange,
     onSelectedIdsChange,
   });
-
-  const availableDates = useMemo(
-    () =>
-      availableDatesProp ??
-      (fullGridSections.length > 0 ? fullGridSections : gridSections).map((section) => section.key),
-    [availableDatesProp, fullGridSections, gridSections],
-  );
 
   const {
     virtualEntries,
@@ -1257,7 +1235,6 @@ export function PhotoGrid({
 
   const closeLightbox = () => {
     setActiveIndex(null);
-    setExtraLightboxAsset(null);
     resetFullscreenPlayback(false);
   };
 
@@ -1279,7 +1256,7 @@ export function PhotoGrid({
       return;
     }
 
-    if (hasNextPage && !isViewingExtraAsset) {
+    if (hasNextPage) {
       pendingFullscreenAdvanceRef.current = true;
       requestFullscreenLoadMore();
     }
@@ -1291,7 +1268,7 @@ export function PhotoGrid({
       return;
     }
 
-    if (!hasNextPage || isViewingExtraAsset) {
+    if (!hasNextPage) {
       return;
     }
 
@@ -1299,14 +1276,7 @@ export function PhotoGrid({
     if (remaining <= 2) {
       requestFullscreenLoadMore();
     }
-  }, [
-    activeIndex,
-    displayAssets.length,
-    hasNextPage,
-    isFetching,
-    isViewingExtraAsset,
-    pendingJumpDateKey,
-  ]);
+  }, [activeIndex, displayAssets.length, hasNextPage, isFetching, pendingJumpDateKey]);
 
   useEffect(() => {
     if (!pendingFullscreenAdvanceRef.current || activeIndex === null) {
@@ -1491,17 +1461,6 @@ export function PhotoGrid({
     <section className="flex min-h-0 flex-1 flex-col gap-1">
       <div className="shrink-0 flex items-center justify-between text-xs text-base-content/60">
         <span>{loadedCountText}</span>
-        {availableDates.length > 0 ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm gap-1"
-            onClick={() => setShowDatePicker(true)}
-            aria-label={t("photoGrid.jumpToDateAria")}
-          >
-            <Calendar size={16} />
-            {t("photoGrid.jumpToDate")}
-          </button>
-        ) : null}
       </div>
 
       <div className="relative flex min-h-0 flex-1 items-stretch gap-2">
@@ -1585,7 +1544,8 @@ export function PhotoGrid({
                         }}
                       >
                         <AssetThumbnail
-                          asset={asset}
+                          key={(versionAssetsBySlotId[asset.id] ?? asset).id}
+                          asset={versionAssetsBySlotId[asset.id] ?? asset}
                           isSelected={isSelected}
                           onOpen={(event) => {
                             if (event.shiftKey || event.metaKey || event.ctrlKey) {
@@ -1629,7 +1589,9 @@ export function PhotoGrid({
                             });
                           }}
                           onDimensions={(width, height) => {
-                            handleAssetDimensions(asset.id, width, height);
+                            if (!versionAssetsBySlotId[asset.id]) {
+                              handleAssetDimensions(asset.id, width, height);
+                            }
                           }}
                           showDebug={showVideoDebug}
                           livePhotoAutoplay={settings?.livePhotoAutoplay ?? true}
@@ -1683,7 +1645,7 @@ export function PhotoGrid({
           activeAsset={activeAsset}
           activeIndex={activeIndex}
           displayAssets={lightboxAssets}
-          hasNextPage={hasNextPage && !isViewingExtraAsset}
+          hasNextPage={hasNextPage}
           activeSrc={activeSrc}
           activeStillSrc={activeStillSrc}
           activeFullsizeStillSrc={activeFullsizeStillSrc}
@@ -1723,15 +1685,6 @@ export function PhotoGrid({
       ) : null}
 
       <FixTimeHost viewScope={viewScope} criteria={viewCriteria} />
-
-      <DatePickerModal
-        isOpen={showDatePicker}
-        onClose={() => setShowDatePicker(false)}
-        onSelectDate={(dateKey) => {
-          void handleJumpToDate(dateKey);
-        }}
-        availableDates={availableDates}
-      />
     </section>
   );
 }

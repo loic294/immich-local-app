@@ -35,6 +35,8 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
   const accounts = useAccounts();
   const [baseDirectory, setBaseDirectory] = useState("/");
   const [baseDirectoryLoaded, setBaseDirectoryLoaded] = useState(false);
+  const [baseDirectoryError, setBaseDirectoryError] = useState<string | null>(null);
+  const [baseDirectoryNonce, setBaseDirectoryNonce] = useState(0);
   const [searchInput, setSearchInput] = useState("");
   const [selectedCount, setSelectedCount] = useState(0);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -47,6 +49,20 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
   const folderPathsQuery = useFolderPaths(true);
 
   useEffect(() => {
+    const onBaseDirectoryChanged = (event: Event) => {
+      if (
+        (event as CustomEvent<{ accountId: string }>).detail.accountId ===
+        accounts.primaryAccount?.id
+      ) {
+        setBaseDirectoryNonce((nonce) => nonce + 1);
+      }
+    };
+    window.addEventListener("folders-base-directory-changed", onBaseDirectoryChanged);
+    return () =>
+      window.removeEventListener("folders-base-directory-changed", onBaseDirectoryChanged);
+  }, [accounts.primaryAccount?.id]);
+
+  useEffect(() => {
     const accountId = accounts.primaryAccount?.id;
     let cancelled = false;
     if (!accountId) {
@@ -56,12 +72,18 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
       return;
     }
     setBaseDirectoryLoaded(false);
+    setBaseDirectoryError(null);
     void getFoldersBaseDirectory(accountId)
       .then((path) => {
         if (cancelled) return;
         const root = normalizePath(path);
         setBaseDirectory(root);
         setCurrentPath(root);
+        setSelectedCount(0);
+        setSelectedAssetIds([]);
+        setSelectionCommand(null);
+        setSearchInput("");
+        setSearchTerm("");
         setBaseDirectoryLoaded(true);
         console.info("[folders] loaded account base directory", { accountId, baseDirectory: root });
       })
@@ -70,12 +92,13 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
         console.error("[folders] failed to load account base directory", { accountId, error });
         setBaseDirectory("/");
         setCurrentPath("/");
+        setBaseDirectoryError(t("settings.foldersBaseDirectoryLoadFailed"));
         setBaseDirectoryLoaded(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [accounts.primaryAccount?.id, accounts.isLoading]);
+  }, [accounts.primaryAccount?.id, accounts.isLoading, baseDirectoryNonce, t]);
 
   const filters = useAssetFilters(`folder:${currentPath}`);
   const [searchTerm, setSearchTerm] = useState("");
@@ -144,16 +167,17 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
   const hasSubfolders = subfolders.length > 0;
   const hasFolderAssets = allAssets.length > 0;
   const shouldShowPhotoGrid =
-    assetsQuery.isLoading ||
-    assetsQuery.isFetchingNextPage ||
-    hasFolderAssets ||
-    searchTerm.length > 0 ||
-    filters.isActive;
+    baseDirectoryLoaded &&
+    (assetsQuery.isLoading ||
+      assetsQuery.isFetchingNextPage ||
+      hasFolderAssets ||
+      searchTerm.length > 0 ||
+      filters.isActive);
 
   const loadFolderFullLayout = useCallback(
     (containerWidth: number) =>
       getCachedFolderFullGridLayout(currentPath, containerWidth, filterPayload, sortPreference),
-    [currentPath, filterPayload, sortPreference],
+    [currentPath, filterPayload, sortPreference, baseDirectoryNonce],
   );
 
   useEffect(() => {
@@ -330,6 +354,19 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
             </div>
           ) : null}
 
+          {baseDirectoryError && (
+            <div role="alert" data-test="error-alert" className="alert alert-warning alert-soft">
+              <span>{baseDirectoryError}</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setBaseDirectoryNonce((n) => n + 1)}
+              >
+                {t("settings.foldersBaseDirectoryRetry")}
+              </button>
+            </div>
+          )}
+
           {hasSubfolders ? (
             <section data-test="subfolders" className="shrink-0">
               <h2 className="mb-2 mt-0 text-sm font-semibold uppercase tracking-wide text-base-content/60">
@@ -363,7 +400,7 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
             </div>
           ) : shouldShowPhotoGrid ? (
             <PhotoGrid
-              key={currentPath}
+              key={`${currentPath}:${baseDirectoryNonce}`}
               assets={allAssets}
               onSelectedCountChange={setSelectedCount}
               onSelectedIdsChange={setSelectedAssetIds}
@@ -394,7 +431,9 @@ function normalizePath(path: string): string {
     return "/";
   }
 
-  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const separators = path.replace(/\\/g, "/");
+  const normalized =
+    separators.startsWith("/") || /^[a-z]:/i.test(separators) ? separators : `/${separators}`;
   return normalized.replace(/\/+$/g, "") || "/";
 }
 
@@ -409,7 +448,7 @@ function getDirectChildFolders(paths: string[], parentPath: string) {
 
     const relative =
       parentPath === "/"
-        ? normalized.slice(1)
+        ? normalized.replace(/^\/+/, "")
         : normalized.startsWith(`${parentPath}/`)
           ? normalized.slice(parentPath.length + 1)
           : null;
@@ -423,7 +462,12 @@ function getDirectChildFolders(paths: string[], parentPath: string) {
       continue;
     }
 
-    const childPath = parentPath === "/" ? `/${firstSegment}` : `${parentPath}/${firstSegment}`;
+    const childPath =
+      parentPath === "/"
+        ? /^[a-z]:$/i.test(firstSegment)
+          ? firstSegment
+          : `${normalized.startsWith("//") ? "//" : "/"}${firstSegment}`
+        : `${parentPath}/${firstSegment}`;
 
     if (!lookup.has(childPath)) {
       lookup.set(childPath, {
@@ -451,11 +495,18 @@ function getParentPath(path: string, baseDirectory: string): string {
 function getBreadcrumbs(path: string, baseDirectory: string, rootLabel: string) {
   const crumbs = [{ label: rootLabel, path: baseDirectory }];
   const relative =
-    baseDirectory === "/" ? path.slice(1) : path.slice(baseDirectory.length).replace(/^\//, "");
+    baseDirectory === "/"
+      ? path.replace(/^\/+/, "")
+      : path.slice(baseDirectory.length).replace(/^\//, "");
   const parts = relative.split("/").filter(Boolean);
   let current = baseDirectory;
   for (const part of parts) {
-    current = current === "/" ? `/${part}` : `${current}/${part}`;
+    current =
+      current === "/"
+        ? /^[a-z]:$/i.test(part)
+          ? part
+          : `${path.startsWith("//") ? "//" : "/"}${part}`
+        : `${current}/${part}`;
     crumbs.push({ label: part, path: current });
   }
   return crumbs;

@@ -45,6 +45,10 @@ and album creation. Server refresh errors are shown without discarding cached
 albums.
 Album photos use embedded assets on older servers or paginated, album-scoped
 metadata search on newer servers that omit assets from album details.
+Add-to-album and Import use the same searchable album modal: recent albums
+appear first, followed by year groups. Select an existing album or the
+**New album** result, then use the single Add/Create action. Read-only albums
+are excluded, and cached choices remain available offline.
 
 **People** in the Library sidebar shows cached face thumbnails and photo counts.
 Sort by name or photo count; the chosen order is kept for the session. The face
@@ -52,6 +56,21 @@ grid scrolls independently of the sidebar. Choose a person to open the shared
 Photos timeline with a top back button, avatar, name and photo count (without the
 filter bar), with the People scope applied from the first cached read. Search,
 sorting and fullscreen controls work as in All Photos.
+The fixed People header includes **Show unnamed people**, enabled by default;
+turn it off to show only named people. Immich-hidden people are always excluded,
+and named people rank before unnamed people under both sorts. Click an unnamed
+name on a card or in its photo timeline to search cached named people from the
+same account with face previews. Merge into a selected person, or create a named
+person by naming the existing face group (without creating an empty duplicate).
+The person timeline also offers **Hide person**. Creating, merging and hiding
+require connectivity; these controls are disabled offline with an explanation,
+while cached browsing and name search remain available. People mutations check
+the server API version, support Immich v2/v3, and update the local cache only
+after server confirmation. Merges cannot be undone from this app.
+Run the People sorting/filtering regression tests with
+`npm test` after installing project dependencies.
+The test loads the utility using the existing TypeScript compiler in memory,
+so it works on Node.js 20 without native TypeScript support.
 
 **Map** clusters cached GPS-tagged photos into thumbnail markers. Select a marker
 or cluster to browse its photos on the right, or pan the map to browse the visible
@@ -68,6 +87,9 @@ Folders, and Calendar. **Update time** adjusts selected photos by an offset,
 optionally calculated from a reference photo in the same view. It changes
 Immich metadata and the local cache, never the original files, and queues
 changes while offline.
+Modify time and Delete are in the selection toolbar's three-dot menu; Delete
+still requires confirmation. Timeline month/year markers remain available for
+date navigation without a separate Go to date dialog.
 
 **Import** in the sidebar above Settings scans a chosen folder or suggests newly connected removable media.
 Choose an album with the shared thumbnail picker and select photos/videos in the
@@ -84,15 +106,17 @@ are decoded locally; RAW/HEIC previews use the macOS or Windows native codecs
 when installed, otherwise an explicit placeholder is shown.
 
 **Editing** opens the original image in RapidRAW (or the configured editor),
-downloading it first if needed. **Edit all photos** passes every cached image
-in the album to one GUI launch as file arguments; the editor must support
-that invocation. The toolbar waits for the native launch rather than relying on
-a fire-and-forget UI event; empty albums and launch failures show a visible message.
-Sidecar changes trigger an export suggestion. The default
+downloading it first if needed. Editing is available per photo; the album-wide
+retouch action has been removed. Sidecar changes trigger an export suggestion. The default
 CLI export produces a quality-100 JPEG with metadata, retained beside the
 original as `<name>-edited-YYYYMMDD.jpg`, then queues an upload. The newest
 edit becomes the stack primary in Immich and local browsing, including the
 original's albums; version thumbnails in Info open the other versions.
+Switching versions replaces the image in its existing timeline slot instead of
+reordering or appending thumbnails. Any edited version can be deleted, including
+the current one; the original is protected. Deleting the active edit restores
+the original, and offline deletions are queued. Applying saved-file metadata
+changes updates the local snapshot without adding notes to photo descriptions.
 Re-editing always uses the original. Editor executable, export arguments,
 and watched sidecars are configurable in Settings. Immich accepts XMP metadata
 sidecars, not RapidRAW `.rrdata`/`.xml` projects; those remain locally retained.
@@ -103,6 +127,11 @@ or pending uploads. A currently playing video is protected and any resulting
 over-limit state is explicitly shown. Video quality selects either the
 server-transcoded source or original source independently for streaming and
 offline downloads; available resolutions depend on server capabilities.
+The settings header and section navigation stay visible while the selected
+section scrolls; narrow windows use a horizontal section menu. In **Accounts**,
+set a per-account Folders base directory using an absolute path from the cached
+library, or leave it blank to return to the root. This works offline, accepts
+Windows path separators, and preserves the saved directory if validation fails.
 
 **Privacy:** allowlisted generic page and feature events are sent to the
 project's Umami analytics endpoint by default. Photo names, paths, account

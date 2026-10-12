@@ -15,7 +15,6 @@ const en = {
   save: "Save",
   saved: "Saved",
   edit: "Edit",
-  editAll: "Edit all photos",
   import: "Import",
   importTitle: "Import media",
   mounted: "External media detected",
@@ -55,7 +54,6 @@ const en = {
   albumRequired: "Select or create an album before importing.",
   devices: "Import from a detected device",
   deviceError: "Unable to detect devices. You can still choose a folder.",
-  noPhotos: "This album has no cached photos to edit.",
   editFailed: "Could not open the photo editor. Check the editor and local folder in Settings.",
   replay: "Allow session replay",
   replayHelp:
@@ -85,7 +83,6 @@ const fr: typeof en = {
   save: "Enregistrer",
   saved: "Enregistré",
   edit: "Retoucher",
-  editAll: "Retoucher toutes les photos",
   import: "Importer",
   importTitle: "Importer des médias",
   mounted: "Média externe détecté",
@@ -126,7 +123,6 @@ const fr: typeof en = {
   albumRequired: "Sélectionnez ou créez un album avant l'importation.",
   devices: "Importer depuis un appareil détecté",
   deviceError: "Impossible de détecter les appareils. Vous pouvez choisir un dossier.",
-  noPhotos: "Cet album ne contient aucune photo en cache à retoucher.",
   editFailed:
     "Impossible d'ouvrir l'éditeur. Vérifiez l'éditeur et le dossier local dans les paramètres.",
   replay: "Autoriser la relecture de session",

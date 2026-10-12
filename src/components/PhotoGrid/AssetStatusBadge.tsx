@@ -13,7 +13,7 @@ interface AssetStatusBadgeProps {
 /**
  * Status badge for fullscreen image/video viewer.
  * Displays current asset state (loading, cached, offline, etc.) with:
- * - Colored icon (left)
+ * - Monochrome icon (left)
  * - Bold title text (top-right)
  * - Smaller subtitle (bottom-right)
  * - Optional progress bar for video downloads
@@ -23,8 +23,8 @@ interface AssetStatusBadgeProps {
 export function AssetStatusBadge({
   assetState,
   onDownloadClick,
-  downloadProgress,
-  shareProgress,
+  downloadProgress = null,
+  shareProgress = null,
   className = "",
 }: AssetStatusBadgeProps) {
   const { t } = useI18n();
@@ -50,25 +50,22 @@ export function AssetStatusBadge({
       disabled={!isClickable || downloadProgress !== null || shareProgress !== null}
       onClick={handleClick}
       className={`
-        relative flex items-center gap-3 rounded-full py-1 pl-2 pr-5 -mt-1.5
-        bg-white/90 border border-white shadow-sm
-        ${isClickable && downloadProgress === null && shareProgress === null ? "cursor-pointer hover:bg-zinc-100 transition-colors" : "cursor-default opacity-90"}
+        relative flex items-center gap-2 rounded-box py-1 px-2
+        bg-zinc-900 text-white border border-white/15
+        ${isClickable && downloadProgress === null && shareProgress === null ? "cursor-pointer hover:bg-zinc-800 transition-colors" : "cursor-default opacity-90"}
         ${className}
       `}
     >
-      {/* White icon inside a colored circle */}
-      <div
-        className={`shrink-0 flex items-center justify-center rounded-full size-7 text-white ${badgeContent.circleColor}`}
-      >
+      <div className="shrink-0 flex items-center justify-center size-7 text-white/80">
         <Icon size={17} />
       </div>
 
       {/* Text content */}
       <div className="flex flex-col items-start gap-0 min-w-0">
-        <div className="text-[12px] font-semibold text-black leading-tight">
+        <div className="text-[12px] font-semibold text-white leading-tight">
           {badgeContent.title}
         </div>
-        <div className="text-[9px] text-black/60 leading-tight">{badgeContent.subtitle}</div>
+        <div className="text-[9px] text-white/60 leading-tight">{badgeContent.subtitle}</div>
       </div>
 
       {/* Progress bar for videos, downloads, share, and full-res zoom */}
@@ -76,9 +73,9 @@ export function AssetStatusBadge({
         shareProgress !== null ||
         assetState.videoDownloadProgress !== null ||
         assetState.fullResDownloadProgress !== null) && (
-        <div className="absolute bottom-0 left-2 right-2 h-1 bg-black/10 rounded-full overflow-hidden">
+        <div className="absolute bottom-0 left-2 right-2 h-1 bg-white/10 rounded-full overflow-hidden">
           <div
-            className="h-full bg-primary transition-all duration-300"
+            className="h-full bg-white/70 transition-all duration-300"
             style={{
               width: `${downloadProgress ?? shareProgress ?? assetState.videoDownloadProgress ?? assetState.fullResDownloadProgress ?? 0}%`,
             }}

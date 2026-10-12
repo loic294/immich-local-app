@@ -1906,6 +1906,98 @@ impl ImmichClient {
         Ok(all_people)
     }
 
+    /// v2 uses PUT for updates; v3 uses PATCH. Both support the target-first
+    /// legacy merge route, whose HTTP 200 body can still report item failures.
+    pub async fn mutate_person(
+        &self,
+        person_id: &str,
+        name: Option<&str>,
+        hidden: Option<bool>,
+        merge_target_id: Option<&str>,
+    ) -> Result<(), String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+        if !self.ping(&session.server_url).await {
+            return Err("offline: connect to Immich to change people".into());
+        }
+        let version_response = self
+            .client
+            .get(format!("{}/api/server/version", session.server_url))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
+        let version: Value = version_response.json().await.map_err(|e| e.to_string())?;
+        let major = version
+            .get("major")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "Immich server did not report a supported API version".to_string())?;
+        if major != 2 && major != 3 {
+            return Err(format!(
+                "Unsupported Immich people API version: {major}; version 2 or 3 required"
+            ));
+        }
+        log::info!(
+            "[browsing.people] mutation start person={} version={} action={}",
+            person_id,
+            major,
+            if merge_target_id.is_some() {
+                "merge"
+            } else {
+                "update"
+            }
+        );
+        let request = if let Some(target_id) = merge_target_id {
+            self.client
+                .post(format!(
+                    "{}/api/people/{}/merge",
+                    session.server_url, target_id
+                ))
+                .json(&serde_json::json!({ "ids": [person_id] }))
+        } else {
+            let url = format!("{}/api/people/{}", session.server_url, person_id);
+            let mut body = serde_json::Map::new();
+            if let Some(name) = name {
+                body.insert("name".into(), Value::String(name.into()));
+            }
+            if let Some(hidden) = hidden {
+                body.insert("isHidden".into(), Value::Bool(hidden));
+            }
+            let request = if major == 3 {
+                self.client.patch(url)
+            } else {
+                self.client.put(url)
+            };
+            request.json(&body)
+        };
+        let response = request
+            .header(IMMICH_API_KEY_HEADER, &session.access_token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = response.status();
+        let body = response.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(format!(
+                "Immich person mutation rejected ({status}): {}",
+                truncate_for_log(&body)
+            ));
+        }
+        if let Some(target_id) = merge_target_id {
+            let minor = version.get("minor").and_then(Value::as_u64).unwrap_or(0);
+            let patch = version.get("patch").and_then(Value::as_u64).unwrap_or(0);
+            let require_target = major == 3 && (minor > 2 || (minor == 2 && patch >= 1));
+            verify_person_merge_response(&body, person_id, target_id, require_target)?;
+        }
+        log::info!("[browsing.people] mutation server success person={person_id}");
+        Ok(())
+    }
+
     pub async fn get_album_assets(&self, album_id: &str) -> Result<Vec<AssetSummary>, String> {
         let session = self
             .session
@@ -2195,22 +2287,23 @@ impl ImmichClient {
     }
 
     /// Return a cached or freshly-fetched data URL for a person's face
-    /// thumbnail. Local-first: a cached file is served without a live session so
-    /// faces still render in the People filter while offline.
+    /// thumbnail. Local-first: the locally restored session identifies the
+    /// account cache, so cached faces remain available without a live server.
     pub async fn get_person_thumbnail_data_url(&self, person_id: &str) -> Result<String, String> {
-        let cache_dir = people_thumbnail_cache_dir()?;
-        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
-
-        if let Some(cached) = read_cached_thumbnail(&cache_dir, person_id)? {
-            return Ok(cached);
-        }
-
         let session = self
             .session
             .lock()
             .await
             .clone()
             .ok_or_else(|| "not authenticated".to_string())?;
+        use sha1::{Digest, Sha1};
+        let scope = format!("{}\0{}", session.server_url, session.user_id);
+        let cache_dir =
+            people_thumbnail_cache_dir()?.join(format!("{:x}", Sha1::digest(scope.as_bytes())));
+        fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+        if let Some(cached) = read_cached_thumbnail(&cache_dir, person_id)? {
+            return Ok(cached);
+        }
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2732,6 +2825,90 @@ impl ImmichClient {
         }))
     }
 
+    /// Restore the original before trashing an active edit. Inspect the current
+    /// server stack on replay so a newer primary is not overwritten.
+    pub async fn trash_edit_version(&self, asset_id: &str, original: &str) -> Result<(), String> {
+        if asset_id == original {
+            return Err("The original version cannot be deleted".into());
+        }
+        log::info!("[media:version-delete] trash start edit={asset_id} original={original}");
+        let asset = self.get_asset_value(asset_id).await?;
+        if let Some(stack_id) = asset
+            .get("stack")
+            .and_then(|stack| stack.get("id"))
+            .and_then(Value::as_str)
+        {
+            let session = self
+                .session
+                .lock()
+                .await
+                .clone()
+                .ok_or("Not authenticated")?;
+            let url = format!(
+                "{}/api/stacks/{stack_id}",
+                normalize_base(&session.server_url)
+            );
+            let response = self
+                .client
+                .get(&url)
+                .header(IMMICH_API_KEY_HEADER, &session.access_token)
+                .send()
+                .await
+                .map_err(|error| format!("Cannot inspect stack {stack_id}: {error}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Stack {stack_id} refresh rejected (HTTP {})",
+                    response.status()
+                ));
+            }
+            let stack: Value = response.json().await.map_err(|error| error.to_string())?;
+            let primary = stack
+                .get("primaryAssetId")
+                .and_then(Value::as_str)
+                .ok_or("Stack missing primaryAssetId")?;
+            let members = stack
+                .get("assets")
+                .and_then(Value::as_array)
+                .ok_or("Stack missing assets")?;
+            if !members
+                .iter()
+                .any(|member| member.get("id").and_then(Value::as_str) == Some(asset_id))
+            {
+                return Err("Edited version is missing from its server stack".into());
+            }
+            if primary == asset_id {
+                if !members
+                    .iter()
+                    .any(|member| member.get("id").and_then(Value::as_str) == Some(original))
+                {
+                    return Err(
+                        "Cannot restore the original: it is missing from the server stack".into(),
+                    );
+                }
+                let response = self
+                    .client
+                    .put(&url)
+                    .header(IMMICH_API_KEY_HEADER, &session.access_token)
+                    .json(&serde_json::json!({ "primaryAssetId": original }))
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        format!("Cannot restore stack {stack_id} original: {error}")
+                    })?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "Original version restore rejected (HTTP {})",
+                        response.status()
+                    ));
+                }
+                log::info!("[media:version-delete] restored server primary original={original} stack={stack_id}");
+            }
+        }
+        self.trash_asset(asset_id).await?;
+        log::info!("[media:version-delete] trash complete edit={asset_id}");
+        Ok(())
+    }
+
     pub async fn trash_asset(&self, asset_id: &str) -> Result<(), String> {
         let session = self
             .session
@@ -2754,7 +2931,10 @@ impl ImmichClient {
             .await
             .map_err(|error| error.to_string())?;
         if !response.status().is_success() {
-            return Err(format!("trash request failed with status {}", response.status()));
+            return Err(format!(
+                "trash request failed with status {}",
+                response.status()
+            ));
         }
         Ok(())
     }
@@ -3240,6 +3420,61 @@ fn parse_memories(payload: &str) -> Result<Vec<MemorySummary>, String> {
     }
 
     Err("unknown memories payload shape".to_string())
+}
+
+fn verify_person_merge_response(
+    payload: &str,
+    source_id: &str,
+    target_id: &str,
+    require_target: bool,
+) -> Result<(), String> {
+    let results: Value = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    let succeeded = |id: &str| {
+        results
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
+            })
+            .and_then(|item| item.get("success"))
+            .and_then(Value::as_bool)
+            == Some(true)
+    };
+    // v3.2.1+ can fall back to the first accessible ID as its target. A source
+    // success alone does not prove it merged into the requested named person.
+    if !succeeded(source_id) || (require_target && !succeeded(target_id)) {
+        return Err(format!(
+            "Immich did not confirm merging person {source_id} into {target_id}: {}",
+            truncate_for_log(payload)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod people_response_tests {
+    use super::*;
+
+    #[test]
+    fn merge_confirmation_validates_bulk_results_not_http_status_alone() {
+        let legacy = r#"[{"id":"source","success":true}]"#;
+        assert!(verify_person_merge_response(legacy, "source", "target", false).is_ok());
+        assert!(verify_person_merge_response(legacy, "source", "target", true).is_err());
+        let modern = r#"[{"id":"source","success":true},{"id":"target","success":true}]"#;
+        assert!(verify_person_merge_response(modern, "source", "target", true).is_ok());
+        let denied = r#"[{"id":"source","success":true},{"id":"target","success":false,"error":"no_permission"}]"#;
+        assert!(verify_person_merge_response(denied, "source", "target", true).is_err());
+        assert!(verify_person_merge_response(
+            r#"[{"id":"source","success":false}]"#,
+            "source",
+            "target",
+            false
+        )
+        .is_err());
+        assert!(verify_person_merge_response("[]", "source", "target", false).is_err());
+        assert!(verify_person_merge_response("invalid", "source", "target", false).is_err());
+    }
 }
 
 fn parse_album_list(payload: &str) -> Result<Vec<AlbumSummary>, String> {
