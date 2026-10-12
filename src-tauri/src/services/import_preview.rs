@@ -9,11 +9,15 @@ pub fn native_preview(input: &Path, output: &Path) -> Result<(), String> {
         .arg(output)
         .output();
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PREVIEW])
-        .env("IMMICH_PREVIEW_INPUT", input)
-        .env("IMMICH_PREVIEW_OUTPUT", output)
-        .output();
+    let result = {
+        let mut command = std::process::Command::new("powershell.exe");
+        crate::services::background_process::configure(&mut command);
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PREVIEW])
+            .env("IMMICH_PREVIEW_INPUT", input)
+            .env("IMMICH_PREVIEW_OUTPUT", output)
+            .output()
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     return Err("Native import previews support macOS and Windows only".into());
     #[cfg(any(target_os = "macos", target_os = "windows"))]

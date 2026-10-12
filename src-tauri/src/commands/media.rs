@@ -161,11 +161,16 @@ pub async fn list_media_devices() -> Result<Vec<String>, String> {
         }
         #[cfg(target_os="windows")]
         {
-            let output=std::process::Command::new("powershell.exe")
+            let mut command = std::process::Command::new("powershell.exe");
+            crate::services::background_process::configure(&mut command);
+            let output=command
                 .args(["-NoProfile","-NonInteractive","-Command",
                 "$ErrorActionPreference='Stop'; $r=@(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2' | ForEach-Object {$_.DeviceID+'\\'}); $r+=@(Get-Disk | Where-Object BusType -eq USB | Get-Partition | Where-Object DriveLetter | ForEach-Object {$_.DriveLetter+':\\'}); ConvertTo-Json -Compress -InputObject @($r | Sort-Object -Unique)"])
                 .output().map_err(|e|format!("Cannot inspect removable media: {e}"))?;
-            if !output.status.success() { return Err("Windows removable media detection failed".into()); }
+            if !output.status.success() {
+                log::warn!("[media:devices] Windows removable media detection failed status={} error={}", output.status, String::from_utf8_lossy(&output.stderr));
+                return Err("Windows removable media detection failed".into());
+            }
             serde_json::from_slice(&output.stdout).map_err(|e|format!("Invalid Windows volume response: {e}"))
         }
         #[cfg(not(any(target_os="macos",target_os="windows")))]
@@ -783,7 +788,9 @@ pub async fn export_media_edits(
             .collect();
         let executable = preferences.editor_executable.clone();
         log::info!("[media:export] starting original={id}");
-        let mut child = tokio::process::Command::new(executable)
+        let mut command = tokio::process::Command::new(executable);
+        crate::services::background_process::configure(command.as_std_mut());
+        let mut child = command
             .args(args)
             .kill_on_drop(true)
             .spawn()

@@ -104,6 +104,9 @@ The queue shows translated waiting/uploading/failure states and activity progres
 JPEG/PNG/WebP/TIFF thumbnails
 are decoded locally; RAW/HEIC previews use the macOS or Windows native codecs
 when installed, otherwise an explicit placeholder is shown.
+On Windows, removable-drive polling, native thumbnail generation, and CLI
+exports run without console windows, so background work does not steal focus.
+Opening the configured editor or Explorer remains an intentional visible action.
 
 **Editing** opens the original image in RapidRAW (or the configured editor),
 downloading it first if needed. Editing is available per photo; the album-wide
