@@ -115,6 +115,20 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       storageOther: "Other disk usage",
       storageFree: "Free disk space",
       storageMeasuring: "Measuring storage",
+      localCopies: "Saved local copies",
+      localCopiesHelp:
+        "Saved albums and timeline downloads, measured from existing tracked files. Thumbnails and previews are counted separately as cache.",
+      storageTimeline: "Timeline downloads",
+      localCopyFiles: "{count} local files",
+      deleteLocalCopies: "Delete local copies",
+      deleteLocalCopiesFor: "Delete local copies — {name}",
+      deleteLocalCopiesConfirm:
+        "Delete these {count} local files? Server photos, videos and albums will not be deleted. Unrelated files and pending uploads are kept.",
+      localBackupsUnverified:
+        "A server backup could not be verified for {count} files. The server may be offline, or these files may contain unsynced edits. Deleting them could remove the only copy. Continue only if you have another backup.",
+      checkingLocalBackups: "Verifying server backups…",
+      localCopiesRemoved: "Removed {count} local files.",
+      refreshLocalCopies: "Refresh local copies",
       storageCacheOnOtherDisk:
         "Cache on another disk: {size} ({path}). Not included in this disk's bar.",
       storageAcrossAllDisks:
@@ -379,6 +393,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       backToAlbumsAria: "Back to albums",
       saveLocally: "Save Locally",
       openExplorer: "Open in File Explorer",
+      syncLocal: "Sync",
+      missingLocalFiles: "{count} local files missing",
+      checkingLocal: "Checking local files...",
+      localStatusFailed: "Could not check local files",
       deleteLocal: "Delete local album",
       deletingLocal: "Deleting...",
       deleteLocalConfirm:
@@ -454,6 +472,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       loadingPreview: "Loading preview...",
       openFullscreenAria: "Open {name} in full screen",
       moreActionsAria: "More photo actions",
+      removeLocalOriginal: "Remove local high-resolution version",
+      removeLocalOriginalConfirm:
+        "A matching server backup could not be verified (the server may be offline, the original missing, or the local file modified). Remove the local high-resolution copies anyway? This may delete the only copy. Previews and server files will not be removed.",
+      removeLocalOriginalFailed: "Could not remove the local high-resolution version",
       versionStackCount: "{count} versions in this stack",
       selectPhotoAria: "Select photo",
       deselectPhotoAria: "Deselect photo",
@@ -614,9 +636,9 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       deletedOffline: "Hors ligne — affichage des éléments supprimés en cache.",
       restoreDeleted: "Restaurer",
       deleteVersionArchiveConfirm:
-        "Archiver cette version retouchée ? Vous pourrez la restaurer depuis Supprimés. L'original est protégé.",
+        "Archiver cette version éditée ? Vous pourrez la restaurer depuis Supprimés. L'original est protégé.",
       deleteVersionTrashConfirm:
-        "Déplacer cette version retouchée dans la corbeille Immich ? L'original est protégé. Immich peut la supprimer automatiquement après sa période de rétention.",
+        "Déplacer cette version éditée dans la corbeille Immich ? L'original est protégé. Immich peut la supprimer automatiquement après sa période de rétention.",
       languageDescription:
         "Choisissez la langue d'affichage. L'application applique ce réglage immédiatement et le conserve entre les redémarrages.",
       languageLabel: "Langue d'affichage",
@@ -659,6 +681,20 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       storageOther: "Autre espace utilisé",
       storageFree: "Espace disque libre",
       storageMeasuring: "Mesure du stockage",
+      localCopies: "Copies enregistrées localement",
+      localCopiesHelp:
+        "Albums enregistrés et téléchargements de la chronologie, mesurés à partir des fichiers suivis présents. Les miniatures et aperçus sont comptés séparément dans le cache.",
+      storageTimeline: "Téléchargements de la chronologie",
+      localCopyFiles: "{count} fichiers locaux",
+      deleteLocalCopies: "Supprimer les copies locales",
+      deleteLocalCopiesFor: "Supprimer les copies locales — {name}",
+      deleteLocalCopiesConfirm:
+        "Supprimer ces {count} fichiers locaux ? Les photos, vidéos et albums sur le serveur ne seront pas supprimés. Les fichiers non suivis et les téléversements en attente sont conservés.",
+      localBackupsUnverified:
+        "La sauvegarde sur le serveur n’a pas pu être vérifiée pour {count} fichiers. Le serveur peut être hors ligne, ou ces fichiers peuvent contenir des éditions non synchronisées. Leur suppression pourrait effacer la seule copie. Continuez uniquement si vous disposez d’une autre sauvegarde.",
+      checkingLocalBackups: "Vérification des sauvegardes sur le serveur…",
+      localCopiesRemoved: "{count} fichiers locaux supprimés.",
+      refreshLocalCopies: "Actualiser les copies locales",
       storageCacheOnOtherDisk:
         "Cache sur un autre disque : {size} ({path}). Non inclus dans la barre de ce disque.",
       storageAcrossAllDisks:
@@ -925,6 +961,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       backToAlbumsAria: "Retour aux albums",
       saveLocally: "Enregistrer localement",
       openExplorer: "Ouvrir dans l'explorateur",
+      syncLocal: "Synchroniser",
+      missingLocalFiles: "{count} fichiers locaux manquants",
+      checkingLocal: "Vérification des fichiers locaux...",
+      localStatusFailed: "Impossible de vérifier les fichiers locaux",
       deleteLocal: "Supprimer l'album local",
       deletingLocal: "Suppression...",
       deleteLocalConfirm:
@@ -999,6 +1039,10 @@ const RESOURCES: Record<AppLocale, TranslationTree> = {
       loadingPreview: "Chargement de l'aperçu...",
       openFullscreenAria: "Ouvrir {name} en plein écran",
       moreActionsAria: "Autres actions photo",
+      removeLocalOriginal: "Supprimer la version haute résolution locale",
+      removeLocalOriginalConfirm:
+        "Une sauvegarde identique sur le serveur n’a pas pu être vérifiée (serveur hors ligne, original absent ou fichier local modifié). Supprimer quand même les copies locales haute résolution ? Il pourrait s’agir de la seule copie. Les aperçus et les fichiers du serveur seront conservés.",
+      removeLocalOriginalFailed: "Impossible de supprimer la version haute résolution locale",
       versionStackCount: "{count} versions dans cette pile",
       selectPhotoAria: "Sélectionner la photo",
       deselectPhotoAria: "Désélectionner la photo",

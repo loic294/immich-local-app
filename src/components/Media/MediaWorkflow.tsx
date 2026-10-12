@@ -191,6 +191,15 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
       deviceRoots.current = new Set(roots);
       const state = getMediaEditState();
       const pending = edited.filter((job) => !state.imports[job.assetId]);
+      if (!importingEdits.current) {
+        setChanges((current) =>
+          current.filter((job) =>
+            pending.some(
+              (active) => active.assetId === job.assetId && active.localPath === job.localPath,
+            ),
+          ),
+        );
+      }
       const detectedSession =
         state.phase === "editing" && pending.some((job) => state.assetIds.includes(job.assetId));
       if (detectedSession) {

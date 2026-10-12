@@ -1,6 +1,15 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, Share2, HardDrive, Check, LoaderCircle, FolderOpen, Trash2 } from "lucide-react";
+import {
+  Link,
+  Share2,
+  HardDrive,
+  Check,
+  LoaderCircle,
+  FolderOpen,
+  Trash2,
+  RefreshCw,
+} from "lucide-react";
 import type { GridLayoutResponse } from "../types";
 import { AlbumCard } from "../components/Albums/AlbumCard";
 import { AlbumShareModal } from "../components/Albums/AlbumShareModal";
@@ -12,6 +21,7 @@ import { Sidebar, type AppPage } from "../components/Layout/Sidebar";
 import { FilterBar } from "../components/Filters/FilterBar";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
+import { useAlbumLocalStatus } from "../hooks/useAlbumLocalStatus";
 import { useAssetFilters } from "../hooks/useAssetFilters";
 import { useSortPreference } from "../hooks/useSortPreference";
 import { useConnectionContext } from "../hooks/connectionContext";
@@ -130,6 +140,13 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
     filterPayload,
     sortPreference,
   );
+  const localStatus = useAlbumLocalStatus(selectedAlbumId, getValidSavedFolderPath(selectedAlbum));
+
+  useEffect(() => {
+    if (selectedAlbumId) {
+      void queryClient.invalidateQueries({ queryKey: ["album-local-status", selectedAlbumId] });
+    }
+  }, [selectedAlbumId, albumRefreshNonce, queryClient]);
 
   useEffect(() => {
     const onOpenAlbum = (event: Event) => {
@@ -352,6 +369,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         err,
       );
     } finally {
+      await queryClient.invalidateQueries({ queryKey: ["album-local-status", selectedAlbum.id] });
       setIsSavingAlbum(false);
       // Keep progress modal visible for a short moment after completion
       setTimeout(() => {
@@ -582,7 +600,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                   </h1>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   {!isAlbumSavedLocally ? (
                     <button
                       type="button"
@@ -613,11 +631,49 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                         <FolderOpen size={16} />
                         {t("albums.openExplorer")}
                       </button>
+                      <div
+                        className="tooltip tooltip-bottom"
+                        data-tip={
+                          localStatus.data
+                            ? t("albums.missingLocalFiles").replace(
+                                "{count}",
+                                String(localStatus.data.missingCount),
+                              )
+                            : localStatus.isError
+                              ? t("albums.localStatusFailed")
+                              : t("albums.checkingLocal")
+                        }
+                      >
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary btn-outline shrink-0"
+                          onClick={handleSaveAlbumLocally}
+                          aria-describedby="album-sync-local-status"
+                          disabled={isSavingAlbum || isDeletingLocalAlbum || isOnline !== true}
+                        >
+                          {isSavingAlbum ? (
+                            <LoaderCircle size={16} className="animate-spin" />
+                          ) : (
+                            <RefreshCw size={16} />
+                          )}
+                          {t("albums.syncLocal")}
+                        </button>
+                        <span id="album-sync-local-status" className="sr-only" role="status">
+                          {localStatus.data
+                            ? t("albums.missingLocalFiles").replace(
+                                "{count}",
+                                String(localStatus.data.missingCount),
+                              )
+                            : localStatus.isError
+                              ? t("albums.localStatusFailed")
+                              : t("albums.checkingLocal")}
+                        </span>
+                      </div>
                       <button
                         type="button"
                         className="btn btn-sm btn-error btn-outline shrink-0"
                         onClick={handleDeleteLocalAlbum}
-                        disabled={isDeletingLocalAlbum}
+                        disabled={isDeletingLocalAlbum || isSavingAlbum}
                       >
                         {isDeletingLocalAlbum ? (
                           <>

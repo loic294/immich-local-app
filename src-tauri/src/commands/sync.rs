@@ -708,34 +708,22 @@ pub async fn scan_saved_local_files(state: tauri::State<'_, AppState>) -> Result
             || current_size_bytes != item.last_known_size_bytes;
 
         if changed {
-            let details_json = json!({
-                "previousMtimeMs": item.last_known_mtime_ms,
-                "currentMtimeMs": current_mtime_ms,
-                "previousSizeBytes": item.last_known_size_bytes,
-                "currentSizeBytes": current_size_bytes,
-                "message": "File metadata changed locally"
-            })
-            .to_string();
-            state.db.upsert_unresolved_local_saved_asset_change(
+            // Timestamps and file size are not descriptions or importable edits.
+            state.db.update_local_saved_asset_snapshot(
                 &item.asset_id,
                 &item.local_path,
-                &item.file_name,
-                "modified",
-                &details_json,
+                current_mtime_ms,
+                current_size_bytes,
             )?;
-            created_changes += 1;
-        } else {
-            state.db.resolve_unresolved_local_saved_asset_change(
-                &item.asset_id,
-                &item.local_path,
-                "deleted",
-            )?;
-            state.db.resolve_unresolved_local_saved_asset_change(
-                &item.asset_id,
-                &item.local_path,
-                "modified",
-            )?;
+            log::info!("[saved-local-files] refreshed file baseline asset={} without metadata notice",
+                item.asset_id);
         }
+        state.db.resolve_unresolved_local_saved_asset_change(
+            &item.asset_id, &item.local_path, "deleted",
+        )?;
+        state.db.resolve_unresolved_local_saved_asset_change(
+            &item.asset_id, &item.local_path, "modified",
+        )?;
     }
 
     Ok(created_changes)
@@ -745,6 +733,14 @@ pub async fn scan_saved_local_files(state: tauri::State<'_, AppState>) -> Result
 pub async fn get_saved_local_file_changes(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<LocalSavedFileChangeResponse>, String> {
+    // Retire timestamp/size-only notices created by older app versions.
+    let retired = state.db.open()?.execute(
+        "UPDATE local_saved_asset_changes SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE change_kind = 'modified' AND resolved_at IS NULL", [],
+    ).map_err(|error| format!("Cannot retire obsolete metadata notices: {error}"))?;
+    if retired > 0 {
+        log::info!("[saved-local-files] retired obsolete metadata notices count={retired}");
+    }
     let changes = state.db.list_unresolved_local_saved_asset_changes()?;
     Ok(changes
         .into_iter()

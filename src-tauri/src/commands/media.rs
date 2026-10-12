@@ -619,6 +619,23 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
     Ok(done)
 }
 
+fn editor_source_present(
+    db: &crate::services::db::Database,
+    job: &EditorJob,
+) -> Result<bool, String> {
+    match std::fs::metadata(&job.local_path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(format!("Editor source is not a file: {}", job.local_path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            db.delete_editor_job(&job.asset_id, &job.local_path)?;
+            log::info!("[media:editor] retired missing source asset_id={} path={}",
+                job.asset_id, job.local_path);
+            Ok(false)
+        }
+        Err(error) => Err(format!("Cannot inspect editor source {}: {error}", job.local_path)),
+    }
+}
+
 fn sidecar_snapshot(path: &Path, extensions: &[String]) -> Result<String, String> {
     let mut values = Vec::new();
     for extension in extensions {
@@ -719,6 +736,7 @@ fn edit_export_lock() -> &'static tokio::sync::Mutex<()> {
 pub async fn begin_media_edit(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<String>, String> {
     let _guard = edit_export_lock().lock().await;
     if asset_ids.is_empty() {
@@ -751,11 +769,6 @@ pub async fn begin_media_edit(
         let path = match local {
             Some(path) => PathBuf::from(path),
             None => {
-                let folder = PathBuf::from(&settings.user_local_folder_path)
-                    .join("Editing")
-                    .join(&original);
-                std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-                let path = folder.join(safe_component(&details.original_file_name));
                 let (_, client) = state.account_and_client_for_asset(&original);
                 let session = client
                     .session
@@ -766,21 +779,32 @@ pub async fn begin_media_edit(
                 if !client.ping(&session.server_url).await {
                     return Err("offline: the original is not saved locally".into());
                 }
-                client
-                    .download_asset_original_to_path(&original, &path, |_, _| {})
-                    .await?;
-                state.db.upsert_local_saved_asset(
-                    &original,
-                    None,
-                    &path.to_string_lossy(),
-                    &details.original_file_name,
-                    "editor_original",
-                    None,
-                    None,
-                )?;
-                path
+                // Editing must use the default full-resolution download system,
+                // including album routing and tracking, never a separate editing copy.
+                std::fs::create_dir_all(&settings.user_local_folder_path)
+                    .map_err(|e| format!("Cannot create local download folder: {e}"))?;
+                log::info!("[media:editor] downloading through default full-resolution flow asset_id={original}");
+                let result = super::shell::copy_assets_to_local_folder(
+                    vec![original.clone()],
+                    settings.user_local_folder_path.clone(),
+                    false,
+                    Some(true),
+                    state.clone(),
+                    app.clone(),
+                ).await?;
+                if result.copied_original_count != 1 || result.failed_count != 0 {
+                    log::error!("[media:editor] original download failed asset_id={original} copied={} failed={}",
+                        result.copied_original_count, result.failed_count);
+                    return Err("Could not download the original image for editing".into());
+                }
+                state.db.list_local_original_paths_for_asset(&original)?
+                    .into_iter()
+                    .find(|path| Path::new(path).is_file())
+                    .map(PathBuf::from)
+                    .ok_or_else(|| "Downloaded original image was not found locally".to_string())?
             }
         };
+        log::info!("[media:editor] using local original asset_id={original} path={}", path.display());
         let snapshot = sidecar_snapshot(&path, &preferences.editor_sidecars)?;
         state.db.save_editor_job(&EditorJob {
             asset_id: original.clone(),
@@ -824,6 +848,9 @@ pub async fn get_changed_editor_jobs(
     let jobs = tokio::task::spawn_blocking(move || -> Result<Vec<(EditorJob, String)>, String> {
         let mut changed = Vec::new();
         for job in db.editor_jobs()? {
+            if !editor_source_present(&db, &job)? {
+                continue;
+            }
             let snapshot = sidecar_snapshot(Path::new(&job.local_path), &sidecars)?;
             if snapshot != job.snapshot {
                 changed.push((job, snapshot));
@@ -835,6 +862,9 @@ pub async fn get_changed_editor_jobs(
     .map_err(|e| e.to_string())??;
     let mut changed = Vec::new();
     for (job, snapshot) in jobs {
+        if !editor_source_present(&state.db, &job)? {
+            continue;
+        }
         let preview = if prepare_previews.unwrap_or(false) {
             render_edit_preview(&job, &snapshot, &preferences).await.map(Some)
         } else {
@@ -846,7 +876,12 @@ pub async fn get_changed_editor_jobs(
                 (Some(path.to_string_lossy().into_owned()), None)
             }
             Ok(None) => (None, None),
-            Err(error) => (None, Some(error)),
+            Err(error) => {
+                if !editor_source_present(&state.db, &job)? {
+                    continue;
+                }
+                (None, Some(error))
+            }
         };
         changed.push(ChangedEditorJob {
             asset_id: job.asset_id,
@@ -875,6 +910,9 @@ pub async fn export_media_edits(
                 .iter()
                 .find(|j| j.asset_id == id)
                 .ok_or("Editor session no longer exists")?;
+            if !editor_source_present(&state.db, job)? {
+                continue;
+            }
             let input = Path::new(&job.local_path);
             let snapshot = sidecar_snapshot(input, &preferences.editor_sidecars)?;
             if snapshot == job.snapshot {
@@ -1242,6 +1280,52 @@ mod tests {
             std::fs::remove_file(path).unwrap();
         }
         std::fs::remove_dir(destination).unwrap();
+        std::fs::remove_dir(folder).unwrap();
+    }
+
+    #[test]
+    fn missing_editor_source_retires_only_its_watcher_and_preserves_sidecar() {
+        let folder = std::env::temp_dir().join(format!("immich-editor-missing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let db = crate::services::db::Database::test_database(folder.join("db.sqlite")).unwrap();
+        db.init_media().unwrap();
+        let source = folder.join("photo.jpg");
+        let sidecar = source.with_extension("rrdata");
+        std::fs::write(&source, b"photo").unwrap();
+        std::fs::write(&sidecar, b"unsaved edit").unwrap();
+        let job = EditorJob {
+            asset_id: "original".into(),
+            local_path: source.to_string_lossy().into_owned(),
+            snapshot: "old-sidecar".into(),
+        };
+        db.save_editor_job(&job).unwrap();
+        assert!(editor_source_present(&db, &job).unwrap());
+        std::fs::remove_file(&source).unwrap();
+        assert!(!editor_source_present(&db, &job).unwrap());
+        assert!(db.editor_jobs().unwrap().is_empty());
+        assert!(sidecar.is_file());
+        // A replacement session must not be removed by an old scan.
+        let replacement = folder.join("replacement.jpg");
+        std::fs::write(&replacement, b"photo").unwrap();
+        db.save_editor_job(&EditorJob {
+            local_path: replacement.to_string_lossy().into_owned(),
+            ..job.clone()
+        }).unwrap();
+        assert!(!editor_source_present(&db, &job).unwrap());
+        assert_eq!(db.editor_jobs().unwrap().len(), 1);
+        assert_eq!(db.clear_editor_jobs().unwrap(), 1);
+        assert!(db.editor_jobs().unwrap().is_empty());
+        assert!(replacement.exists() && sidecar.exists());
+        db.save_editor_job(&EditorJob {
+            local_path: replacement.to_string_lossy().into_owned(),
+            ..job.clone()
+        }).unwrap();
+        assert_eq!(db.editor_jobs().unwrap().len(), 1);
+        db.clear_editor_jobs().unwrap();
+        std::fs::remove_file(sidecar).unwrap();
+        std::fs::remove_file(replacement).unwrap();
+        drop(db);
+        std::fs::remove_file(folder.join("db.sqlite")).unwrap();
         std::fs::remove_dir(folder).unwrap();
     }
 }

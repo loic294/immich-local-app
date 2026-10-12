@@ -13,7 +13,7 @@ interface AssetStatusBadgeProps {
 /**
  * Status badge for fullscreen image/video viewer.
  * Displays current asset state (loading, cached, offline, etc.) with:
- * - Monochrome icon (left)
+ * - Colored status icon (left)
  * - Bold title text (top-right)
  * - Smaller subtitle (bottom-right)
  * - Optional progress bar for video downloads
@@ -50,22 +50,20 @@ export function AssetStatusBadge({
       disabled={!isClickable || downloadProgress !== null || shareProgress !== null}
       onClick={handleClick}
       className={`
-        relative flex items-center gap-2 rounded-box py-1 px-2
+        relative flex items-center gap-3 rounded-box px-3 py-2 text-left
         bg-zinc-900 text-white border border-white/15
         ${isClickable && downloadProgress === null && shareProgress === null ? "cursor-pointer hover:bg-zinc-800 transition-colors" : "cursor-default opacity-90"}
         ${className}
       `}
     >
-      <div className="shrink-0 flex items-center justify-center size-7 text-white/80">
-        <Icon size={17} />
+      <div className={`shrink-0 flex items-center justify-center size-7 ${badgeContent.iconColor}`}>
+        <Icon size={22} aria-hidden="true" />
       </div>
 
       {/* Text content */}
-      <div className="flex flex-col items-start gap-0 min-w-0">
-        <div className="text-[12px] font-semibold text-white leading-tight">
-          {badgeContent.title}
-        </div>
-        <div className="text-[9px] text-white/60 leading-tight">{badgeContent.subtitle}</div>
+      <div className="flex flex-col items-start gap-1 min-w-0">
+        <div className="text-sm font-semibold text-white leading-snug">{badgeContent.title}</div>
+        <div className="text-xs text-white/70 leading-relaxed">{badgeContent.subtitle}</div>
       </div>
 
       {/* Progress bar for videos, downloads, share, and full-res zoom */}

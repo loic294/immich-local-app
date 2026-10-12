@@ -44,6 +44,71 @@ const api = await load(
 );
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+test("editing reuses originals or the default album-aware full-resolution download flow", () => {
+  const source = readFileSync(
+    new URL("../src-tauri/src/commands/media.rs", import.meta.url),
+    "utf8",
+  );
+  const begin = source.slice(
+    source.indexOf("pub async fn begin_media_edit("),
+    source.indexOf("pub async fn get_changed_editor_jobs("),
+  );
+  assert.match(begin, /list_local_original_paths_for_asset/);
+  assert.match(begin, /Some\(path\) => PathBuf::from\(path\)/);
+  assert.match(begin, /super::shell::copy_assets_to_local_folder\([\s\S]*?false,\s*Some\(true\)/);
+  assert.match(begin, /result\.copied_original_count != 1/);
+  assert.match(begin, /sidecar_snapshot\(&path/);
+  assert.doesNotMatch(
+    begin,
+    /\.join\("Editing"\)|download_asset_original_to_path|"editor_original"/,
+  );
+});
+
+test("missing editor sources are retired before scan/export and removed from pending UI", () => {
+  const source = readFileSync(
+    new URL("../src-tauri/src/commands/media.rs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /ErrorKind::NotFound[\s\S]*?delete_editor_job/);
+  assert.match(source, /for job in db\.editor_jobs\(\)\? \{\s*if !editor_source_present/);
+  assert.match(source, /if !editor_source_present\(&state\.db, job\)\? \{\s*continue;/);
+  const workflow = readFileSync(
+    new URL("../src/components/Media/MediaWorkflow.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(workflow, /setChanges\(\(current\) =>[\s\S]*?pending\.some/);
+});
+
+test("editor watchers are cleared at startup and exit, never at external editor exit", () => {
+  const main = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+  assert.match(main, /\.setup\(\|app\| \{[\s\S]*?clear_editor_jobs\(\)/);
+  assert.match(main, /RunEvent::Exit[\s\S]*?clear_editor_jobs\(\)/);
+  const media = readFileSync(
+    new URL("../src-tauri/src/commands/media.rs", import.meta.url),
+    "utf8",
+  );
+  const childWait = media.slice(
+    media.indexOf("std::thread::spawn(move ||"),
+    media.indexOf("pub async fn get_changed_editor_jobs"),
+  );
+  assert.doesNotMatch(childWait, /clear_editor_jobs/);
+});
+
+test("timestamp and size changes update baseline without metadata notices or descriptions", () => {
+  const sync = readFileSync(new URL("../src-tauri/src/commands/sync.rs", import.meta.url), "utf8");
+  const scan = sync.slice(
+    sync.indexOf("pub async fn scan_saved_local_files"),
+    sync.indexOf("pub async fn get_saved_local_file_changes"),
+  );
+  assert.match(scan, /update_local_saved_asset_snapshot/);
+  assert.match(scan, /"File deleted locally"/);
+  assert.doesNotMatch(
+    scan,
+    /"File metadata changed locally"|update_asset_description|pending_mutations/,
+  );
+  assert.match(sync, /WHERE change_kind = 'modified' AND resolved_at IS NULL/);
+});
+
 test("Edit remains busy through launch, focus and process exit; duplicate launches are blocked", () => {
   let launches = 0;
   const listener = () => launches++;

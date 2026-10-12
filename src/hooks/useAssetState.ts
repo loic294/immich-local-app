@@ -25,6 +25,7 @@ interface UseAssetStateProps {
   isPlayingLivePhoto: boolean;
   activeSrc: string | null;
   isLoadingActiveMedia: boolean;
+  cacheRefreshNonce?: number;
 }
 
 /**
@@ -43,6 +44,7 @@ export function useAssetState({
   isPlayingLivePhoto,
   activeSrc,
   isLoadingActiveMedia,
+  cacheRefreshNonce = 0,
 }: UseAssetStateProps): AssetStateStatus {
   const { isOnline } = useConnection({ enabled: !!activeAsset });
   const [state, setState] = useState<AssetStateStatus>({
@@ -176,7 +178,7 @@ export function useAssetState({
     return () => {
       cancelled = true;
     };
-  }, [activeAsset, activeStillSrc, activeFullsizeStillSrc]);
+  }, [activeAsset, activeStillSrc, activeFullsizeStillSrc, cacheRefreshNonce]);
 
   // Track real video playback download progress. The backend streams the video
   // file to its cache and emits `video_download_progress` events; we keep the

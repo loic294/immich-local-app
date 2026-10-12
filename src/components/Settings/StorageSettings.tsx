@@ -2,15 +2,12 @@ import { useEffect, useState } from "react";
 import { useStorageSettings } from "../../hooks/useSettings";
 import { useI18n } from "../../i18n";
 import type { VideoQuality } from "../../types/storage";
+import { LocalStorageGroups } from "./LocalStorageGroups";
+import { StorageConfirmationDialog } from "./StorageConfirmationDialog";
+import { formatStorageBytes as formatBytes } from "../../utils/storage";
 
 interface StorageSettingsProps {
   section: "storage" | "video";
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 4);
-  return `${(bytes / 1024 ** unit).toFixed(1)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
 }
 
 export function StorageSettings({ section }: StorageSettingsProps) {
@@ -18,6 +15,7 @@ export function StorageSettings({ section }: StorageSettingsProps) {
   const { preferences, storage, videoOptions, save, clear } = useStorageSettings();
   const [limitGiB, setLimitGiB] = useState("");
   const [inputError, setInputError] = useState("");
+  const [confirmCacheRemoval, setConfirmCacheRemoval] = useState(false);
   useEffect(() => {
     if (preferences.data) setLimitGiB(String(preferences.data.maxCacheBytes / 1024 ** 3));
   }, [preferences.data?.maxCacheBytes]);
@@ -159,6 +157,7 @@ export function StorageSettings({ section }: StorageSettingsProps) {
                 </button>
               </>
             )}
+            <LocalStorageGroups />
             <fieldset className="fieldset">
               <legend className="fieldset-legend">{t("settings.maxDisposableCache")}</legend>
               <div className="flex flex-wrap gap-2">
@@ -198,12 +197,23 @@ export function StorageSettings({ section }: StorageSettingsProps) {
               type="button"
               className="btn btn-outline btn-error self-start"
               disabled={clear.isPending}
-              onClick={() => {
-                if (window.confirm(t("settings.deleteCacheConfirm"))) clear.mutate();
-              }}
+              onClick={() => setConfirmCacheRemoval(true)}
             >
               {clear.isPending ? t("settings.clearing") : t("settings.deleteDisposableCache")}
             </button>
+            {confirmCacheRemoval && (
+              <StorageConfirmationDialog
+                title={t("settings.deleteDisposableCache")}
+                description={t("settings.deleteCacheConfirm")}
+                busy={clear.isPending}
+                onClose={() => setConfirmCacheRemoval(false)}
+                onConfirm={() =>
+                  clear.mutate(undefined, {
+                    onSettled: () => setConfirmCacheRemoval(false),
+                  })
+                }
+              />
+            )}
             {clear.isSuccess && (
               <p role="status" className="text-sm text-success">
                 {t("settings.removedCache", { size: formatBytes(clear.data) })}

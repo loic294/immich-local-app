@@ -335,6 +335,22 @@ impl Database {
             .map_err(|e| e.to_string())
     }
 
+    pub fn delete_editor_job(&self, asset_id: &str, local_path: &str) -> Result<(), String> {
+        self.open()?.execute(
+            "DELETE FROM editor_jobs WHERE asset_id = ?1 AND local_path = ?2",
+            params![asset_id, local_path],
+        ).map_err(|e| format!("Could not retire missing editor session: {e}"))?;
+        Ok(())
+    }
+
+    pub fn clear_editor_jobs(&self) -> Result<usize, String> {
+        self.init_media()?;
+        let count = self.open()?.execute("DELETE FROM editor_jobs", [])
+            .map_err(|e| format!("Could not clear editor watchers: {e}"))?;
+        log::info!("[media:editor] cleared session watchers count={count}");
+        Ok(count)
+    }
+
     pub fn save_editor_job(&self, job: &EditorJob) -> Result<(), String> {
         self.init_media()?;
         self.open()?.execute(

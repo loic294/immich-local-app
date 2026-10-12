@@ -76,9 +76,58 @@ pub async fn copy_assets_to_local_folder(
     asset_ids: Vec<String>,
     destination_folder: String,
     allow_cached_fallback: bool,
+    prefer_album_folder: Option<bool>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<LocalCopyResult, String> {
+    if prefer_album_folder.unwrap_or(false) {
+        if asset_ids.len() != 1 {
+            return Err("Album-aware download requires exactly one asset".into());
+        }
+        let asset_id = asset_ids[0].clone();
+        let (account_id, client) = state.account_and_client_for_asset(&asset_id);
+        let result = async {
+            let albums = client.get_albums_for_asset(&asset_id).await?;
+            let user_id = client.session.lock().await.as_ref()
+                .map(|session| session.user_id.clone())
+                .ok_or_else(|| "not authenticated".to_string())?;
+            let cached_albums = state.db.get_albums()?;
+            let selected = super::download_destination::preferred_album(&albums, &user_id);
+            let (destination, album_id) = if let Some(album) = selected {
+                let saved_path = cached_albums.iter()
+                    .find(|cached| cached.id == album.id && cached.account_id == account_id)
+                    .and_then(|cached| cached.saved_local_folder_path.as_deref());
+                let path = super::download_destination::album_local_folder(
+                    &album.album_name, album.start_date.as_deref(), saved_path,
+                    Path::new(&destination_folder),
+                )?;
+                fs::create_dir_all(&path).map_err(|err| format!(
+                    "Cannot create album download folder {}: {err}", path.display()
+                ))?;
+                state.db.upsert_albums(&account_id, std::slice::from_ref(album))?;
+                log::info!("[album-download] selected asset_id={} album_id={} owned={} start_date={:?} destination={}",
+                    asset_id, album.id, album.owner_id == user_id, album.start_date, path.display());
+                (path.to_string_lossy().into_owned(), Some(album.id.clone()))
+            } else {
+                log::info!("[album-download] no album asset_id={asset_id}; using configured local folder");
+                (destination_folder, None)
+            };
+            let result = copy_assets_to_local_folder_internal(
+                asset_ids, destination.clone(), allow_cached_fallback, state.clone(),
+                Some(app), "explorer_copy", album_id.as_deref(),
+            ).await?;
+            if result.copied_original_count + result.copied_cached_count > 0 {
+                if let Some(album_id) = album_id {
+                    state.db.update_album_saved_local_folder_path(&album_id, Some(&destination))?;
+                }
+            }
+            Ok(result)
+        }.await;
+        if let Err(ref error) = result {
+            log::error!("[album-download] failed: {error}");
+        }
+        return result;
+    }
     copy_assets_to_local_folder_internal(
         asset_ids,
         destination_folder,
@@ -211,15 +260,17 @@ pub async fn copy_assets_to_local_folder_internal(
         // never satisfy a request for the original (and vice versa).
         let already_saved = state
             .db
-            .list_local_saved_asset_sources(&details.id)
-            .unwrap_or_default()
+            .list_local_saved_asset_sources(&details.id)?
             .into_iter()
             .find(|(saved_path, saved_kind)| {
                 let saved = Path::new(saved_path);
                 saved.is_file()
                     && saved.parent() == Some(destination.as_path())
-                    && crate::services::storage::is_original_source_kind(saved_kind)
-                        != wants_transcoded
+                    && if wants_transcoded {
+                        saved_kind.ends_with(":transcoded")
+                    } else {
+                        crate::services::storage::is_original_source_kind(saved_kind)
+                    }
             })
             .map(|(saved_path, _)| saved_path);
 
@@ -229,6 +280,15 @@ pub async fn copy_assets_to_local_folder_internal(
                 details.id,
                 saved_path
             );
+            if album_id.is_some() {
+                let (mtime_ms, size_bytes) = get_file_snapshot(Path::new(&saved_path));
+                let name = Path::new(&saved_path).file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| "Saved file has no valid filename".to_string())?;
+                state.db.upsert_local_saved_asset(
+                    &details.id, album_id, &saved_path, name, &tracked_kind, mtime_ms, size_bytes,
+                )?;
+            }
             // Reserve the name so a different asset in this batch doesn't collide.
             if let Some(name) = Path::new(&saved_path)
                 .file_name()
@@ -640,8 +700,7 @@ fn stage_file_to_destination(
         }
     }
 
-    let unique_name = make_unique_name(&base_name, used_names);
-    let destination = destination_dir.join(unique_name);
+    let destination = resolve_destination_path(&base_name, destination_dir, used_names);
     fs::copy(source, &destination).map_err(|err| {
         format!(
             "failed to copy {} -> {}: {}",
@@ -667,8 +726,13 @@ fn resolve_destination_path(
         base_name = "asset.bin".to_string();
     }
 
-    let unique_name = make_unique_name(&base_name, used_names);
-    destination_dir.join(unique_name)
+    loop {
+        let unique_name = make_unique_name(&base_name, used_names);
+        let destination = destination_dir.join(unique_name);
+        if !destination.exists() {
+            return destination;
+        }
+    }
 }
 
 /// Server-transcoded playback is always MP4, so keep the original stem and use
@@ -841,6 +905,7 @@ fn make_unique_name(base_name: &str, used_names: &mut HashSet<String>) -> String
                 Some(ext) => format!("{}.{}", stem, ext),
                 None => stem.to_string(),
             }
+
         } else {
             match extension {
                 Some(ext) => format!("{}-{}.{}", stem, counter, ext),
@@ -852,5 +917,29 @@ fn make_unique_name(base_name: &str, used_names: &mut HashSet<String>) -> String
             return candidate;
         }
         counter += 1;
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+
+    #[test]
+    fn album_download_does_not_overwrite_existing_files_and_preserves_extensions() {
+        let folder = std::env::temp_dir().join(format!(
+            "immich-album-download-{}", uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&folder).unwrap();
+        for name in ["photo.jpg", "video.mp4"] {
+            fs::write(folder.join(name), b"existing original").unwrap();
+        }
+        let mut names = HashSet::new();
+        assert_eq!(resolve_destination_path("photo.jpg", &folder, &mut names), folder.join("photo-1.jpg"));
+        assert_eq!(resolve_destination_path("photo.jpg", &folder, &mut names), folder.join("photo-2.jpg"));
+        assert_eq!(resolve_destination_path("video.mp4", &folder, &mut names), folder.join("video-1.mp4"));
+        assert_eq!(fs::read(folder.join("photo.jpg")).unwrap(), b"existing original");
+        fs::remove_file(folder.join("photo.jpg")).unwrap();
+        fs::remove_file(folder.join("video.mp4")).unwrap();
+        fs::remove_dir(folder).unwrap();
     }
 }

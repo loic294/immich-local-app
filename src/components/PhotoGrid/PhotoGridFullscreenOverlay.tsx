@@ -10,16 +10,18 @@ import {
   MoreHorizontal,
   Clock,
   Pencil,
+  HardDrive,
 } from "lucide-react";
 import { SelectionActions } from "../Layout/SelectionActions";
 import { useI18n } from "../../i18n";
 import type { AssetCacheDetails, AssetSummary } from "../../types";
 import {
   copyAssetsToLocalFolder,
+  getCachedAssetDetails,
   getSettings,
   openFolderInFileExplorer,
-  getCachedAssetDetails,
   isThumbnailCached,
+  removeLocalOriginal,
 } from "../../api/tauri";
 import { CanvasImageViewer } from "./CanvasImageViewer";
 import { FullscreenInfoPanel } from "./FullscreenInfoPanel";
@@ -29,6 +31,7 @@ import { ZoomControl } from "./ZoomControl";
 import { isVideoAsset } from "./photoGridUtils";
 import { useAssetState } from "../../hooks/useAssetState";
 import { AssetStatusBadge } from "./AssetStatusBadge";
+import { LocalOriginalRemovalDialog } from "./LocalOriginalRemovalDialog";
 import { EditImportPill } from "../Media/EditImportPill";
 import { requestMediaEdit, getMediaEditState, subscribeMediaEditState } from "../../api/media";
 import { requestFixTime } from "../../api/time";
@@ -46,6 +49,7 @@ interface PhotoGridFullscreenOverlayProps {
   activeFullsizeStillSrc: string | null;
   zoom: number;
   onZoomChange: (value: number) => void;
+  onLocalOriginalRemoved: (assetId: string) => void;
   isPlayingLivePhoto: boolean;
   onSetIsPlayingLivePhoto: (value: boolean) => void;
   showInfoPanel: boolean;
@@ -80,6 +84,7 @@ export function PhotoGridFullscreenOverlay({
   activeFullsizeStillSrc,
   zoom,
   onZoomChange,
+  onLocalOriginalRemoved,
   isPlayingLivePhoto,
   onSetIsPlayingLivePhoto,
   showInfoPanel,
@@ -146,6 +151,14 @@ export function PhotoGridFullscreenOverlay({
   const downloadProgressRef = React.useRef<number>(0);
   const [downloadProgress, setDownloadProgress] = React.useState<number | null>(null);
   const [shareProgress, setShareProgress] = React.useState<number | null>(null);
+  const [cacheRefreshNonce, setCacheRefreshNonce] = React.useState(0);
+  const [isRemovingOriginal, setIsRemovingOriginal] = React.useState(false);
+  const [removalConfirmation, setRemovalConfirmation] = React.useState<{
+    assetId: string;
+    fileName: string;
+  } | null>(null);
+  const [localRemovalError, setLocalRemovalError] = React.useState<string | null>(null);
+  const [downloadError, setDownloadError] = React.useState<string | null>(null);
   const activeStillSrc = isThumbnailCached(activeAsset.id) ?? incomingStillSrc;
   const editState = React.useSyncExternalStore(subscribeMediaEditState, getMediaEditState);
   const originalId = activeAsset.stackOriginalId ?? activeAsset.id;
@@ -162,9 +175,12 @@ export function PhotoGridFullscreenOverlay({
     isPlayingLivePhoto,
     activeSrc,
     isLoadingActiveMedia: isVideoAsset(activeAsset) && activeSrc === null,
+    cacheRefreshNonce,
   });
 
   const handleStatusBadgeDownload = async () => {
+    if (isRemovingOriginal) return;
+    setDownloadError(null);
     try {
       const settings = await getSettings();
       const destinationFolder = settings.userLocalFolderPath.trim();
@@ -176,7 +192,10 @@ export function PhotoGridFullscreenOverlay({
       // When the full-resolution copy already exists locally, the badge acts as
       // an "Open in File Explorer" button instead of re-downloading.
       if (assetState.isFullResCached) {
-        await openFolderInFileExplorer(destinationFolder);
+        const details = await getCachedAssetDetails(activeAsset.id);
+        const localPath = details?.localSavedPath;
+        const folder = localPath?.replace(/[/\\][^/\\]+$/, "");
+        await openFolderInFileExplorer(folder || destinationFolder);
         return;
       }
 
@@ -204,15 +223,25 @@ export function PhotoGridFullscreenOverlay({
 
       try {
         // Copy the original file, with cached fallback if original is unavailable
-        await copyAssetsToLocalFolder([activeAsset.id], destinationFolder, false);
+        const result = await copyAssetsToLocalFolder(
+          [activeAsset.id],
+          destinationFolder,
+          false,
+          true,
+        );
+        if (result.copiedOriginalCount === 0) {
+          throw new Error("The original could not be downloaded");
+        }
       } finally {
         unlisten();
       }
 
       setDownloadProgress(100);
 
-      // Refresh cache details to detect newly available full-resolution
-      await getCachedAssetDetails(activeAsset.id);
+      setCacheRefreshNonce((value) => value + 1);
+      console.info("[asset-status:download] refreshing saved-file status", {
+        assetId: activeAsset.id,
+      });
 
       // Clear progress after a short delay
       setTimeout(() => {
@@ -221,8 +250,43 @@ export function PhotoGridFullscreenOverlay({
       }, 500);
     } catch (error) {
       console.error("[PhotoGridFullscreenOverlay] Download failed:", error);
+      setDownloadError(String(error));
       setDownloadProgress(null);
       setIsDownloading(false);
+    }
+  };
+
+  const handleRemoveLocalOriginal = async (assetId = activeAsset.id, allowUnverified = false) => {
+    if (isRemovingOriginal || isDownloading) {
+      console.warn("[local-original:remove] action already busy", { assetId: activeAsset.id });
+      return;
+    }
+    if (moreMenuRef.current) moreMenuRef.current.open = false;
+    setIsRemovingOriginal(true);
+    setLocalRemovalError(null);
+    console.info("[local-original:remove] verifying backup", { assetId });
+    try {
+      const result = await removeLocalOriginal(assetId, allowUnverified);
+      console.info("[local-original:remove] verification result", { assetId, ...result });
+      if (result.confirmationRequired) {
+        setRemovalConfirmation({
+          assetId,
+          fileName: activeAsset.originalFileName,
+        });
+        return;
+      }
+      if (!result.confirmationRequired) {
+        setRemovalConfirmation(null);
+        onLocalOriginalRemoved(assetId);
+        setCacheRefreshNonce((value) => value + 1);
+      }
+    } catch (error) {
+      console.error("[local-original:remove] failed", { assetId, error });
+      setLocalRemovalError(String(error));
+      setRemovalConfirmation(null);
+      setCacheRefreshNonce((value) => value + 1);
+    } finally {
+      setIsRemovingOriginal(false);
     }
   };
 
@@ -259,6 +323,20 @@ export function PhotoGridFullscreenOverlay({
         >
           {activeAsset.originalFileName}
         </div>
+
+        {removalConfirmation && (
+          <LocalOriginalRemovalDialog
+            fileName={removalConfirmation.fileName}
+            busy={isRemovingOriginal}
+            onConfirm={() => void handleRemoveLocalOriginal(removalConfirmation.assetId, true)}
+            onClose={() => {
+              console.info("[local-original:remove] cancelled", {
+                assetId: removalConfirmation.assetId,
+              });
+              setRemovalConfirmation(null);
+            }}
+          />
+        )}
 
         <div
           ref={toolbarRef}
@@ -347,10 +425,37 @@ export function PhotoGridFullscreenOverlay({
             <summary
               className="btn btn-square btn-sm btn-ghost text-white hover:bg-white/10"
               aria-label={t("photoGrid.moreActionsAria")}
+              aria-busy={isRemovingOriginal}
             >
-              <MoreHorizontal size={18} />
+              {isRemovingOriginal ? (
+                <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+              ) : (
+                <MoreHorizontal size={18} />
+              )}
             </summary>
-            <ul className="menu dropdown-content z-[10010] mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-1 text-base-content shadow-xl">
+            <ul
+              className="menu dropdown-content z-[10010] mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-1 text-base-content shadow-xl"
+              onPointerDown={(event) => {
+                // Safari does not focus buttons on click; preserve summary focus until the action runs.
+                event.preventDefault();
+              }}
+            >
+              {assetState.isFullResCached && (
+                <li>
+                  <button
+                    type="button"
+                    disabled={isRemovingOriginal || isDownloading}
+                    onClick={() => void handleRemoveLocalOriginal()}
+                  >
+                    {isRemovingOriginal ? (
+                      <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                    ) : (
+                      <HardDrive size={16} />
+                    )}
+                    {t("photoGrid.removeLocalOriginal")}
+                  </button>
+                </li>
+              )}
               {activeAsset.livePhotoVideoId && isPlayingLivePhoto && (
                 <li>
                   <button
@@ -380,6 +485,26 @@ export function PhotoGridFullscreenOverlay({
           </details>
         </div>
       </div>
+
+      {(localRemovalError || downloadError) && (
+        <div role="alert" className="alert alert-error absolute bottom-28 z-[10020] max-w-lg">
+          <span>
+            {localRemovalError
+              ? `${t("photoGrid.removeLocalOriginalFailed")}: ${localRemovalError}`
+              : downloadError}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => {
+              setLocalRemovalError(null);
+              setDownloadError(null);
+            }}
+          >
+            {t("photoGrid.backAria")}
+          </button>
+        </div>
+      )}
 
       <div
         className={`pointer-events-none flex h-full w-full items-stretch gap-4 ${mac ? "pt-40 lg:pt-20" : "pt-28 lg:pt-16"}`}

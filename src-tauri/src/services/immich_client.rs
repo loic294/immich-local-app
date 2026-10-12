@@ -892,6 +892,22 @@ impl ImmichClient {
         parse_asset_summary_from_value(&value)
     }
 
+    pub async fn original_available(&self, asset_id: &str) -> Result<bool, String> {
+        let session = self.session.lock().await.clone().ok_or("not authenticated")?;
+        let mut response = self.client
+            .get(format!("{}/api/assets/{asset_id}/original", normalize_base(&session.server_url)))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token)
+            .header(reqwest::header::RANGE, "bytes=0-0")
+            .send().await.map_err(|e| format!("Original availability probe failed: {e}"))?;
+        // Only request the first byte; never download an original to verify deletion safety.
+        if response.status().is_success() {
+            return Ok(response.chunk().await.map_err(|e| e.to_string())?
+                .is_some_and(|bytes| !bytes.is_empty()));
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND { return Ok(false); }
+        Err(format!("Original availability rejected (HTTP {})", response.status()))
+    }
+
     pub async fn get_asset_metadata(&self, asset_id: &str) -> Result<AssetMetadata, String> {
         let value = self.get_asset_value(asset_id).await?;
         let mut metadata = parse_asset_metadata_from_value(&value);
@@ -1019,6 +1035,28 @@ impl ImmichClient {
         }
 
         parse_memories(&body)
+    }
+
+    pub async fn get_albums_for_asset(&self, asset_id: &str) -> Result<Vec<AlbumSummary>, String> {
+        let session = self.session.lock().await.clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+        if !self.ping(&session.server_url).await {
+            return Err("offline: cannot check album membership for download".into());
+        }
+        log::info!("[album-download] checking membership asset_id={asset_id}");
+        let response = self.client
+            .get(format!("{}/api/albums", session.server_url))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token)
+            .query(&[("assetId", asset_id)])
+            .send().await.map_err(|err| err.to_string())?;
+        let status = response.status();
+        let body = response.text().await.map_err(|err| err.to_string())?;
+        if !status.is_success() {
+            return Err(format!("Album membership check failed with status {status}"));
+        }
+        let albums = parse_album_list(&body)?;
+        log::info!("[album-download] membership asset_id={asset_id} album_count={}", albums.len());
+        Ok(albums)
     }
 
     pub async fn get_albums(&self) -> Result<Vec<AlbumSummary>, String> {
@@ -3539,6 +3577,40 @@ mod deletion_api_tests {
         for bad in [serde_json::json!({"message":"unsupported"}), serde_json::json!([]), serde_json::json!({"id":[null]})] {
             assert!(deleted_bucket_ids(&bad).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn original_backup_probe_requires_readable_bytes_and_uses_a_range() {
+        for (status, body, expected) in [(206, "x", true), (200, "x", true), (200, "", false), (404, "", false)] {
+            let (client, requests) = fixture(vec![(status, body)]).await;
+            assert_eq!(client.original_available("asset").await.unwrap(), expected);
+            let requests = requests.await.unwrap();
+            assert!(requests[0].starts_with("GET /api/assets/asset/original "));
+            assert!(requests[0].to_lowercase().contains("range: bytes=0-0"));
+        }
+        let (client, requests) = fixture(vec![(403, "forbidden")]).await;
+        assert!(client.original_available("asset").await.unwrap_err().contains("403"));
+        requests.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn album_download_membership_is_bounded_to_the_asset_and_rejects_errors() {
+            let body = r#"[{"id":"album","albumName":"Trip","ownerId":"user","startDate":"2025-01-01T00:00:00Z"}]"#;
+            let (client, requests) = fixture(vec![(200, "{}"), (200, body)]).await;
+            let albums = client.get_albums_for_asset("photo-or-video").await.unwrap();
+            assert_eq!(albums.len(), 1);
+            assert_eq!(albums[0].owner_id, "user");
+            let requests = requests.await.unwrap();
+            assert!(requests[0].starts_with("GET /api/server/ping "));
+            assert!(requests[1].starts_with("GET /api/albums?assetId=photo-or-video "));
+            assert!(requests[1].to_ascii_lowercase().contains("x-api-key: fixture"));
+
+            let (client, requests) = fixture(vec![(200, "{}"), (403, "{}")]).await;
+            assert!(client.get_albums_for_asset("asset").await.unwrap_err().contains("403"));
+            requests.await.unwrap();
+            let (client, requests) = fixture(vec![(200, "{}"), (200, r#"{"message":"invalid"}"#)]).await;
+            assert!(client.get_albums_for_asset("asset").await.is_err());
+            requests.await.unwrap();
     }
 
     #[tokio::test]

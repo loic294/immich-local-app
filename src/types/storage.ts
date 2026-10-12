@@ -30,3 +30,17 @@ export interface VideoQualityOptions {
   options: { value: VideoQuality; label: string }[];
   message: string;
 }
+
+export interface LocalStorageGroup {
+  albumId: string | null;
+  name: string;
+  folderPath: string | null;
+  bytes: number;
+  fileCount: number;
+}
+
+export interface LocalStorageRemovalPreview {
+  token: string;
+  fileCount: number;
+  unverifiedCount: number;
+}

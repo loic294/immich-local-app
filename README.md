@@ -133,7 +133,15 @@ exports run without console windows, so background work does not steal focus.
 Opening the configured editor or Explorer remains an intentional visible action.
 
 **Editing** opens the original image in RapidRAW (or the configured editor),
-downloading it first if needed. Editing is available per photo; the album-wide
+using an existing local original or the default album-aware full-resolution
+download flow if needed. No separate `Editing` folder or editor-only original
+copy is created; sidecars are watched beside the same local original.
+Manually deleted editor sources retire their saved watcher without generating
+missing-preview errors; remaining sidecars are left untouched.
+Editor watchers are cleared when Immich Local exits and at the next startup;
+only launching a new edit starts watching again. Timestamp/size-only changes
+refresh tracking silently and never update descriptions or create metadata notices.
+Editing is available per photo; the album-wide
 retouch action has been removed. The Edit button stays busy until a watched
 sidecar changes; no Finish editing action is required. Sidecar changes trigger
 an export suggestion. During import, a bottom pill with a small spinner appears
@@ -161,6 +169,29 @@ or pending uploads. A currently playing video is protected and any resulting
 over-limit state is explicitly shown. Video quality selects either the
 server-transcoded source or original source independently for streaming and
 offline downloads; available resolutions depend on server capabilities.
+Storage also lists every saved album and a separate **Timeline downloads** group
+with actual on-disk sizes. Timeline downloads exclude album-folder files and
+disposable previews. Each group offers local-only deletion through a DaisyUI
+confirmation, with an additional warning when server backups cannot be verified.
+Only the inspected tracked files are removed; pending uploads, unrelated files,
+and server media are protected. A file changed or added after inspection requires
+a fresh confirmation. Storage totals and album indicators refresh after removal.
+Individual full-resolution photo and video downloads use their album's local
+folder, preferring albums owned by the asset's signed-in account, then the newest
+album start date. Existing album paths are reused; otherwise the normal
+`year/album name` folder is created under the configured local folder. Assets
+without an album use the configured folder directly. Explicit export destinations
+are not overridden.
+Saved album thumbnails display the number of missing local files, checked against
+the filesystem. The count also appears in the **Sync** button's tooltip.
+**Sync**, next to **Open in File Explorer**, downloads missing
+photos and videos without downloading existing copies again. Partial folders
+are not labelled as fully saved; preview-only files do not count as downloads.
+In a photo's fullscreen three-dot menu, **Remove local high-resolution version**
+removes only tracked original downloads (and original-quality video cache),
+leaving previews and Immich server files untouched. If a matching server backup
+cannot be verified, including offline or locally modified files, confirmation is
+required. Pending uploads cannot be removed.
 The settings header and section navigation stay visible while the selected
 section scrolls; narrow windows use a horizontal section menu. In **Accounts**,
 set a per-account Folders base directory using an absolute path from the cached

@@ -7,7 +7,6 @@ use crate::services::immich_client::{
     AlbumOwnerSummary, AlbumShareUser, AlbumSummary, AlbumUserCandidate,
 };
 use crate::AppState;
-use chrono::{DateTime, Datelike};
 use serde::Serialize;
 use std::fs;
 use std::io::ErrorKind;
@@ -392,19 +391,6 @@ pub async fn remove_user_from_album(
         .map_err(|err| format!("remove user from album failed: {err}"))
 }
 
-fn sanitize_album_folder_name(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| match ch {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect::<String>()
-        .trim()
-        .to_string()
-}
-
 #[tauri::command]
 pub async fn save_album_locally(
     album_id: String,
@@ -429,26 +415,6 @@ pub async fn save_album_locally(
         album.album_name, album.start_date
     );
 
-    // Extract year from start_date
-    let year = if let Some(date_str) = &album.start_date {
-        match DateTime::parse_from_rfc3339(date_str) {
-            Ok(dt) => dt.year(),
-            Err(_) => {
-                log::warn!(
-                    "[album-save-locally] failed to parse date, using current year: {}",
-                    date_str
-                );
-                chrono::Local::now().year()
-            }
-        }
-    } else {
-        log::warn!("[album-save-locally] no start_date, using current year");
-        chrono::Local::now().year()
-    };
-
-    // Sanitize album name for filesystem
-    let sanitized_name = sanitize_album_folder_name(&album.album_name);
-
     // Get user's configured local folder path from settings
     let settings = state
         .db
@@ -464,7 +430,12 @@ pub async fn save_album_locally(
         Path::new(&settings.user_local_folder_path).to_path_buf()
     };
 
-    let destination = base_folder.join(year.to_string()).join(&sanitized_name);
+    let destination = super::download_destination::album_local_folder(
+        &album.album_name,
+        album.start_date.as_deref(),
+        album.saved_local_folder_path.as_deref(),
+        &base_folder,
+    )?;
 
     log::warn!(
         "[album-save-locally] creating destination folder: {}",
@@ -476,13 +447,25 @@ pub async fn save_album_locally(
         .map_err(|err| format!("[album-save-locally] failed to create folder: {}", err))?;
 
     // Get all assets in the album from the album's owning account.
-    let (_account_id, album_client) = state.account_and_client_for_album(&album_id);
+    let (account_id, album_client) = state.account_and_client_for_album(&album_id);
+    let server_url = album_client.session.lock().await.as_ref()
+        .map(|session| session.server_url.clone())
+        .ok_or_else(|| "not authenticated".to_string())?;
+    if !album_client.ping(&server_url).await {
+        return Err("offline: album download requires a server connection".into());
+    }
     let assets = album_client
         .get_album_assets(&album_id)
         .await
         .map_err(|err| format!("[album-save-locally] failed to get album assets: {}", err))?;
 
     let asset_ids: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
+    // Album list responses can omit Live Photo metadata. Preserve enriched cached assets.
+    let existing_ids = state.db.get_existing_asset_ids(&asset_ids)?;
+    let new_assets: Vec<_> = assets.iter()
+        .filter(|asset| !existing_ids.contains(&asset.id)).cloned().collect();
+    state.db.upsert_assets(&account_id, &new_assets)?;
+    state.db.replace_album_assets(&account_id, &album_id, &asset_ids)?;
     log::warn!(
         "[album-save-locally] found {} assets to copy",
         asset_ids.len()
@@ -508,11 +491,11 @@ pub async fn save_album_locally(
         },
     );
 
-    // Call the copy function with allow_cached_fallback=true
+    // Reuse existing downloads, but never substitute previews for missing originals.
     let copy_result = copy_assets_to_local_folder_internal(
         asset_ids,
         destination.to_string_lossy().to_string(),
-        true,
+        false,
         state.clone(),
         Some(app.clone()),
         "album_save",
@@ -541,6 +524,12 @@ pub async fn save_album_locally(
         .db
         .update_album_saved_local_folder_path(&album_id, Some(&result))
         .map_err(|err| format!("[album-save-locally] failed to persist saved folder path: {}", err))?;
+    if copy_result.failed_count + copy_result.original_unavailable_count > 0 {
+        let error = format!("Album download incomplete: {} files could not be downloaded",
+            copy_result.failed_count + copy_result.original_unavailable_count);
+        log::error!("[album-save-locally] album_id={album_id} {error}");
+        return Err(error);
+    }
     log::warn!("[album-save-locally] done folder_path={}", result);
     Ok(result)
 }

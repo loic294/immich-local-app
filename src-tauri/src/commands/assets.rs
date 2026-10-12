@@ -828,9 +828,23 @@ pub async fn get_cached_asset_details(
     let local_saved_path = state
         .db
         .list_local_saved_asset_paths_for_asset(&asset_id)
-        .unwrap_or_default()
+        .map_err(|err| format!("local saved paths read failed: {err}"))?
         .into_iter()
         .find(|path| std::path::Path::new(path).is_file());
+
+    let local_original_exists = state
+        .db
+        .list_local_original_paths_for_asset(&asset_id)?
+        .iter()
+        .any(|path| std::path::Path::new(path).is_file());
+    let original_video_cached = if uuid::Uuid::parse_str(&asset_id).is_ok() {
+        let path = crate::services::storage::cache_root()?
+            .join("videos")
+            .join(format!("{asset_id}.original.mp4"));
+        path.is_file() && path.with_extension("mp4.done").is_file()
+    } else {
+        false
+    };
 
     Ok(details.map(|asset| CachedAssetDetails {
         id: asset.id,
@@ -855,7 +869,7 @@ pub async fn get_cached_asset_details(
         account_name: asset.account_name,
         thumbnail_local: asset.thumbnail_local,
         preview_local: asset.preview_local,
-        full_resolution_local: asset.full_resolution_local,
+        full_resolution_local: local_original_exists || original_video_cached,
         local_saved_path,
     }))
 }

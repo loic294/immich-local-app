@@ -1,9 +1,13 @@
 pub mod albums;
+pub mod album_local_status;
 pub mod assets;
 pub mod deletion;
+mod download_destination;
 pub mod auth;
 pub mod browsing;
 pub mod folders;
+pub mod local_original;
+pub mod local_storage;
 pub mod media;
 pub mod memories;
 pub mod settings;

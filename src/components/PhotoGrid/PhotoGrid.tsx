@@ -919,6 +919,8 @@ export function PhotoGrid({
 
   const hasActive = activeIndex !== null && activeIndex >= 0 && activeIndex < lightboxAssets.length;
   const activeAsset = hasActive && activeIndex !== null ? lightboxAssets[activeIndex] : null;
+  const activeAssetRef = useRef(activeAsset);
+  activeAssetRef.current = activeAsset;
 
   useEffect(() => {
     if (activeAsset) {
@@ -1058,7 +1060,7 @@ export function PhotoGrid({
         }
 
         // Copy the original file to local folder
-        await copyAssetsToLocalFolder([asset.id], destinationFolder, false);
+        await copyAssetsToLocalFolder([asset.id], destinationFolder, false, true);
 
         // Get updated cache details to find the local path
         const cacheDetails = await getCachedAssetDetails(asset.id);
@@ -1072,7 +1074,11 @@ export function PhotoGrid({
             setActiveFullsizeStillSrc(localSrc);
           }
         }
-      } catch {
+      } catch (error) {
+        console.error("[album-download] Full-resolution preload failed", {
+          assetId: asset.id,
+          error,
+        });
         // Keep using thumbnail source when full-size preload fails.
       } finally {
         if (fullsizeStillLoadingAssetIdRef.current === asset.id) {
@@ -1694,6 +1700,11 @@ export function PhotoGrid({
           activeFullsizeStillSrc={activeFullsizeStillSrc}
           zoom={zoom}
           onZoomChange={setZoom}
+          onLocalOriginalRemoved={(assetId) => {
+            if (activeAssetRef.current?.id !== assetId) return;
+            setZoom(100);
+            setActiveFullsizeStillSrc(null);
+          }}
           isPlayingLivePhoto={isPlayingLivePhoto}
           onSetIsPlayingLivePhoto={setIsPlayingLivePhoto}
           showInfoPanel={showInfoPanel}

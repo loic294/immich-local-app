@@ -4,6 +4,8 @@ mod commands;
 mod db;
 mod services;
 mod util;
+use tauri::Manager;
+use commands::album_local_status::get_album_local_status;
 
 use commands::albums::{
     add_assets_to_album, add_user_to_album, can_manage_album_sharing, create_album_with_assets,
@@ -35,6 +37,7 @@ use commands::folders::{
     set_folders_base_directory,
 };
 use commands::memories::fetch_memories;
+use commands::local_original::remove_local_original;
 use commands::settings::{get_cache_path, get_cache_stats, get_settings, update_settings};
 use commands::shell::{
     copy_assets_to_clipboard, copy_assets_to_local_folder, copy_text_to_clipboard,
@@ -220,6 +223,8 @@ pub fn main() {
         .plugin(tauri_plugin_clipboard::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Editor watchers belong only to this app launch, including after a crash.
+            app.state::<AppState>().db.clear_editor_jobs()?;
             match app.deep_link().get_current() {
                 Ok(Some(urls)) => {
                     log::info!("[oauth:deep-link:rust] startup urls={:?}", urls);
@@ -264,6 +269,9 @@ pub fn main() {
             commands::settings::get_feature_preferences,
             commands::settings::update_feature_preferences,
             commands::settings::get_storage_summary,
+            commands::local_storage::get_local_storage_groups,
+            commands::local_storage::prepare_local_storage_removal,
+            commands::local_storage::remove_local_storage_group,
             commands::settings::clear_disposable_cache,
             commands::settings::get_video_quality_options,
             commands::browsing::get_cached_people,
@@ -331,6 +339,7 @@ pub fn main() {
             add_user_to_album,
             remove_user_from_album,
             save_album_locally,
+            get_album_local_status,
             delete_local_album,
             get_unique_original_paths,
             get_folder_assets_paged,
@@ -345,6 +354,7 @@ pub fn main() {
             open_folder_in_file_explorer,
             copy_assets_to_clipboard,
             copy_assets_to_local_folder,
+            remove_local_original,
             copy_text_to_clipboard,
             fetch_assets_by_month,
             get_calendar_assets_paged,
@@ -363,6 +373,13 @@ pub fn main() {
             apply_saved_local_file_changes,
             dismiss_saved_local_file_changes
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Err(error) = app.state::<AppState>().db.clear_editor_jobs() {
+                    log::error!("[media:editor] failed to clear watchers on exit: {error}");
+                }
+            }
+        });
 }

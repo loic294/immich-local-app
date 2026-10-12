@@ -1,15 +1,13 @@
-import { CloudAlert, CloudSync, CloudDownload, Check } from "lucide-react";
-import type { ComponentType } from "react";
+import { CloudOff, CloudSync, CloudDownload, CircleCheck, ImageDown, WifiOff } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { AssetStateStatus } from "../../hooks/useAssetState";
 
 export interface BadgeContent {
-  icon: ComponentType<any>;
+  icon: LucideIcon;
   title: string;
   subtitle: string;
   isClickable: boolean;
   iconColor: string;
-  /** Solid background color for the icon circle (icon itself is white). */
-  circleColor: string;
 }
 
 /**
@@ -40,7 +38,7 @@ export function getStatusBadgeContent(
   // 1. Full-resolution is cached locally
   if (isFullResCached) {
     return {
-      icon: Check,
+      icon: CircleCheck,
       title:
         mediaType === "video"
           ? t("photoGrid.assetStatus.videoSaved")
@@ -48,19 +46,17 @@ export function getStatusBadgeContent(
       subtitle: t("photoGrid.assetStatus.fullResLoadedSubtitle"),
       isClickable: true,
       iconColor: "text-success",
-      circleColor: "bg-success",
     };
   }
 
   // 2. Offline + no preview cached → image unavailable
   if (isOnline === false && !isPreviewCached) {
     return {
-      icon: CloudAlert,
+      icon: CloudOff,
       title: t("photoGrid.assetStatus.unavailable"),
       subtitle: t("photoGrid.assetStatus.unavailableSubtitle"),
       isClickable: false,
-      iconColor: "text-warning",
-      circleColor: "bg-warning",
+      iconColor: "text-error",
     };
   }
 
@@ -73,7 +69,6 @@ export function getStatusBadgeContent(
         subtitle: t("photoGrid.assetStatus.downloadingVideoSubtitle"),
         isClickable: false,
         iconColor: "text-info",
-        circleColor: "bg-info",
       };
     }
     return {
@@ -82,7 +77,6 @@ export function getStatusBadgeContent(
       subtitle: t("photoGrid.assetStatus.downloadingPreviewSubtitle"),
       isClickable: false,
       iconColor: "text-info",
-      circleColor: "bg-info",
     };
   }
 
@@ -94,31 +88,28 @@ export function getStatusBadgeContent(
       subtitle: t("photoGrid.assetStatus.downloadingFullResSubtitle"),
       isClickable: false,
       iconColor: "text-info",
-      circleColor: "bg-info",
     };
   }
 
   // 5. Offline + preview cached → can't download full-res
   if (isOnline === false && isPreviewCached) {
     return {
-      icon: CloudDownload,
+      icon: WifiOff,
       title: t("photoGrid.assetStatus.previewSaved"),
       subtitle: t("photoGrid.assetStatus.offlineCannotDownload"),
       isClickable: false,
       iconColor: "text-warning",
-      circleColor: "bg-warning",
     };
   }
 
   // 6. Online + preview cached (no full-res) → download available
   if (isOnline && isPreviewCached && !isFullResCached) {
     return {
-      icon: CloudDownload,
+      icon: ImageDown,
       title: t("photoGrid.assetStatus.previewSaved"),
       subtitle: t("photoGrid.assetStatus.previewSavedSubtitle"),
       isClickable: true,
-      iconColor: "text-success",
-      circleColor: "bg-success",
+      iconColor: "text-info",
     };
   }
 
@@ -131,8 +122,7 @@ export function getStatusBadgeContent(
       title: t("photoGrid.assetStatus.videoReady"),
       subtitle: t("photoGrid.assetStatus.videoReadySubtitle"),
       isClickable: true,
-      iconColor: "text-success",
-      circleColor: "bg-success",
+      iconColor: "text-error",
     };
   }
 

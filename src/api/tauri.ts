@@ -27,6 +27,13 @@ import type {
   SortPreference,
 } from "../types";
 
+export function removeLocalOriginal(assetId: string, allowUnverified = false) {
+  return invoke<{ confirmationRequired: boolean; removedCount: number }>("remove_local_original", {
+    assetId,
+    allowUnverified,
+  });
+}
+
 export type AuthResponse = {
   accessTokenPreview: string;
   userId: string;
@@ -734,6 +741,14 @@ export async function saveAlbumLocally(albumId: string): Promise<{ folderPath: s
   return { folderPath };
 }
 
+export async function getAlbumLocalStatus(albumId: string): Promise<{
+  totalCount: number;
+  localCount: number;
+  missingCount: number;
+}> {
+  return invoke("get_album_local_status", { albumId });
+}
+
 export async function deleteLocalAlbum(albumId: string): Promise<void> {
   return invoke<void>("delete_local_album", { albumId });
 }
@@ -831,11 +846,13 @@ export async function copyAssetsToLocalFolder(
   assetIds: string[],
   destinationFolder: string,
   allowCachedFallback: boolean,
+  preferAlbumFolder = false,
 ): Promise<LocalCopyResult> {
   return invoke<LocalCopyResult>("copy_assets_to_local_folder", {
     assetIds,
     destinationFolder,
     allowCachedFallback,
+    preferAlbumFolder,
   });
 }
 
