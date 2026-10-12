@@ -997,7 +997,7 @@ impl ImmichClient {
             HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
         );
 
-        let request_date = Local::now().format("%Y-%m-%dT00:00:00").to_string();
+        let request_date = Local::now().format("%Y-%m-%d").to_string();
         let url = format!("{}/api/memories", session.server_url);
 
         let response = self
@@ -1908,8 +1908,8 @@ impl ImmichClient {
         Ok(all_people)
     }
 
-    /// v2 uses PUT for updates; v3 uses PATCH. Both support the target-first
-    /// legacy merge route, whose HTTP 200 body can still report item failures.
+    /// v2 uses PUT for updates; v3 uses PATCH. Merges use the target-first bulk
+    /// route from v3.2.1 onward; HTTP 200 bodies can still report item failures.
     pub async fn mutate_person(
         &self,
         person_id: &str,
@@ -1944,6 +1944,9 @@ impl ImmichClient {
                 "Unsupported Immich people API version: {major}; version 2 or 3 required"
             ));
         }
+        let minor = version.get("minor").and_then(Value::as_u64).unwrap_or(0);
+        let patch = version.get("patch").and_then(Value::as_u64).unwrap_or(0);
+        let use_bulk_merge = major == 3 && (minor > 2 || (minor == 2 && patch >= 1));
         log::info!(
             "[browsing.people] mutation start person={} version={} action={}",
             person_id,
@@ -1955,12 +1958,27 @@ impl ImmichClient {
             }
         );
         let request = if let Some(target_id) = merge_target_id {
+            let (url, ids) = if use_bulk_merge {
+                (
+                    format!("{}/api/people/merge", session.server_url),
+                    vec![target_id, person_id],
+                )
+            } else {
+                (
+                    format!("{}/api/people/{}/merge", session.server_url, target_id),
+                    vec![person_id],
+                )
+            };
+            log::info!(
+                "[browsing.people] merge request source={} target={} route={} ids={}",
+                person_id,
+                target_id,
+                if use_bulk_merge { "bulk" } else { "legacy" },
+                ids.len()
+            );
             self.client
-                .post(format!(
-                    "{}/api/people/{}/merge",
-                    session.server_url, target_id
-                ))
-                .json(&serde_json::json!({ "ids": [person_id] }))
+                .post(url)
+                .json(&serde_json::json!({ "ids": ids }))
         } else {
             let url = format!("{}/api/people/{}", session.server_url, person_id);
             let mut body = serde_json::Map::new();
@@ -1985,16 +2003,28 @@ impl ImmichClient {
         let status = response.status();
         let body = response.text().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
+            log::warn!(
+                "[browsing.people] mutation rejected person={} status={}",
+                person_id,
+                status
+            );
             return Err(format!(
                 "Immich person mutation rejected ({status}): {}",
                 truncate_for_log(&body)
             ));
         }
         if let Some(target_id) = merge_target_id {
-            let minor = version.get("minor").and_then(Value::as_u64).unwrap_or(0);
-            let patch = version.get("patch").and_then(Value::as_u64).unwrap_or(0);
-            let require_target = major == 3 && (minor > 2 || (minor == 2 && patch >= 1));
-            verify_person_merge_response(&body, person_id, target_id, require_target)?;
+            verify_person_merge_response(&body, person_id, target_id, use_bulk_merge).map_err(
+                |error| {
+                    log::warn!(
+                        "[browsing.people] merge confirmation failed source={} target={} error={}",
+                        person_id,
+                        target_id,
+                        error
+                    );
+                    error
+                },
+            )?;
         }
         log::info!("[browsing.people] mutation server success person={person_id}");
         Ok(())
@@ -3636,28 +3666,125 @@ fn parse_memories(payload: &str) -> Result<Vec<MemorySummary>, String> {
     Err("unknown memories payload shape".to_string())
 }
 
+#[cfg(test)]
+mod memory_api_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const MEMORIES: &str = r#"[{"id":"memory","year":2025,"assets":[{"id":"asset","originalFileName":"photo.jpg"}]},{"id":"empty","assets":[]}]"#;
+
+    async fn fixture(status: u16, body: String) -> (ImmichClient, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let request = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                request.push(stream.read_u8().await.unwrap());
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let client = ImmichClient::new();
+        client
+            .hydrate_offline_session(&url, "memory-fixture", false, "user", None)
+            .await
+            .unwrap();
+        (client, request)
+    }
+
+    #[tokio::test]
+    async fn memories_request_uses_local_iso_date_and_preserves_response_shapes() {
+        for body in [MEMORIES.to_string(), format!(r#"{{"items":{MEMORIES}}}"#)] {
+            let (client, request) = fixture(200, body).await;
+            let before = Local::now().format("%Y-%m-%d").to_string();
+            let memories = client.get_memories().await.unwrap();
+            let after = Local::now().format("%Y-%m-%d").to_string();
+            let request = request.await.unwrap();
+            let request_line = request.lines().next().unwrap();
+            // Either date is valid if the request crosses local midnight.
+            assert!(
+                request_line == format!("GET /api/memories?for={before} HTTP/1.1")
+                    || request_line == format!("GET /api/memories?for={after} HTTP/1.1"),
+                "unexpected memory request: {request_line}"
+            );
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("x-api-key: memory-fixture\r\n"));
+            assert_eq!(memories.len(), 1);
+            assert_eq!(memories[0].id, "memory");
+            assert_eq!(memories[0].year, Some(2025));
+            assert_eq!(memories[0].assets[0].id, "asset");
+            assert!(memories[0].account_id.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn memories_rejected_request_keeps_session_and_surfaces_error() {
+        let (client, request) = fixture(400, r#"{"message":"invalid date"}"#.to_string()).await;
+        let error = client.get_memories().await.unwrap_err();
+        assert!(error.contains("memory fetch failed with status 400"));
+        assert!(error.contains("invalid date"));
+        assert!(client.session.lock().await.is_some());
+        request.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn memories_require_authentication() {
+        assert_eq!(
+            ImmichClient::new().get_memories().await.unwrap_err(),
+            "not authenticated"
+        );
+    }
+
+    #[test]
+    fn memories_parser_preserves_empty_results_and_rejects_invalid_payloads() {
+        for payload in ["[]", r#"{"items":[]}"#, r#"[{"id":"empty","assets":[]}]"#] {
+            assert!(parse_memories(payload).unwrap().is_empty());
+        }
+        for payload in ["invalid", r#"{"message":"error"}"#, r#"{"items":null}"#] {
+            assert!(parse_memories(payload).is_err());
+        }
+    }
+}
+
 fn verify_person_merge_response(
     payload: &str,
     source_id: &str,
     target_id: &str,
     require_target: bool,
 ) -> Result<(), String> {
-    let results: Value = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    let results: Value = serde_json::from_str(payload)
+        .map_err(|e| format!("Invalid Immich person merge response: {e}"))?;
+    let items = results
+        .as_array()
+        .ok_or_else(|| "Invalid Immich person merge response: expected result array".to_string())?;
     let succeeded = |id: &str| {
-        results
-            .as_array()
-            .and_then(|items| {
-                items
-                    .iter()
-                    .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
-            })
+        let mut matches = items
+            .iter()
+            .filter(|item| item.get("id").and_then(Value::as_str) == Some(id));
+        matches
+            .next()
             .and_then(|item| item.get("success"))
             .and_then(Value::as_bool)
             == Some(true)
+            && matches.next().is_none()
     };
-    // v3.2.1+ can fall back to the first accessible ID as its target. A source
-    // success alone does not prove it merged into the requested named person.
-    if !succeeded(source_id) || (require_target && !succeeded(target_id)) {
+    // Bulk merges can fall back to the first accessible ID as their target.
+    // Require unique confirmations for both IDs before allowing cache changes.
+    if !succeeded(source_id)
+        || (require_target && !succeeded(target_id))
+        || items
+            .iter()
+            .any(|item| item.get("success").and_then(Value::as_bool) != Some(true))
+    {
         return Err(format!(
             "Immich did not confirm merging person {source_id} into {target_id}: {}",
             truncate_for_log(payload)
@@ -3669,6 +3796,136 @@ fn verify_person_merge_response(
 #[cfg(test)]
 mod people_response_tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn merge_fixture(
+        version: (u64, u64, u64),
+        status: u16,
+        merge_body: &str,
+    ) -> (ImmichClient, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (major, minor, patch) = version;
+        let responses = [
+            (200, r#"{"res":"pong"}"#.to_string()),
+            (
+                200,
+                serde_json::json!({ "major": major, "minor": minor, "patch": patch }).to_string(),
+            ),
+            (status, merge_body.to_string()),
+        ];
+        let requests = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    request.push(stream.read_u8().await.unwrap());
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let header_end = request.len();
+                let headers = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .map(|value| value.trim().parse::<usize>().unwrap())
+                    .unwrap_or(0);
+                request.resize(header_end + length, 0);
+                stream.read_exact(&mut request[header_end..]).await.unwrap();
+                requests.push(String::from_utf8(request).unwrap());
+                let response = format!(
+                    "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        let client = ImmichClient::new();
+        client
+            .hydrate_offline_session(&url, "fixture", false, "user", None)
+            .await
+            .unwrap();
+        (client, requests)
+    }
+
+    #[tokio::test]
+    async fn merge_routes_and_bodies_follow_version_threshold() {
+        for (version, bulk) in [
+            ((2, 0, 0), false),
+            ((2, 99, 99), false),
+            ((3, 1, 99), false),
+            ((3, 2, 0), false),
+            ((3, 2, 1), true),
+            ((3, 2, 2), true),
+            ((3, 3, 0), true),
+        ] {
+            let response = if bulk {
+                r#"[{"id":"target","success":true},{"id":"source","success":true}]"#
+            } else {
+                r#"[{"id":"source","success":true}]"#
+            };
+            let (client, requests) = merge_fixture(version, 200, response).await;
+            client
+                .mutate_person("source", None, None, Some("target"))
+                .await
+                .unwrap();
+            let requests = requests.await.unwrap();
+            assert!(requests[0].starts_with("GET /api/server/ping "));
+            assert!(requests[1].starts_with("GET /api/server/version "));
+            let merge = &requests[2];
+            let route = if bulk {
+                "/api/people/merge"
+            } else {
+                "/api/people/target/merge"
+            };
+            assert!(
+                merge.starts_with(&format!("POST {route} ")),
+                "version {version:?}: {merge}"
+            );
+            let body: Value =
+                serde_json::from_str(merge.split_once("\r\n\r\n").unwrap().1).unwrap();
+            let expected = if bulk {
+                serde_json::json!({ "ids": ["target", "source"] })
+            } else {
+                serde_json::json!({ "ids": ["source"] })
+            };
+            assert_eq!(body, expected, "version {version:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn merge_mutation_surfaces_rejected_and_partial_results() {
+        for (status, body, expected_error) in [
+            (403, r#"{"message":"denied"}"#, "rejected"),
+            (
+                200,
+                r#"[{"id":"source","success":true}]"#,
+                "did not confirm",
+            ),
+            (
+                200,
+                r#"[{"id":"source","success":true},{"id":"source","success":true}]"#,
+                "did not confirm",
+            ),
+            (
+                200,
+                r#"[{"id":"target","success":true},{"id":"source","success":false,"error":"no_permission"}]"#,
+                "no_permission",
+            ),
+            (200, "invalid", "Invalid Immich person merge response"),
+        ] {
+            let (client, requests) = merge_fixture((3, 2, 1), status, body).await;
+            let error = client
+                .mutate_person("source", None, None, Some("target"))
+                .await
+                .unwrap_err();
+            assert!(error.contains(expected_error), "{error}");
+            requests.await.unwrap();
+        }
+    }
 
     #[test]
     fn merge_confirmation_validates_bulk_results_not_http_status_alone() {
@@ -3688,6 +3945,40 @@ mod people_response_tests {
         .is_err());
         assert!(verify_person_merge_response("[]", "source", "target", false).is_err());
         assert!(verify_person_merge_response("invalid", "source", "target", false).is_err());
+    }
+
+    #[test]
+    fn merge_confirmation_rejects_duplicate_missing_and_malformed_results() {
+        for payload in [
+            r#"[{"id":"source","success":true},{"id":"source","success":true}]"#,
+            r#"[{"id":"target","success":true}]"#,
+            r#"[{"id":"target","success":true},{"id":"source","success":true},{"id":"source","success":true}]"#,
+            r#"[{"id":"target","success":true},{"id":"target","success":true},{"id":"source","success":true}]"#,
+            r#"[{"id":"target","success":true},{"id":"source","success":true},{"id":"source","success":false}]"#,
+            r#"[{"id":"target","success":true},{"id":"source","success":true},{"id":"other","success":false}]"#,
+            r#"[{"id":"target","success":true},{"id":"source","success":"true"}]"#,
+            r#"[{"id":"target","success":true},{"id":"source"}]"#,
+            r#"[{"id":"target","success":true},{"success":true}]"#,
+            r#"{"id":"source","success":true}"#,
+            "null",
+        ] {
+            assert!(
+                verify_person_merge_response(payload, "source", "target", true).is_err(),
+                "{payload}"
+            );
+        }
+        for payload in [
+            r#"[{"id":"source","success":true},{"id":"source","success":true}]"#,
+            r#"[{"id":"source","success":true},{"id":"source","success":false}]"#,
+            r#"[{"id":"source","success":false},{"id":"source","success":true}]"#,
+        ] {
+            assert!(
+                verify_person_merge_response(payload, "source", "target", false).is_err(),
+                "{payload}"
+            );
+        }
+        let reversed = r#"[{"id":"source","success":true},{"id":"target","success":true}]"#;
+        assert!(verify_person_merge_response(reversed, "source", "target", true).is_ok());
     }
 }
 
