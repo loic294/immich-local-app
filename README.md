@@ -94,6 +94,10 @@ overlaid on the rendered map, inset from its edges, to jump to that photo's loca
 In the info panel, click the filename to reveal or hide its cached file path.
 Photo and memory fullscreen headers remain draggable on macOS and Windows;
 their toolbar buttons retain normal click behavior.
+The download-status badge is the first item in the fullscreen Info panel,
+with spacing below it; its download action and progress remain available there.
+The main header's empty areas also support window dragging without affecting
+search or toolbar controls.
 
 **Search** accepts text and metadata terms such as `camera:sony`, `person:Alex`,
 `after:2025-01-01`, `type:video`, and `-tag:private`. Use the search options

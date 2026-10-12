@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AssetCacheDetails, AssetSummary } from "../../types";
 import { MapTilerLocationMap } from "./MapTilerLocationMap";
 import { useI18n } from "../../i18n";
@@ -15,6 +15,7 @@ interface FullscreenInfoPanelProps {
   isLoading: boolean;
   isUpdatingDescription: boolean;
   onUpdateDescription: (description: string) => void;
+  downloadStatus: ReactNode;
 }
 
 export function FullscreenInfoPanel({
@@ -23,6 +24,7 @@ export function FullscreenInfoPanel({
   isLoading,
   isUpdatingDescription,
   onUpdateDescription,
+  downloadStatus,
 }: FullscreenInfoPanelProps) {
   const { locale, t } = useI18n();
   const bt = useBrowsingI18n();
@@ -78,6 +80,7 @@ export function FullscreenInfoPanel({
 
   return (
     <aside className="pointer-events-auto h-full w-[min(22rem,28vw)] min-w-72 shrink-0 overflow-y-auto bg-zinc-950 p-3 text-xs text-white/80">
+      <div className="pb-4">{downloadStatus}</div>
       <div className="rounded-sm bg-zinc-900 p-4">
         {details?.isMyPhoto ? (
           <span className="mb-1.5 inline-block rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-content">

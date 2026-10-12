@@ -126,8 +126,11 @@ export function Header({
 
   return (
     <WindowHeader>
-      <div className="flex w-full min-w-0 flex-wrap items-center gap-3">
-        <div className="order-2 flex min-w-0 flex-wrap items-center gap-4 lg:order-1">
+      <div data-tauri-drag-region className="flex w-full min-w-0 flex-wrap items-center gap-3">
+        <div
+          data-tauri-drag-region
+          className="order-2 flex min-w-0 flex-wrap items-center gap-4 lg:order-1"
+        >
           <MetadataSearchBar
             value={searchInput}
             onChange={onSearchChange}
@@ -152,7 +155,10 @@ export function Header({
           )}
         </div>
 
-        <div className="order-1 ml-auto flex shrink-0 items-center gap-2 lg:order-2">
+        <div
+          data-tauri-drag-region
+          className="order-1 ml-auto flex shrink-0 items-center gap-2 lg:order-2"
+        >
           <button
             type="button"
             className="btn btn-sm btn-ghost"

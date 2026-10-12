@@ -251,15 +251,6 @@ export function PhotoGridFullscreenOverlay({
           <ArrowLeft size={20} />
         </button>
 
-        <div className="pointer-events-auto shrink-0">
-          <AssetStatusBadge
-            assetState={assetState}
-            onDownloadClick={handleStatusBadgeDownload}
-            downloadProgress={downloadProgress}
-            shareProgress={shareProgress}
-          />
-        </div>
-
         <div
           data-tauri-drag-region
           className="pointer-events-auto min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm font-medium text-white/95 select-none"
@@ -579,6 +570,15 @@ export function PhotoGridFullscreenOverlay({
             isLoading={isLoadingCachedDetails}
             isUpdatingDescription={descriptionUpdateId === activeAsset.id}
             onUpdateDescription={onUpdateDescription}
+            downloadStatus={
+              <AssetStatusBadge
+                assetState={assetState}
+                onDownloadClick={handleStatusBadgeDownload}
+                downloadProgress={downloadProgress}
+                shareProgress={shareProgress}
+                className="w-full"
+              />
+            }
           />
         ) : null}
       </div>

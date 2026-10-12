@@ -123,7 +123,7 @@ export function AppTopBar({
     return (
       <>
         <WindowHeader>
-          <div className="flex min-w-0 items-center gap-4">
+          <div data-tauri-drag-region className="flex min-w-0 items-center gap-4">
             <button
               type="button"
               className="btn btn-sm btn-outline gap-1"
@@ -135,12 +135,15 @@ export function AppTopBar({
             <button type="button" className="btn btn-sm btn-neutral" onClick={onSelectAll}>
               {t("topBar.selectAll")}
             </button>
-            <p className="text-sm font-semibold text-base-content">
+            <p
+              data-tauri-drag-region
+              className="text-sm font-semibold text-base-content select-none"
+            >
               {t("topBar.selectedCount", { count: selectedCount })}
             </p>
           </div>
 
-          <div className="order-2 flex shrink-0 items-center gap-2">
+          <div data-tauri-drag-region className="order-2 flex shrink-0 items-center gap-2">
             {onUnarchiveSelected ? (
               <button
                 type="button"

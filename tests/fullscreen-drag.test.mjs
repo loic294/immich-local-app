@@ -26,6 +26,52 @@ function attribute(element, name) {
   );
 }
 
+test("main header wrappers expose drag gaps without making controls draggable", () => {
+  for (const path of [
+    "../src/components/Layout/Header.tsx",
+    "../src/components/Layout/AppTopBar.tsx",
+  ]) {
+    const { source, elements } = nodes(path);
+    const windowHeader = elements.find(
+      (node) => node.openingElement.tagName.getText(source) === "WindowHeader",
+    );
+    const wrappers = elements.filter((node) => node.parent === windowHeader);
+    assert.ok(wrappers.length > 0);
+    assert.ok(wrappers.every((node) => attribute(node, "data-tauri-drag-region")));
+    for (const node of elements) {
+      if (["button", "input", "summary"].includes(node.openingElement.tagName.getText(source))) {
+        assert.ok(!attribute(node, "data-tauri-drag-region"));
+      }
+    }
+  }
+});
+
+test("download status is the first Info item with bottom padding and retains action/progress", () => {
+  const panel = nodes("../src/components/PhotoGrid/FullscreenInfoPanel.tsx");
+  const aside = panel.elements.find(
+    (node) => node.openingElement.tagName.getText(panel.source) === "aside",
+  );
+  const first = aside.children.find(ts.isJsxElement);
+  assert.equal(
+    first.children.find(ts.isJsxExpression).expression.getText(panel.source),
+    "downloadStatus",
+  );
+  assert.ok(attribute(first, "className").initializer.text.split(/\s+/).includes("pb-4"));
+
+  const overlay = nodes("../src/components/PhotoGrid/PhotoGridFullscreenOverlay.tsx");
+  const sourceText = overlay.source.getFullText();
+  const badge = sourceText.indexOf("<AssetStatusBadge");
+  assert.ok(badge > sourceText.indexOf("<FullscreenInfoPanel"));
+  assert.equal(sourceText.split("<AssetStatusBadge").length - 1, 1);
+  for (const prop of [
+    "assetState={assetState}",
+    "onDownloadClick={handleStatusBadgeDownload}",
+    "downloadProgress={downloadProgress}",
+    "shareProgress={shareProgress}",
+  ])
+    assert.ok(sourceText.slice(badge).includes(prop));
+});
+
 test("photo fullscreen exposes the unobstructed header, filename and toolbar gaps as native drag regions on both platforms", () => {
   const { source, elements } = nodes("../src/components/PhotoGrid/PhotoGridFullscreenOverlay.tsx");
   const toolbar = elements.find(
