@@ -28,6 +28,7 @@ import { MENU_ITEMS, type MenuItemKey } from "../components/Layout/Sidebar";
 import { DaisyCalendarPicker } from "../components/Settings/DaisyCalendarPicker";
 import { StorageSettings } from "../components/Settings/StorageSettings";
 import { AccountsBaseDirectorySettings } from "../components/Settings/AccountsBaseDirectorySettings";
+import { PhonePhotosSettings } from "../components/Settings/PhonePhotosSettings";
 import { MediaSettings } from "../components/Media/MediaSettings";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { useAppUpdate } from "../hooks/useAppUpdate";
@@ -46,6 +47,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const sections = [
     ["general", "settings.sectionGeneral"],
     ["my-photos", "settings.sectionMyPhotos"],
+    ["phone-photos", "settings.sectionPhonePhotos"],
     ["navigation", "settings.sectionNavigation"],
     ["sync", "settings.sectionSync"],
     ["storage", "settings.sectionStorage"],
@@ -436,6 +438,15 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             {section === "video" && <StorageSettings section="video" />}
             {section === "editing" && <MediaSettings section="editing" />}
             {section === "privacy" && <MediaSettings section="privacy" />}
+            {section === "phone-photos" && settings && (
+              <PhonePhotosSettings
+                settings={settings}
+                onSaved={(updated) => {
+                  setSettings(updated);
+                  void invalidateSettings();
+                }}
+              />
+            )}
             <div
               hidden={section !== "general"}
               className="card mb-6 border border-base-300 bg-base-100 shadow-sm"

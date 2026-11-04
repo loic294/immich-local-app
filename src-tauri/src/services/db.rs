@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::settings::{MenuItemPreference, MyPhotosRule, Settings};
@@ -16,7 +16,7 @@ pub(crate) mod metadata_search;
 /// positional `?N` placeholders in the assembled SQL.
 type DynParams = Vec<Box<dyn rusqlite::ToSql>>;
 
-fn normalize_folder_path(path: &str) -> Result<String, String> {
+pub(crate) fn normalize_folder_path(path: &str) -> Result<String, String> {
     let path = path.trim().replace('\\', "/");
     if path.chars().any(char::is_control) {
         return Err("Folder paths must not contain control characters".into());
@@ -42,6 +42,26 @@ fn normalize_folder_path(path: &str) -> Result<String, String> {
         ""
     };
     Ok(format!("{prefix}{}", parts.join("/")))
+}
+
+/// Root-folder (`/`) predicate: single-segment paths, or every `/`-rooted path
+/// when `recursive`.
+fn root_folder_clause(recursive: bool) -> &'static str {
+    if recursive {
+        "replace(original_path, char(92), '/') LIKE '/%'"
+    } else {
+        "replace(original_path, char(92), '/') LIKE '/%' AND replace(original_path, char(92), '/') NOT LIKE '/%/%'"
+    }
+}
+
+/// Extra non-root folder predicate excluding subfolders, or nothing when
+/// `recursive`. Expects `?2` to bind the 1-based start of the path remainder.
+fn direct_child_clause(recursive: bool) -> &'static str {
+    if recursive {
+        ""
+    } else {
+        "\n                      AND instr(substr(replace(original_path, char(92), '/'), ?2), '/') = 0"
+    }
 }
 
 /// Structured, combinable filter criteria applied on top of the base
@@ -187,6 +207,8 @@ pub struct ViewScope {
     pub album_id: Option<String>,
     /// Folder path, used when `kind` == "folder".
     pub path: Option<String>,
+    /// Include every subfolder of `path`, used when `kind` == "folder".
+    pub recursive: Option<bool>,
     /// Year, used when `kind` == "month".
     pub year: Option<i32>,
     /// Month (1-12), used when `kind` == "month".
@@ -205,8 +227,19 @@ fn scope_asset_ids_query(scope: &ViewScope) -> (String, DynParams) {
         }
         "folder" => {
             let path = scope.path.clone().unwrap_or_else(|| "/".to_string());
-            if path == "/" {
+            let recursive = scope.recursive.unwrap_or(false);
+            if path == "/" && !recursive {
                 "SELECT id AS asset_id FROM assets WHERE original_path LIKE '/%' AND original_path NOT LIKE '/%/%'".to_string()
+            } else if path == "/" {
+                format!(
+                    "SELECT id AS asset_id FROM assets WHERE {}",
+                    root_folder_clause(true)
+                )
+            } else if recursive {
+                let path_prefix = format!("{}/", path);
+                params.push(Box::new(path_prefix.chars().count() as i64));
+                params.push(Box::new(path_prefix));
+                "SELECT id AS asset_id FROM assets WHERE substr(replace(original_path, char(92), '/'), 1, ?) = ?".to_string()
             } else {
                 let path_prefix = format!("{}/", path);
                 let like_pattern = format!("{}%", path_prefix);
@@ -547,6 +580,7 @@ pub fn default_menu_items() -> Vec<String> {
         "albums",
         "calendar",
         "folders",
+        "phonePhotos",
         "people",
         "maps",
         "favorites",
@@ -656,6 +690,62 @@ fn migrate_browsing_menu(conn: &Connection) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())?;
     log::info!("[browsing:menu] added People and Maps to existing navigation");
+    Ok(())
+}
+
+/// Adds the Phone Photos entry to navigation menus saved before the page existed.
+/// Runs once so a user who later hides the item does not get it back.
+fn migrate_phone_photos_menu(conn: &Connection) -> Result<(), String> {
+    let migrated: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE key='phone_photos_menu_migrated')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if migrated {
+        return Ok(());
+    }
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='menu_items'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    if let Some(raw) = raw {
+        let mut items = parse_menu_preferences(&raw);
+        if !items.iter().any(|item| item.key == "phonePhotos") {
+            let position = items
+                .iter()
+                .position(|item| item.key == "folders")
+                .map(|index| index + 1)
+                .unwrap_or(items.len());
+            items.insert(
+                position,
+                MenuItemPreference {
+                    key: "phonePhotos".into(),
+                    group: "main".into(),
+                },
+            );
+            tx.execute(
+                "UPDATE settings SET value=?1 WHERE key='menu_items'",
+                [serde_json::to_string(&items).map_err(|error| error.to_string())?],
+            )
+            .map_err(|error| error.to_string())?;
+            log::info!("[phone_photos:menu] added Phone Photos to existing navigation");
+        }
+    }
+    tx.execute(
+        "INSERT INTO settings(key,value) VALUES('phone_photos_menu_migrated','true')",
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1189,6 +1279,7 @@ impl Database {
         )
         .map_err(|err| err.to_string())?;
         migrate_browsing_menu(&conn)?;
+        migrate_phone_photos_menu(&conn)?;
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('my_photos_rules', '[]')",
             [],
@@ -3668,6 +3759,8 @@ impl Database {
         Ok(dir_set.into_iter().collect())
     }
 
+    /// Pages the cached assets of a folder. With `recursive` the folder's whole
+    /// subtree is included (Phone Photos); otherwise only direct children (Folders).
     pub fn get_folder_assets(
         &self,
         path: &str,
@@ -3675,6 +3768,7 @@ impl Database {
         page_size: u32,
         criteria: Option<&AssetFilterCriteria>,
         sort: Option<&SortParams>,
+        recursive: bool,
     ) -> Result<(Vec<AssetSummary>, bool), String> {
         let conn = self.open()?;
         let offset = i64::from(page) * i64::from(page_size);
@@ -3684,15 +3778,16 @@ impl Database {
         let order_by = sort.order_by_clause();
 
         // original_path stores the full file path (e.g. /dir/file.jpg).
-        // Match assets whose parent directory equals `path` by checking:
-        //   - the path starts with "{path}/" (direct child, not nested)
-        //   - the remainder after "{path}/" contains no "/" (not a subdirectory)
+        // Match assets under `path` by checking:
+        //   - the path starts with "{path}/"
+        //   - unless recursive, the remainder after "{path}/" contains no "/"
         let mut items = Vec::new();
 
         if path == "/" {
             // Root: match paths with exactly one segment, e.g. /file.jpg
             // Criteria placeholders start after ?1=limit, ?2=offset.
             let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3, false);
+            let root_clause = root_folder_clause(recursive);
             let query = format!(
                 "
                     SELECT
@@ -3711,11 +3806,11 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE replace(original_path, char(92), '/') LIKE '/%' AND replace(original_path, char(92), '/') NOT LIKE '/%/%'{}
+                    WHERE {}{}
                     ORDER BY {}
                     LIMIT ?1 OFFSET ?2
                     ",
-                criteria_sql, order_by
+                root_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -3729,12 +3824,14 @@ impl Database {
                 items.push(row.map_err(|err| err.to_string())?);
             }
         } else {
-            // Non-root: match paths starting with "{path}/" where the rest has no "/"
+            // Non-root: match paths starting with "{path}/" (and, unless recursive,
+            // whose remainder has no "/").
             let path_prefix = format!("{}/", path);
             // 1-based position of the first character after the prefix (for substr)
             let remaining_start = (path_prefix.chars().count() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining, ?3=limit, ?4=offset.
             let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 5, false);
+            let child_clause = direct_child_clause(recursive);
 
             let query = format!(
                 "
@@ -3754,12 +3851,11 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE substr(replace(original_path, char(92), '/'), 1, ?2 - 1) = ?1
-                      AND instr(substr(replace(original_path, char(92), '/'), ?2), '/') = 0{}
+                    WHERE substr(replace(original_path, char(92), '/'), 1, ?2 - 1) = ?1{}{}
                     ORDER BY {}
                     LIMIT ?3 OFFSET ?4
                     ",
-                criteria_sql, order_by
+                child_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -3789,11 +3885,14 @@ impl Database {
         Ok((items, has_next_page))
     }
 
+    /// All cached assets of a folder for the canvas layout; `recursive` matches
+    /// [`Self::get_folder_assets`].
     pub fn get_all_folder_assets(
         &self,
         path: &str,
         criteria: Option<&AssetFilterCriteria>,
         sort: Option<&SortParams>,
+        recursive: bool,
     ) -> Result<Vec<AssetSummary>, String> {
         let conn = self.open()?;
         let default_sort = SortParams::default();
@@ -3805,6 +3904,7 @@ impl Database {
         if path == "/" {
             // No positional params; criteria placeholders start at ?1.
             let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 1, false);
+            let root_clause = root_folder_clause(recursive);
             let query = format!(
                 "
                     SELECT
@@ -3823,10 +3923,10 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE replace(original_path, char(92), '/') LIKE '/%' AND replace(original_path, char(92), '/') NOT LIKE '/%/%'{}
+                    WHERE {}{}
                     ORDER BY {}
                     ",
-                criteria_sql, order_by
+                root_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -3841,6 +3941,7 @@ impl Database {
             let remaining_start = (path_prefix.chars().count() + 1) as i64;
             // Criteria placeholders start after ?1=like, ?2=remaining.
             let (criteria_sql, criteria_params) = criteria_filter(&conn, criteria, "id", 3, false);
+            let child_clause = direct_child_clause(recursive);
 
             let query = format!(
                 "
@@ -3860,11 +3961,10 @@ impl Database {
                         height,
                         thumbhash
                     FROM assets
-                    WHERE substr(replace(original_path, char(92), '/'), 1, ?2 - 1) = ?1
-                      AND instr(substr(replace(original_path, char(92), '/'), ?2), '/') = 0{}
+                    WHERE substr(replace(original_path, char(92), '/'), 1, ?2 - 1) = ?1{}{}
                     ORDER BY {}
                     ",
-                criteria_sql, order_by
+                child_clause, criteria_sql, order_by
             );
             let mut stmt = conn.prepare(&query).map_err(|err| err.to_string())?;
 
@@ -4171,6 +4271,28 @@ impl Database {
             .filter(|value| (1..=20).contains(value))
             .unwrap_or(5);
 
+        let phone_photos_folder_path = stmt
+            .query_row(params!["phone_photos_folder_path"], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_or_default();
+        let phone_photos_info_visible = stmt
+            .query_row(params!["phone_photos_info_visible"], |row| {
+                row.get::<_, String>(0)
+            })
+            .map(|value| value != "false")
+            .unwrap_or(true);
+        let phone_photos_info_title = stmt
+            .query_row(params!["phone_photos_info_title"], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_or_default();
+        let phone_photos_info_description = stmt
+            .query_row(params!["phone_photos_info_description"], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap_or_default();
+
         Ok(Settings {
             delete_behavior: stmt.query_row(params!["delete_behavior"], |row| row.get::<_, String>(0))
                 .ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default(),
@@ -4182,10 +4304,19 @@ impl Database {
             menu_items,
             my_photos_rules,
             recent_albums_limit,
+            phone_photos_folder_path,
+            phone_photos_info_visible,
+            phone_photos_info_title,
+            phone_photos_info_description,
         })
     }
 
     pub fn update_settings(&self, settings: &Settings) -> Result<Settings, String> {
+        let phone_photos_folder_path = normalize_folder_path(&settings.phone_photos_folder_path)
+            .map_err(|error| {
+                log::warn!("[phone_photos:settings] rejected folder path: {error}");
+                error
+            })?;
         let conn = self.open()?;
         conn.execute(
             "INSERT OR REPLACE INTO settings(key,value) VALUES('delete_behavior',?1)",
@@ -4230,6 +4361,34 @@ impl Database {
             params![settings.recent_albums_limit.clamp(1, 20).to_string()],
         )
         .map_err(|err| err.to_string())?;
+
+        let phone_photos_info_title = settings.phone_photos_info_title.trim().to_string();
+        let phone_photos_info_description = settings.phone_photos_info_description.trim().to_string();
+        for (key, value) in [
+            ("phone_photos_folder_path", phone_photos_folder_path.as_str()),
+            (
+                "phone_photos_info_visible",
+                if settings.phone_photos_info_visible { "true" } else { "false" },
+            ),
+            ("phone_photos_info_title", phone_photos_info_title.as_str()),
+            (
+                "phone_photos_info_description",
+                phone_photos_info_description.as_str(),
+            ),
+        ] {
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+        log::info!(
+            "[phone_photos:settings] saved folder_path={:?} info_visible={} custom_title={} custom_description={}",
+            phone_photos_folder_path,
+            settings.phone_photos_info_visible,
+            !phone_photos_info_title.is_empty(),
+            !phone_photos_info_description.is_empty()
+        );
 
         self.get_settings()
     }
@@ -4600,7 +4759,7 @@ mod account_local_navigation_tests {
         let (items, more) = db.get_assets(0, 2, None, None, Some(&criteria), None).unwrap();
         assert_pair(items);
         assert!(!more);
-        assert_pair(db.get_all_folder_assets("/photos", Some(&criteria), None).unwrap());
+        assert_pair(db.get_all_folder_assets("/photos", Some(&criteria), None, false).unwrap());
         assert_pair(db.get_all_calendar_assets(2026, 10, Some(&criteria), None).unwrap());
         db.replace_album_assets("account", "album", &["photo".into(), "motion".into(), "standalone".into()]).unwrap();
         assert_pair(db.get_all_album_assets("album", Some(&criteria), None).unwrap());
@@ -4702,6 +4861,98 @@ mod account_local_navigation_tests {
             assert_eq!(preferences[1].key, "photos");
             cleanup_db(&path);
         }
+    }
+
+    #[test]
+    fn phone_photos_menu_is_added_once_after_folders() {
+        let path = test_db_path("phone-photos-menu");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('menu_items', ?1)",
+            [r#"["photos","folders","deleted"]"#],
+        )
+        .unwrap();
+        drop(conn);
+
+        let db = Database::test_database(path.clone()).unwrap();
+        let read_keys = |db: &Database| -> Vec<String> {
+            let raw: String = db
+                .open()
+                .unwrap()
+                .query_row(
+                    "SELECT value FROM settings WHERE key='menu_items'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            serde_json::from_str::<Vec<MenuItemPreference>>(&raw)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.key)
+                .collect()
+        };
+        let keys = read_keys(&db);
+        let folders = keys.iter().position(|key| key == "folders").unwrap();
+        assert_eq!(keys[folders + 1], "phonePhotos");
+
+        let hidden: Vec<_> = keys.into_iter().filter(|key| key != "phonePhotos").collect();
+        db.open()
+            .unwrap()
+            .execute(
+                "UPDATE settings SET value=?1 WHERE key='menu_items'",
+                [serde_json::to_string(
+                    &hidden
+                        .iter()
+                        .map(|key| MenuItemPreference {
+                            key: key.clone(),
+                            group: "main".into(),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap()],
+            )
+            .unwrap();
+        drop(db);
+
+        let db = Database::test_database(path.clone()).unwrap();
+        assert!(!read_keys(&db).contains(&"phonePhotos".to_string()));
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn phone_photos_settings_round_trip_and_validate_folder_path() {
+        let path = test_db_path("phone-photos-settings");
+        let db = Database::test_database(path.clone()).unwrap();
+        let defaults = db.get_settings().unwrap();
+        assert_eq!(defaults.phone_photos_folder_path, "");
+        assert!(defaults.phone_photos_info_visible);
+        assert_eq!(defaults.phone_photos_info_title, "");
+        assert!(defaults
+            .menu_items
+            .iter()
+            .any(|item| item.key == "phonePhotos"));
+
+        let mut next = defaults.clone();
+        next.phone_photos_folder_path = " \\mnt\\synology//PhoneBackup/ ".into();
+        next.phone_photos_info_visible = false;
+        next.phone_photos_info_title = "  Need help?  ".into();
+        next.phone_photos_info_description = "Open the app".into();
+        let saved = db.update_settings(&next).unwrap();
+        assert_eq!(saved.phone_photos_folder_path, "/mnt/synology/PhoneBackup");
+        assert!(!saved.phone_photos_info_visible);
+        assert_eq!(saved.phone_photos_info_title, "Need help?");
+        assert_eq!(saved.phone_photos_info_description, "Open the app");
+
+        let mut invalid = saved.clone();
+        invalid.phone_photos_folder_path = "relative/folder".into();
+        invalid.live_photo_autoplay = !saved.live_photo_autoplay;
+        assert!(db.update_settings(&invalid).is_err());
+        let unchanged = db.get_settings().unwrap();
+        assert_eq!(unchanged.phone_photos_folder_path, "/mnt/synology/PhoneBackup");
+        assert_eq!(unchanged.live_photo_autoplay, saved.live_photo_autoplay);
+        cleanup_db(&path);
     }
 
     #[test]
@@ -4813,12 +5064,12 @@ mod account_local_navigation_tests {
         assert!(dirs.contains(&"C:/photos/été_100%".to_string()));
         assert!(dirs.contains(&"/".to_string()));
         let (assets, _) = db
-            .get_folder_assets("C:/photos/été_100%", 0, 40, None, None)
+            .get_folder_assets("C:/photos/été_100%", 0, 40, None, None, false)
             .unwrap();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].id, "windows");
         let layout_assets = db
-            .get_all_folder_assets("C:/photos/été_100%", None, None)
+            .get_all_folder_assets("C:/photos/été_100%", None, None, false)
             .unwrap();
         assert_eq!(layout_assets.len(), 1);
         assert_eq!(layout_assets[0].id, "windows");
@@ -4826,6 +5077,78 @@ mod account_local_navigation_tests {
             db.set_folders_base_directory("account-a", "C:/").unwrap(),
             "C:"
         );
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn recursive_folder_queries_include_all_descendants_only() {
+        let path = test_db_path("folders-recursive");
+        let db = Database::test_database(path.clone()).unwrap();
+        for (id, original_path) in [
+            ("direct", "/nas/Phone/direct.jpg"),
+            ("nested", "/nas/Phone/iPhone/2026/09/nested.jpg"),
+            ("windows", r"\nas\Phone\Android\win.jpg"),
+            ("sibling", "/nas/Phone 2/sibling.jpg"),
+            ("prefix", "/nas/Phones/prefix.jpg"),
+            ("root", "/root.jpg"),
+        ] {
+            db.open().unwrap().execute(
+                "INSERT INTO assets(id, account_id, original_file_name, original_path, updated_at) VALUES(?1, 'account-a', 'image.jpg', ?2, 0)",
+                params![id, original_path],
+            ).unwrap();
+        }
+        let sorted_ids = |mut ids: Vec<String>| {
+            ids.sort();
+            ids
+        };
+
+        let (paged, has_more) = db
+            .get_folder_assets("/nas/Phone", 0, 40, None, None, true)
+            .unwrap();
+        assert!(!has_more);
+        let expected = vec!["direct", "nested", "windows"];
+        assert_eq!(
+            sorted_ids(paged.into_iter().map(|asset| asset.id).collect()),
+            expected
+        );
+        let all = db
+            .get_all_folder_assets("/nas/Phone", None, None, true)
+            .unwrap();
+        assert_eq!(
+            sorted_ids(all.into_iter().map(|asset| asset.id).collect()),
+            expected
+        );
+
+        let (direct_only, _) = db
+            .get_folder_assets("/nas/Phone", 0, 40, None, None, false)
+            .unwrap();
+        assert_eq!(
+            direct_only
+                .into_iter()
+                .map(|asset| asset.id)
+                .collect::<Vec<_>>(),
+            vec!["direct"]
+        );
+
+        let (scope_sql, scope_params) = scope_asset_ids_query(&ViewScope {
+            kind: "folder".into(),
+            path: Some("/nas/Phone".into()),
+            recursive: Some(true),
+            ..Default::default()
+        });
+        let conn = db.open().unwrap();
+        let mut stmt = conn.prepare(&scope_sql).unwrap();
+        let scoped = stmt
+            .query_map(params_from_iter(scope_params.iter()), |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(sorted_ids(scoped), expected);
+
+        let root_all = db.get_all_folder_assets("/", None, None, true).unwrap();
+        assert_eq!(root_all.len(), 6);
         cleanup_db(&path);
     }
 }

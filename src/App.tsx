@@ -23,6 +23,7 @@ import type { AppPage } from "./components/Layout/Sidebar";
 import { AlbumsPage } from "./pages/AlbumsPage";
 import { CalendarPage } from "./pages/CalendarPage";
 import { FoldersPage } from "./pages/FoldersPage";
+import { PhonePhotosPage } from "./pages/PhonePhotosPage";
 import { PhotosPage } from "./pages/PhotosPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
@@ -409,6 +410,8 @@ export function App() {
         );
       case "folders":
         return <FoldersPage session={session} onNavigate={navigate} onLogout={logout} />;
+      case "phonePhotos":
+        return <PhonePhotosPage session={session} onNavigate={navigate} onLogout={logout} />;
       case "calendar":
         return <CalendarPage session={session} onNavigate={navigate} onLogout={logout} />;
       case "settings":

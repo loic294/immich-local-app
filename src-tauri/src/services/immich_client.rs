@@ -3691,6 +3691,15 @@ fn parse_asset_list(payload: &str) -> Result<AssetListResult, String> {
     }
 
     let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
+    if value.is_array() {
+        // Strict parsing rejects the whole array when one item has an
+        // unexpected type (e.g. a numeric `duration`); parse items leniently.
+        let items = parse_asset_array(&value)?;
+        return Ok(AssetListResult {
+            has_next_page: !items.is_empty(),
+            items,
+        });
+    }
     let has_next_page = extract_has_next_page(&value);
 
     if let Some(items) = value.get("items") {
@@ -4205,6 +4214,18 @@ mod album_response_tests {
         let parsed = parse_asset_list(empty).unwrap();
         assert!(parsed.items.is_empty());
         assert!(!parsed.has_next_page);
+    }
+
+    #[test]
+    fn parses_bare_folder_arrays_with_numeric_duration_leniently() {
+        let payload = serde_json::json!([
+            { "id": "photo", "originalFileName": "a.jpg", "type": "IMAGE", "duration": "0:00:00.00000" },
+            { "id": "video", "originalFileName": "b.mov", "type": "VIDEO", "duration": 1200 }
+        ]);
+        let parsed = parse_asset_list(&payload.to_string()).unwrap();
+        let ids: Vec<_> = parsed.items.iter().map(|asset| asset.id.as_str()).collect();
+        assert_eq!(ids, vec!["photo", "video"]);
+        assert!(parsed.has_next_page);
     }
 }
 

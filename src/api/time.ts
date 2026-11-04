@@ -55,7 +55,16 @@ export async function getCachedScopePage(
       if (scope.albumId) return getCachedAlbumAssetsPaged(scope.albumId, page, pageSize, criteria);
       break;
     case "folder":
-      if (scope.path) return getCachedFolderAssetsPaged(scope.path, page, pageSize, criteria);
+      if (scope.path) {
+        return getCachedFolderAssetsPaged(
+          scope.path,
+          page,
+          pageSize,
+          criteria,
+          null,
+          scope.recursive,
+        );
+      }
       break;
     case "month":
       if (scope.year && scope.month) {

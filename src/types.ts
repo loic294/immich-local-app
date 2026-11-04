@@ -159,6 +159,12 @@ export type Settings = {
   menuItems: MenuItemPreference[];
   myPhotosRules: MyPhotosRule[];
   recentAlbumsLimit: number;
+  phonePhotosFolderPath: string;
+  phonePhotosInfoVisible: boolean;
+  /** Empty means "use the localized default". */
+  phonePhotosInfoTitle: string;
+  /** Empty means "use the localized default". */
+  phonePhotosInfoDescription: string;
 };
 
 export type MenuItemPreference = {
@@ -291,6 +297,8 @@ export type ViewScope = {
   filter?: string | null;
   albumId?: string | null;
   path?: string | null;
+  /** Include every subfolder of `path` (folder scopes only). */
+  recursive?: boolean | null;
   year?: number | null;
   month?: number | null;
 };

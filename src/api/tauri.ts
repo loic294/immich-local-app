@@ -392,6 +392,7 @@ export async function getCachedFolderFullGridLayout(
   containerWidth: number,
   criteria?: AssetFilterCriteria | null,
   sort?: SortPreference | null,
+  recursive?: boolean | null,
 ): Promise<GridLayoutResponse> {
   return invoke<GridLayoutResponse>("get_cached_folder_full_grid_layout", {
     path,
@@ -399,6 +400,7 @@ export async function getCachedFolderFullGridLayout(
     criteria: criteria ?? null,
     sortField: sort?.field ?? null,
     sortDirection: sort?.direction ?? null,
+    recursive: recursive ?? null,
   });
 }
 
@@ -547,6 +549,7 @@ export async function getCachedFolderAssetsPaged(
   pageSize: number,
   criteria?: AssetFilterCriteria | null,
   sort?: SortPreference | null,
+  recursive?: boolean | null,
 ): Promise<AssetPage> {
   return invoke<AssetPage>("get_folder_assets_paged", {
     path,
@@ -555,6 +558,7 @@ export async function getCachedFolderAssetsPaged(
     criteria: criteria ?? null,
     sortField: sort?.field ?? null,
     sortDirection: sort?.direction ?? null,
+    recursive: recursive ?? null,
   });
 }
 
@@ -872,6 +876,15 @@ export async function fetchAssetsByMonth(year: number, month: number): Promise<A
  */
 export async function refreshAlbumAssets(albumId: string): Promise<void> {
   return invoke<void>("refresh_album_assets", { albumId });
+}
+
+/**
+ * Lazily refresh a single folder's assets from the server (local-first). Used by
+ * folder-backed views such as Phone Photos. Rejects with an `offline:`-prefixed
+ * marker when the server is unreachable.
+ */
+export async function refreshFolderAssets(path: string): Promise<number> {
+  return invoke<number>("refresh_folder_assets", { path });
 }
 
 /** Refresh only the cached album list metadata (local-first). */

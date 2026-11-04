@@ -133,11 +133,11 @@ mod deletion_tests {
                 .0,
             test.db.get_all_album_assets("album", None, None).unwrap(),
             test.db
-                .get_folder_assets("/photos", 0, 100, None, None)
+                .get_folder_assets("/photos", 0, 100, None, None, false)
                 .unwrap()
                 .0,
             test.db
-                .get_all_folder_assets("/photos", None, None)
+                .get_all_folder_assets("/photos", None, None, false)
                 .unwrap(),
             test.db
                 .get_calendar_assets(2026, 10, 0, 100, None, None)

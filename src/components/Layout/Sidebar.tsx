@@ -6,6 +6,7 @@ import {
   Image,
   Images,
   Map,
+  Smartphone,
   UsersRound,
   type LucideIcon,
 } from "lucide-react";
@@ -41,6 +42,7 @@ export type AppPage =
   | "people"
   | "maps"
   | "folders"
+  | "phonePhotos"
   | "calendar"
   | "settings";
 
@@ -52,6 +54,7 @@ export type MenuItemKey =
   | "maps"
   | "calendar"
   | "folders"
+  | "phonePhotos"
   | "favorites"
   | "deleted";
 
@@ -80,6 +83,12 @@ export const MENU_ITEMS: MenuItemDef[] = [
     group: "main",
   },
   { key: "folders", labelKey: "nav.folders", icon: FolderTree, group: "main" },
+  {
+    key: "phonePhotos",
+    labelKey: "nav.phonePhotos",
+    icon: Smartphone,
+    group: "main",
+  },
   {
     key: "favorites",
     labelKey: "nav.favorites",

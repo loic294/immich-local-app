@@ -81,6 +81,21 @@ pub struct Settings {
     pub menu_items: Vec<MenuItemPreference>,
     pub my_photos_rules: Vec<MyPhotosRule>,
     pub recent_albums_limit: u32,
+    /// Immich library folder (server `original_path`) shown on the Phone Photos page.
+    #[serde(default)]
+    pub phone_photos_folder_path: String,
+    #[serde(default = "default_phone_photos_info_visible")]
+    pub phone_photos_info_visible: bool,
+    /// Empty means "use the localized default title".
+    #[serde(default)]
+    pub phone_photos_info_title: String,
+    /// Empty means "use the localized default description".
+    #[serde(default)]
+    pub phone_photos_info_description: String,
+}
+
+fn default_phone_photos_info_visible() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

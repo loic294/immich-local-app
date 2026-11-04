@@ -34,7 +34,7 @@ use commands::auth::{
 use commands::folders::get_cached_folder_full_grid_layout;
 use commands::folders::{
     get_folder_assets_paged, get_folders_base_directory, get_unique_original_paths,
-    set_folders_base_directory,
+    refresh_folder_assets, set_folders_base_directory,
 };
 use commands::memories::fetch_memories;
 use commands::local_original::remove_local_original;
@@ -343,6 +343,7 @@ pub fn main() {
             delete_local_album,
             get_unique_original_paths,
             get_folder_assets_paged,
+            refresh_folder_assets,
             get_folders_base_directory,
             set_folders_base_directory,
             get_cached_folder_full_grid_layout,
