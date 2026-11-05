@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { deleteAsset } from "./deletion";
+import { ThumbnailQueue, type ThumbnailRequestOptions } from "./thumbnailQueue";
 import type {
   AlbumSummary,
   AlbumShareUser,
@@ -68,49 +69,21 @@ export type Account = {
   updatedAt: string;
 };
 
-// Thumbnail cache: asset ID -> data URL
+// Thumbnail cache: account + asset ID -> data URL
 const thumbnailCache = new Map<string, string>();
-
-// In-flight requests: asset ID -> Promise
-const thumbnailRequests = new Map<string, Promise<string>>();
+const thumbnailQueue = new ThumbnailQueue(6);
 
 // Cache statistics
 let thumbnailCacheHits = 0;
 let thumbnailCacheMisses = 0;
 let thumbnailDeduplicationHits = 0;
 
-// Bound how many thumbnail invokes can be in flight at once. Opening a grid or
-// album mounts dozens-to-hundreds of `AssetThumbnail`s simultaneously; firing
-// every fetch at once floods the Immich server (and the Tauri IPC with large
-// base64 data URLs). Requests then queue past the HTTP client's 30s timeout and
-// reject as "fetch failed" even though the server ultimately serves them.
-// Limiting concurrency keeps each request fast and well within the timeout.
-const THUMBNAIL_MAX_CONCURRENCY = 6;
-let thumbnailActiveCount = 0;
-const thumbnailWaitQueue: Array<() => void> = [];
-
-function acquireThumbnailSlot(): Promise<void> {
-  if (thumbnailActiveCount < THUMBNAIL_MAX_CONCURRENCY) {
-    thumbnailActiveCount += 1;
-    return Promise.resolve();
-  }
-  return new Promise<void>((resolve) => {
-    thumbnailWaitQueue.push(resolve);
-  });
+function thumbnailKey(assetId: string, accountId?: string | null): string {
+  return JSON.stringify([accountId ?? null, assetId]);
 }
 
-function releaseThumbnailSlot(): void {
-  const next = thumbnailWaitQueue.shift();
-  if (next) {
-    // Hand the slot straight to the next waiter (active count is unchanged).
-    next();
-  } else {
-    thumbnailActiveCount -= 1;
-  }
-}
-
-export function isThumbnailCached(assetId: string): string | null {
-  return thumbnailCache.get(assetId) ?? null;
+export function isThumbnailCached(assetId: string, accountId?: string | null): string | null {
+  return thumbnailCache.get(thumbnailKey(assetId, accountId)) ?? null;
 }
 
 export async function getOAuthAuthorizationUrl(
@@ -407,9 +380,12 @@ export async function getCachedFolderFullGridLayout(
 export async function getAssetThumbnail(
   assetId: string,
   accountId?: string | null,
+  options: ThumbnailRequestOptions = {},
 ): Promise<string> {
+  if (options.signal?.aborted) throw options.signal.reason;
+  const key = thumbnailKey(assetId, accountId);
   // Check cache first
-  const cached = thumbnailCache.get(assetId);
+  const cached = thumbnailCache.get(key);
   if (cached) {
     thumbnailCacheHits++;
     if (thumbnailCacheHits % 50 === 0) {
@@ -426,38 +402,24 @@ export async function getAssetThumbnail(
   }
 
   // Check if a request is already in flight
-  const inFlight = thumbnailRequests.get(assetId);
-  if (inFlight) {
+  if (thumbnailQueue.has(key)) {
     thumbnailDeduplicationHits++;
-    return inFlight;
+  } else {
+    thumbnailCacheMisses++;
   }
 
-  // Start a new request
-  thumbnailCacheMisses++;
-  const promise = (async () => {
-    await acquireThumbnailSlot();
-    try {
-      return await invoke<string>("get_asset_thumbnail", {
+  return thumbnailQueue.request(
+    key,
+    async () => {
+      const result = await invoke<string>("get_asset_thumbnail", {
         assetId,
         accountId: accountId ?? null,
       });
-    } finally {
-      releaseThumbnailSlot();
-    }
-  })();
-
-  // Store the promise to deduplicate concurrent requests
-  thumbnailRequests.set(assetId, promise);
-
-  try {
-    const result = await promise;
-    // Cache the result
-    thumbnailCache.set(assetId, result);
-    return result;
-  } finally {
-    // Remove from in-flight requests
-    thumbnailRequests.delete(assetId);
-  }
+      thumbnailCache.set(key, result);
+      return result;
+    },
+    options,
+  );
 }
 
 export async function getAssetPlayback(assetId: string): Promise<string> {

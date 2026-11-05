@@ -10,6 +10,8 @@ use crate::services::immich_client::AssetSummary;
 
 #[path = "metadata_search.rs"]
 pub(crate) mod metadata_search;
+#[path = "grid_cache.rs"]
+mod grid_cache;
 
 /// Boxed SQL parameters used when a query is assembled dynamically (e.g. the
 /// optional [`AssetFilterCriteria`] fragment). Binding order matches the
@@ -4704,6 +4706,103 @@ mod account_local_navigation_tests {
 
     fn cleanup_db(path: &PathBuf) {
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn full_timeline_loads_from_cache_within_startup_budget() {
+        let path = test_db_path("timeline-startup");
+        let db = Database::test_database(path.clone()).unwrap();
+        let conn = db.open().unwrap();
+        conn.execute_batch(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<20000)
+             INSERT INTO assets (id, account_id, original_file_name, file_created_at,
+                 asset_type, width, height, updated_at)
+             SELECT printf('photo-%05d', i), 'account', printf('photo-%05d.jpg', i),
+                 strftime('%Y-%m-%dT12:00:00Z', '2026-01-01', printf('-%d days', i/20)),
+                 'IMAGE', 4000, 3000, 0 FROM n;",
+        ).unwrap();
+        drop(conn);
+        let budget = std::time::Duration::from_secs(1);
+        let mut elapsed = std::time::Duration::MAX;
+        let (mut count, mut sections, mut laid_out) = (0, 0, 0usize);
+        // Best of three keeps a busy shared CI runner from failing a real fix;
+        // restoring per-asset hydration (~1.6s here) still misses every attempt.
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            let assets = db.get_grid_layout_assets(None, None, None, None).unwrap();
+            count = assets.len();
+            let layout = crate::commands::assets::calculate_grid_layout(assets, 1400.0).unwrap();
+            elapsed = elapsed.min(started.elapsed());
+            sections = layout.sections.len();
+            laid_out = layout.sections.iter().flat_map(|section| &section.rows)
+                .map(|row| row.items.len()).sum();
+            if elapsed < budget {
+                break;
+            }
+        }
+        drop(db);
+        cleanup_db(&path);
+        eprintln!("cached timeline: {count} assets in {elapsed:?}");
+        assert_eq!(count, 20000);
+        assert_eq!(laid_out, count);
+        assert!(sections >= 1000, "include all cached dates before pagination");
+        assert!(elapsed < budget, "full timeline took {elapsed:?}");
+    }
+
+    #[test]
+    fn lightweight_layout_preserves_filters_sort_and_cached_geometry() {
+        let path = test_db_path("grid-layout");
+        let db = Database::test_database(path.clone()).unwrap();
+        let assets: Vec<AssetSummary> = (0..10).map(|i| serde_json::from_value(serde_json::json!({
+            "id":format!("photo-{i}"), "originalFileName":format!("photo-{i}.jpg"),
+            "fileCreatedAt":format!("2026-10-{:02}T12:00:00Z", i+1),
+            "type":"IMAGE", "width":4000+i, "height":3000, "thumbhash":"hash",
+            "isFavorite":i%2==0, "isArchived":i==8, "visibility":if i==7 {"archive"} else {"timeline"},
+            "rating":i%5+1, "livePhotoVideoId":if i==0 {Some("motion")} else {None}
+        })).unwrap()).collect();
+        db.upsert_assets("account", &assets).unwrap();
+        let video: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id":"motion", "originalFileName":"motion.mov", "type":"VIDEO"
+        })).unwrap();
+        db.upsert_assets("account", &[video]).unwrap();
+        let conn = db.open().unwrap();
+        conn.execute_batch(
+            "INSERT INTO trashed_assets VALUES ('photo-9', 'account');
+             UPDATE assets SET is_stack_secondary=1 WHERE id='photo-6';"
+        ).unwrap();
+        drop(conn);
+        for filter in ["all", "favorites", "archived", "trashed"] {
+            for field in ["date_captured", "filename"] {
+                for direction in ["asc", "desc"] {
+                    for search in [None, Some("photo-1")] {
+                        for criteria in [
+                            AssetFilterCriteria::default(),
+                            AssetFilterCriteria { rating:Some(3), rating_mode:Some("gte".into()), ..Default::default() },
+                            AssetFilterCriteria { account_id:Some("other".into()), ..Default::default() },
+                        ] {
+                            let sort = SortParams {field:Some(field.into()), direction:Some(direction.into())};
+                            let expected = db.get_all_assets(search, Some(filter), Some(&criteria), Some(&sort)).unwrap();
+                            let expected: Vec<_> = expected.into_iter().filter(|asset| {
+                                matches!(filter, "archived" | "trashed") ||
+                                (!asset.is_archived && !asset.is_trashed && asset.visibility.as_deref() != Some("archive"))
+                            }).collect();
+                            let actual = db.get_grid_layout_assets(search, Some(filter), Some(&criteria), Some(&sort)).unwrap();
+                            assert_eq!(actual.iter().map(|asset| &asset.id).collect::<Vec<_>>(),
+                                expected.iter().map(|asset| &asset.id).collect::<Vec<_>>());
+                            for (actual, expected) in actual.iter().zip(&expected) {
+                                assert_eq!(actual.width, expected.width);
+                                assert_eq!(actual.height, expected.height);
+                                assert_eq!(actual.thumbhash, expected.thumbhash);
+                                assert_eq!(actual.file_created_at, expected.file_created_at);
+                                assert_eq!(actual.r#type, expected.r#type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        drop(db);
+        cleanup_db(&path);
     }
 
     #[test]

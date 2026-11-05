@@ -493,6 +493,7 @@ export function PhotoGrid({
     visibleEntries,
     totalContentHeight,
     loadedTimelineMonths,
+    loadedTimelineDays,
     loadedContentTop,
     loadedContentBottom,
     sectionTopMap,
@@ -504,6 +505,7 @@ export function PhotoGrid({
     viewportHeight,
     scrollTop,
   });
+  const timelineDays = timelineLayout?.days ?? (onJumpToDate ? loadedTimelineDays : undefined);
 
   useEffect(() => {
     if (!loadTimelineLayout || viewportWidth <= 0) {
@@ -735,7 +737,7 @@ export function PhotoGrid({
   };
 
   const handleTimelineSeekRatio = (ratio: number) => {
-    const dateKey = resolveDateKeyForRatio(ratio, timelineLayout?.days ?? []);
+    const dateKey = resolveDateKeyForRatio(ratio, timelineDays ?? []);
     if (dateKey) {
       void handleJumpToDate(dateKey);
       return;
@@ -757,7 +759,7 @@ export function PhotoGrid({
   const timelineMonths = timelineLayout?.months ?? loadedTimelineMonths;
 
   const timelineScrollRatio = useMemo(() => {
-    const days = timelineLayout?.days;
+    const days = timelineDays;
     if (!days || days.length === 0) {
       const maxScroll = Math.max(totalContentHeight - viewportHeight, 0);
       if (maxScroll <= 0) {
@@ -793,14 +795,7 @@ export function PhotoGrid({
     }
 
     return Math.max(0, Math.min(1, cumulative / totalRows));
-  }, [
-    fullGridSections,
-    gridSections,
-    scrollTop,
-    timelineLayout?.days,
-    totalContentHeight,
-    viewportHeight,
-  ]);
+  }, [fullGridSections, gridSections, scrollTop, timelineDays, totalContentHeight, viewportHeight]);
 
   // Fires when virtualEntries (and therefore sectionTopMapRef) updates
   useEffect(() => {
@@ -993,7 +988,7 @@ export function PhotoGrid({
 
     async function loadActiveStill() {
       try {
-        const value = await getAssetThumbnail(asset.id);
+        const value = await getAssetThumbnail(asset.id, null, { priority: "visible" });
         if (!cancelled) {
           setActiveStillSrc(value);
         }
@@ -1644,6 +1639,10 @@ export function PhotoGrid({
                           showDebug={showVideoDebug}
                           livePhotoAutoplay={settings?.livePhotoAutoplay ?? true}
                           suppressFullThumbnail={isTimelineScrubbing}
+                          isVisible={
+                            entry.top + entry.height >= scrollTop &&
+                            entry.top <= scrollTop + viewportHeight
+                          }
                           jumpMetrics={jumpMetricsRef.current}
                         />
                         <EditImportPill originalId={asset.stackOriginalId ?? asset.id} />

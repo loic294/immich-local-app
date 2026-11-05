@@ -4,13 +4,45 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{mpsc, LazyLock, Mutex};
+use std::time::Duration;
 
 static EVICTION_LOCK: Mutex<()> = Mutex::new(());
 /// Cache file that was in use (e.g. playing video) when eviction could not
 /// otherwise reach the limit. It is never deleted while pinned and is
 /// reported as an explicit over-limit amount in the storage summary.
 static PINNED: Mutex<Option<PathBuf>> = Mutex::new(None);
+static CACHE_MAINTENANCE: LazyLock<Result<mpsc::SyncSender<()>, std::io::Error>> =
+    LazyLock::new(|| start_cache_maintenance(|| enforce_cache_limit_impl(None)));
+
+fn start_cache_maintenance(
+    maintain: impl Fn() + Send + 'static,
+) -> Result<mpsc::SyncSender<()>, std::io::Error> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("thumbnail-cache-maintenance".into())
+        .spawn(move || {
+            while receiver.recv().is_ok() {
+                // Coalesce a burst of thumbnails into one scan, off the async runtime.
+                std::thread::sleep(Duration::from_millis(50));
+                while receiver.try_recv().is_ok() {}
+                maintain();
+            }
+        })?;
+    Ok(sender)
+}
+
+/// Data URLs own their bytes. Return them immediately and enforce disk limits
+/// in a bounded worker, preserving any file already pinned for playback.
+pub fn schedule_cache_limit() {
+    match &*CACHE_MAINTENANCE {
+        Ok(sender) => match sender.try_send(()) {
+            Ok(()) | Err(mpsc::TrySendError::Full(())) => {}
+            Err(error) => log::error!("[storage.evict] maintenance worker unavailable: {error}"),
+        },
+        Err(error) => log::error!("[storage.evict] cannot start maintenance worker: {error}"),
+    }
+}
 
 const TRANSCODED_KIND_SUFFIX: &str = ":transcoded";
 const CACHED_KIND_SUFFIX: &str = ":cached";
@@ -533,9 +565,12 @@ fn current_pin(root: &Path) -> Option<PathBuf> {
         .filter(|path| path.starts_with(&root) && path.is_file())
 }
 
-/// Runs after every cache write so the configured maximum is enforced
-/// immediately. `keep` is the file currently being served.
+/// File-backed playback must keep the file being served during eviction.
 pub fn enforce_cache_limit(keep: &Path) {
+    enforce_cache_limit_impl(Some(keep));
+}
+
+fn enforce_cache_limit_impl(keep: Option<&Path>) {
     let result = (|| {
         let root = cache_root()?;
         let conn = rusqlite::Connection::open_with_flags(
@@ -544,7 +579,7 @@ pub fn enforce_cache_limit(keep: &Path) {
         )
         .map_err(|e| e.to_string())?;
         let limit = read_preferences(&conn)?.max_cache_bytes;
-        evict_in(&root, &conn, limit, Some(keep), true)
+        evict_in(&root, &conn, limit, keep, true)
     })();
     if let Err(e) = result {
         log::warn!("[storage.evict] automatic eviction failed: {e}");
@@ -556,6 +591,30 @@ mod tests {
     use super::*;
     // Eviction tests share the process-wide pin.
     static PIN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn thumbnail_maintenance_does_not_block_and_coalesces_writes() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let sender = start_cache_maintenance(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        }).unwrap();
+        sender.try_send(()).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        // A slow scan is still running: enqueue a whole album without waiting.
+        for _ in 0..100 {
+            match sender.try_send(()) {
+                Ok(()) | Err(mpsc::TrySendError::Full(())) => {}
+                Err(error) => panic!("worker stopped: {error}"),
+            }
+        }
+        release_tx.send(()).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(sender);
+        release_tx.send(()).unwrap();
+        assert!(started_rx.recv_timeout(Duration::from_secs(2)).is_err());
+    }
 
     /// Fixture directory removed on drop, including after a failed assertion.
     /// Declare it before any handle (connections, files) so those drop first;

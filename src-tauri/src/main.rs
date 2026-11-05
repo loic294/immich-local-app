@@ -225,6 +225,8 @@ pub fn main() {
         .setup(|app| {
             // Editor watchers belong only to this app launch, including after a crash.
             app.state::<AppState>().db.clear_editor_jobs()?;
+            // Finish any disposable-cache cleanup interrupted by the previous exit.
+            services::storage::schedule_cache_limit();
             match app.deep_link().get_current() {
                 Ok(Some(urls)) => {
                     log::info!("[oauth:deep-link:rust] startup urls={:?}", urls);

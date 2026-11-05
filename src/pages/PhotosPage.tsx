@@ -11,7 +11,6 @@ import {
   createShareLinkForAssets,
   fetchAlbums,
   getCachedAssetJumpTarget,
-  getCachedTimelineLayout,
   getFullGridLayout,
 } from "../api/tauri";
 import { useSyncStatus } from "../hooks/useSyncStatus";
@@ -198,17 +197,6 @@ export function PhotosPage({
   const loadFullLayout = useCallback(
     (containerWidth: number) =>
       getFullGridLayout(
-        searchTerm.trim() || null,
-        containerWidth,
-        assetFilter,
-        filterPayload,
-        sortPreference,
-      ),
-    [assetFilter, searchTerm, filterPayload, sortPreference, refreshToken],
-  );
-  const loadTimelineLayout = useCallback(
-    (containerWidth: number) =>
-      getCachedTimelineLayout(
         searchTerm.trim() || null,
         containerWidth,
         assetFilter,
@@ -442,9 +430,6 @@ export function PhotosPage({
                     }
               }
               loadFullLayout={loadFullLayout}
-              loadTimelineLayout={
-                sortPreference.field === "filename" ? undefined : loadTimelineLayout
-              }
             />
           )}
         </section>

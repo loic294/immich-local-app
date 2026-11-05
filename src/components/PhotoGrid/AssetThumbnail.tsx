@@ -22,6 +22,7 @@ interface AssetThumbnailProps {
   showDebug: boolean;
   livePhotoAutoplay: boolean;
   suppressFullThumbnail: boolean;
+  isVisible: boolean;
   jumpMetrics: JumpMetrics | null;
 }
 
@@ -36,6 +37,7 @@ export function AssetThumbnail({
   showDebug,
   livePhotoAutoplay,
   suppressFullThumbnail,
+  isVisible,
   jumpMetrics,
 }: AssetThumbnailProps) {
   const { t } = useI18n();
@@ -73,11 +75,15 @@ export function AssetThumbnail({
     }
 
     let canceled = false;
+    const controller = new AbortController();
 
     async function load() {
       try {
         thumbnailFetchStartedAtRef.current = performance.now();
-        const value = await getAssetThumbnail(asset.id);
+        const value = await getAssetThumbnail(asset.id, null, {
+          priority: isVisible ? "visible" : "background",
+          signal: controller.signal,
+        });
         if (!canceled) {
           setSrc(value);
           const fetchDurationMs = Math.round(
@@ -116,8 +122,9 @@ export function AssetThumbnail({
 
     return () => {
       canceled = true;
+      controller.abort();
     };
-  }, [asset.id, asset.originalFileName, jumpMetrics, suppressFullThumbnail]);
+  }, [asset.id, asset.originalFileName, isVisible, jumpMetrics, suppressFullThumbnail]);
 
   useEffect(() => {
     if (suppressFullThumbnail || !isVideo || !isHovering || videoSrc || isVideoLoading) {

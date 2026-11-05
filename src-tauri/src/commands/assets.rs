@@ -49,33 +49,6 @@ fn make_sort_params(sort_field: Option<String>, sort_direction: Option<String>) 
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum AssetFilter {
-    All,
-    Favorites,
-    Archived,
-    Trashed,
-}
-
-fn parse_asset_filter(filter: Option<&str>) -> AssetFilter {
-    match filter
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("all")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "favorites" => AssetFilter::Favorites,
-        "archived" => AssetFilter::Archived,
-        "trashed" => AssetFilter::Trashed,
-        _ => AssetFilter::All,
-    }
-}
-
-fn include_archived_in_grid(filter: AssetFilter) -> bool {
-    matches!(filter, AssetFilter::Archived | AssetFilter::Trashed)
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetPage {
@@ -456,7 +429,6 @@ pub async fn get_cached_timeline_layout(
     state: tauri::State<'_, AppState>,
 ) -> Result<TimelineLayoutResponse, String> {
     let started_at = Instant::now();
-    let parsed_filter = parse_asset_filter(filter.as_deref());
     if container_width <= 0.0 {
         return Ok(TimelineLayoutResponse {
             total_rows: 0,
@@ -466,28 +438,15 @@ pub async fn get_cached_timeline_layout(
     }
 
     let sort = make_sort_params(sort_field, sort_direction);
-    let all_assets = state
+    let layout_assets = state
         .db
-        .get_all_assets(
+        .get_grid_layout_assets(
             search.as_deref(),
             filter.as_deref(),
             criteria.as_ref(),
             Some(&sort),
         )
         .map_err(|err| format!("timeline layout cache read failed: {err}"))?;
-
-    let layout_assets = all_assets
-        .into_iter()
-        .filter(|asset| include_archived_in_grid(parsed_filter) || is_visible_in_grid(asset))
-        .map(|asset| GridLayoutAssetInput {
-            id: asset.id,
-            file_created_at: asset.file_created_at,
-            r#type: asset.r#type,
-            width: asset.width,
-            height: asset.height,
-            thumbhash: asset.thumbhash,
-        })
-        .collect::<Vec<_>>();
 
     let grouped_days = group_assets_by_day(&layout_assets);
 
@@ -562,7 +521,6 @@ pub async fn get_cached_full_grid_layout(
     state: tauri::State<'_, AppState>,
 ) -> Result<GridLayoutResponse, String> {
     let started_at = Instant::now();
-    let parsed_filter = parse_asset_filter(filter.as_deref());
     if container_width <= 0.0 {
         return Ok(GridLayoutResponse {
             sections: Vec::new(),
@@ -570,28 +528,15 @@ pub async fn get_cached_full_grid_layout(
     }
 
     let sort = make_sort_params(sort_field, sort_direction);
-    let all_assets = state
+    let layout_assets = state
         .db
-        .get_all_assets(
+        .get_grid_layout_assets(
             search.as_deref(),
             filter.as_deref(),
             criteria.as_ref(),
             Some(&sort),
         )
         .map_err(|err| format!("full grid layout cache read failed: {err}"))?;
-
-    let layout_assets = all_assets
-        .into_iter()
-        .filter(|asset| include_archived_in_grid(parsed_filter) || is_visible_in_grid(asset))
-        .map(|asset| GridLayoutAssetInput {
-            id: asset.id,
-            file_created_at: asset.file_created_at,
-            r#type: asset.r#type,
-            width: asset.width,
-            height: asset.height,
-            thumbhash: asset.thumbhash,
-        })
-        .collect();
 
     let response = calculate_grid_layout(layout_assets, container_width)?;
 

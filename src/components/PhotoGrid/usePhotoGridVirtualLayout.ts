@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { GridLayoutSection, TimelineLayoutMonth } from "../../types";
+import type { GridLayoutSection, TimelineLayoutDay, TimelineLayoutMonth } from "../../types";
 import type { VirtualEntry } from "./PhotoGrid.types";
 import { findFirstEntryAtOrAfter, parseDayKey } from "./photoGridUtils";
 
@@ -20,70 +20,83 @@ export function usePhotoGridVirtualLayout({
   viewportHeight,
   scrollTop,
 }: UsePhotoGridVirtualLayoutParams) {
-  const { virtualEntries, totalContentHeight, loadedTimelineMonths, sectionTopMap } =
-    useMemo(() => {
-      const entries: VirtualEntry[] = [];
-      const nextSectionTopMap = new Map<string, number>();
-      const monthMap = new Map<string, TimelineLayoutMonth>();
+  const {
+    virtualEntries,
+    totalContentHeight,
+    loadedTimelineMonths,
+    loadedTimelineDays,
+    sectionTopMap,
+  } = useMemo(() => {
+    const entries: VirtualEntry[] = [];
+    const nextSectionTopMap = new Map<string, number>();
+    const monthMap = new Map<string, TimelineLayoutMonth>();
+    const days: TimelineLayoutDay[] = [];
 
-      const headerHeight = 52;
-      const rowGap = 4;
-      const sectionGap = 10;
-      let cursor = 0;
-      const sectionsForLayout = fullGridSections.length > 0 ? fullGridSections : gridSections;
+    const headerHeight = 52;
+    const rowGap = 4;
+    const sectionGap = 10;
+    let cursor = 0;
+    const sectionsForLayout = fullGridSections.length > 0 ? fullGridSections : gridSections;
 
-      for (const section of sectionsForLayout) {
-        nextSectionTopMap.set(section.key, cursor);
+    for (const section of sectionsForLayout) {
+      nextSectionTopMap.set(section.key, cursor);
+      entries.push({
+        type: "header",
+        key: `header-${section.key}`,
+        sectionKey: section.key,
+        label: section.label,
+        top: cursor,
+        height: headerHeight,
+      });
+      cursor += headerHeight;
+
+      section.rows.forEach((row, rowIndex) => {
         entries.push({
-          type: "header",
-          key: `header-${section.key}`,
+          type: "row",
+          key: `${section.key}-${rowIndex}`,
           sectionKey: section.key,
-          label: section.label,
           top: cursor,
-          height: headerHeight,
+          height: row.height,
+          items: row.items,
         });
-        cursor += headerHeight;
+        cursor += row.height + rowGap;
+      });
 
-        section.rows.forEach((row, rowIndex) => {
-          entries.push({
-            type: "row",
-            key: `${section.key}-${rowIndex}`,
-            sectionKey: section.key,
-            top: cursor,
-            height: row.height,
-            items: row.items,
+      cursor += sectionGap;
+
+      const dayInfo = parseDayKey(section.key);
+      if (dayInfo) {
+        days.push({
+          dateKey: section.key,
+          year: dayInfo.year,
+          month: dayInfo.month,
+          rowCount: section.rows.length,
+        });
+        const monthKey = `${dayInfo.year}-${String(dayInfo.month).padStart(2, "0")}`;
+        const month = monthMap.get(monthKey);
+
+        if (month) {
+          month.rowCount += section.rows.length;
+        } else {
+          monthMap.set(monthKey, {
+            monthKey,
+            jumpDateKey: section.key,
+            year: dayInfo.year,
+            month: dayInfo.month,
+            rowCount: section.rows.length,
           });
-          cursor += row.height + rowGap;
-        });
-
-        cursor += sectionGap;
-
-        const dayInfo = parseDayKey(section.key);
-        if (dayInfo) {
-          const monthKey = `${dayInfo.year}-${String(dayInfo.month).padStart(2, "0")}`;
-          const month = monthMap.get(monthKey);
-
-          if (month) {
-            month.rowCount += section.rows.length;
-          } else {
-            monthMap.set(monthKey, {
-              monthKey,
-              jumpDateKey: section.key,
-              year: dayInfo.year,
-              month: dayInfo.month,
-              rowCount: section.rows.length,
-            });
-          }
         }
       }
+    }
 
-      return {
-        virtualEntries: entries,
-        totalContentHeight: cursor,
-        loadedTimelineMonths: [...monthMap.values()],
-        sectionTopMap: nextSectionTopMap,
-      };
-    }, [fullGridSections, gridSections]);
+    return {
+      virtualEntries: entries,
+      totalContentHeight: cursor,
+      loadedTimelineMonths: [...monthMap.values()],
+      loadedTimelineDays: days,
+      sectionTopMap: nextSectionTopMap,
+    };
+  }, [fullGridSections, gridSections]);
 
   const visibleEntries = useMemo(() => {
     if (virtualEntries.length === 0) {
@@ -137,6 +150,7 @@ export function usePhotoGridVirtualLayout({
     visibleEntries,
     totalContentHeight,
     loadedTimelineMonths,
+    loadedTimelineDays,
     loadedContentTop,
     loadedContentBottom,
     sectionTopMap,

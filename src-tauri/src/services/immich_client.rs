@@ -2352,7 +2352,7 @@ impl ImmichClient {
         let ext = extension_from_mime(&content_type);
         let output = cache_dir.join(format!("{}.{}", asset_id, ext));
         fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
-        crate::services::storage::enforce_cache_limit(&output);
+        crate::services::storage::schedule_cache_limit();
 
         Ok(to_data_url(&content_type, bytes.as_ref()))
     }
@@ -2411,7 +2411,7 @@ impl ImmichClient {
         let ext = extension_from_mime(&content_type);
         let output = cache_dir.join(format!("{}.{}", person_id, ext));
         fs::write(&output, bytes.as_ref()).map_err(|err| err.to_string())?;
-        crate::services::storage::enforce_cache_limit(&output);
+        crate::services::storage::schedule_cache_limit();
 
         Ok(to_data_url(&content_type, bytes.as_ref()))
     }
@@ -5056,7 +5056,12 @@ fn read_cached_thumbnail(cache_dir: &Path, asset_id: &str) -> Result<Option<Stri
     for ext in ["jpg", "jpeg", "webp", "png"] {
         let candidate = cache_dir.join(format!("{}.{}", asset_id, ext));
         if candidate.exists() {
-            let data = fs::read(&candidate).map_err(|err| err.to_string())?;
+            let data = match fs::read(&candidate) {
+                Ok(data) => data,
+                // Maintenance can evict a disposable file between the probe and read.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.to_string()),
+            };
             let content_type = match ext {
                 "png" => "image/png",
                 "webp" => "image/webp",

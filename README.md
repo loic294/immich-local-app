@@ -60,6 +60,13 @@ and album creation. Server refresh errors are shown without discarding cached
 albums.
 Album photos use embedded assets on older servers or paginated, album-scoped
 metadata search on newer servers that omit assets from album details.
+Visible grid thumbnails take priority over offscreen preloads, and leaving a
+view cancels its queued thumbnail requests. Disk-cache cleanup runs in a
+coalesced background worker so it does not delay thumbnail display; cache limits
+and protected local copies still apply. The Photos timeline loads all dates and
+its full scroll extent from SQLite at startup, using layout-only fields rather
+than loading fullscreen metadata for every photo. The grid and date scrollbar
+share that one cached-library read, including while offline.
 Add-to-album and Import use the same searchable album modal: recent albums
 appear first, followed by year groups. Select an existing album or the
 **New album** result, then use the single Add/Create action. Read-only albums

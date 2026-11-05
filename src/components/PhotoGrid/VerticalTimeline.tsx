@@ -140,10 +140,7 @@ export function VerticalTimeline({
       };
     }
 
-    const totalWeight = months.reduce(
-      (sum, month) => sum + Math.max(1, month.rowCount),
-      0,
-    );
+    const totalWeight = months.reduce((sum, month) => sum + Math.max(1, month.rowCount), 0);
     let cumulative = 0;
 
     const computedPoints = months.map((month) => {
@@ -178,17 +175,16 @@ export function VerticalTimeline({
   }, [months]);
 
   if (points.length === 0) {
-    return null;
+    // Keep the grid width stable while its cached dates load.
+    return (
+      <aside aria-hidden="true" className="hidden min-h-0 w-16 shrink-0 lg:flex lg:flex-col" />
+    );
   }
 
-  const activeRatio =
-    isDragging && dragRatio !== null ? dragRatio : clamp01(scrollRatio);
+  const activeRatio = isDragging && dragRatio !== null ? dragRatio : clamp01(scrollRatio);
   const labelRatio = isDragging ? activeRatio : hoverRatio;
-  const labelMonth =
-    labelRatio === null ? null : getMonthForRatio(points, clamp01(labelRatio));
-  const hoverLabel = labelMonth
-    ? `${MONTH_NAMES[labelMonth.month - 1]} ${labelMonth.year}`
-    : null;
+  const labelMonth = labelRatio === null ? null : getMonthForRatio(points, clamp01(labelRatio));
+  const hoverLabel = labelMonth ? `${MONTH_NAMES[labelMonth.month - 1]} ${labelMonth.year}` : null;
 
   return (
     <aside className="hidden min-h-0 w-16 shrink-0 lg:flex lg:flex-col">
@@ -308,10 +304,7 @@ const MONTH_NAMES = [
   "Dec",
 ];
 
-function getMonthForRatio(
-  points: TimelinePoint[],
-  ratio: number,
-): TimelinePoint | null {
+function getMonthForRatio(points: TimelinePoint[], ratio: number): TimelinePoint | null {
   if (points.length === 0) {
     return null;
   }
@@ -327,12 +320,8 @@ function getMonthForRatio(
     const previous = points[index - 1];
     const next = points[index + 1];
 
-    const start = previous
-      ? (previous.positionPercent + current.positionPercent) / 200
-      : 0;
-    const end = next
-      ? (current.positionPercent + next.positionPercent) / 200
-      : 1;
+    const start = previous ? (previous.positionPercent + current.positionPercent) / 200 : 0;
+    const end = next ? (current.positionPercent + next.positionPercent) / 200 : 1;
 
     if (clamped >= start && clamped <= end) {
       return current;
