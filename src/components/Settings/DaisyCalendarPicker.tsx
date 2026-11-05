@@ -1,7 +1,11 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { CalendarDays } from "lucide-react";
 import { DayPicker } from "react-day-picker";
+import { enCA } from "react-day-picker/locale/en-CA";
+import { frCA } from "react-day-picker/locale/fr-CA";
 import { useI18n } from "../../i18n";
+import { MonthCaptionButton } from "./MonthCaptionButton";
+import { MonthYearQuickPicker } from "./MonthYearQuickPicker";
 
 interface DaisyCalendarPickerProps {
   value: string | null;
@@ -11,15 +15,28 @@ interface DaisyCalendarPickerProps {
 
 /**
  * Date picker using daisyUI's supported React Day Picker calendar styling.
+ * Clicking the month/year caption opens a quick year and month picker.
  */
 export function DaisyCalendarPicker({
   value,
   onChange,
   disabled = false,
 }: DaisyCalendarPickerProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
+  const [month, setMonth] = useState<Date>(() => parseDateOnly(value) ?? new Date());
+  const [quickPickerOpen, setQuickPickerOpen] = useState(false);
   const selected = parseDateOnly(value);
+
+  const openQuickPicker = useCallback(() => setQuickPickerOpen(true), []);
+  const components = useMemo(
+    () => ({
+      CaptionLabel: (captionProps: { children?: ReactNode }) => (
+        <MonthCaptionButton onOpen={openQuickPicker}>{captionProps.children}</MonthCaptionButton>
+      ),
+    }),
+    [openQuickPicker],
+  );
 
   return (
     <details
@@ -30,7 +47,12 @@ export function DaisyCalendarPicker({
           setOpen(false);
           return;
         }
-        setOpen((event.currentTarget as HTMLDetailsElement).open);
+        const nextOpen = (event.currentTarget as HTMLDetailsElement).open;
+        if (nextOpen && !open) {
+          setMonth(selected ?? new Date());
+          setQuickPickerOpen(false);
+        }
+        setOpen(nextOpen);
       }}
     >
       <summary
@@ -41,18 +63,33 @@ export function DaisyCalendarPicker({
       </summary>
 
       <div className="dropdown-content z-30 mt-2 rounded-box border border-base-300 bg-base-100 p-2 shadow">
-        <DayPicker
-          mode="single"
-          className="react-day-picker"
-          selected={selected}
-          onSelect={(date) => {
-            if (!date) {
-              return;
-            }
-            onChange(toDateOnly(date));
-            setOpen(false);
-          }}
-        />
+        {quickPickerOpen ? (
+          <MonthYearQuickPicker
+            month={month}
+            onSelect={(nextMonth) => {
+              setMonth(nextMonth);
+              setQuickPickerOpen(false);
+            }}
+            onCancel={() => setQuickPickerOpen(false)}
+          />
+        ) : (
+          <DayPicker
+            mode="single"
+            className="react-day-picker"
+            locale={locale === "fr-CA" ? frCA : enCA}
+            components={components}
+            month={month}
+            onMonthChange={setMonth}
+            selected={selected}
+            onSelect={(date) => {
+              if (!date) {
+                return;
+              }
+              onChange(toDateOnly(date));
+              setOpen(false);
+            }}
+          />
+        )}
       </div>
     </details>
   );

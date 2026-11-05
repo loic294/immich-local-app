@@ -24,7 +24,7 @@ const messages = {
     folderPathLabel: "Phone photos folder",
     folderPathPlaceholder: "/mnt/synology/PhoneBackup",
     folderPathHelp:
-      "An Immich library folder path, as shown on the Folders page. Only photos directly inside this folder are shown, not those in its subfolders.",
+      "An Immich library folder path, as shown on the Folders page. Photos in all of its subfolders are included.",
     infoVisibleLabel: "Show the info card",
     infoVisibleHelp: "Display the sync help card at the top of the Phone Photos page.",
     infoTitleLabel: "Info card title",
@@ -59,7 +59,7 @@ const messages = {
     folderPathLabel: "Dossier des photos du téléphone",
     folderPathPlaceholder: "/mnt/synology/PhoneBackup",
     folderPathHelp:
-      "Un chemin de dossier de la bibliothèque Immich, tel qu’affiché sur la page Dossiers. Seules les photos situées directement dans ce dossier sont affichées, pas celles de ses sous-dossiers.",
+      "Un chemin de dossier de la bibliothèque Immich, tel qu’affiché sur la page Dossiers. Les photos de tous ses sous-dossiers sont incluses.",
     infoVisibleLabel: "Afficher la carte d’information",
     infoVisibleHelp:
       "Affiche la carte d’aide à la synchronisation en haut de la page Photos du téléphone.",
