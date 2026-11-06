@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { useMonthYearPickerI18n } from "../../i18n/monthYearPicker";
 import {
@@ -68,7 +68,7 @@ export function MonthYearQuickPicker({ month, onSelect, onCancel }: MonthYearQui
         ) : (
           <button
             type="button"
-            className="btn btn-ghost btn-sm font-medium"
+            className="btn btn-soft btn-sm gap-1 font-medium"
             aria-label={tp("chooseYear")}
             title={tp("chooseYear")}
             onClick={() => {
@@ -77,6 +77,7 @@ export function MonthYearQuickPicker({ month, onSelect, onCancel }: MonthYearQui
             }}
           >
             {year}
+            <ChevronDown size={14} aria-hidden="true" />
           </button>
         )}
 

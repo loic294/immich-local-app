@@ -49,6 +49,14 @@ test("calendar picker opens the quick picker from the month caption and keeps mo
   assert.match(source, /onChange\(toDateOnly\(date\)\)/);
 });
 
+test("month caption button stacks above the full-width daisyUI calendar nav", () => {
+  // daisyUI's .rdp-nav is absolutely positioned across the caption; an unstacked
+  // custom caption is covered by it and never receives clicks.
+  const source = read("../src/components/Settings/MonthCaptionButton.tsx");
+  assert.match(source, /className="[^"]*\brelative\b[^"]*\bz-10\b[^"]*"/);
+  assert.match(source, /onClick=\{onOpen\}/);
+});
+
 test("quick picker only changes the displayed month, never the selected date", () => {
   const source = read("../src/components/Settings/MonthYearQuickPicker.tsx");
   assert.match(source, /onSelect\(new Date\(year, index, 1\)\)/);
