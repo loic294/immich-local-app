@@ -91,6 +91,9 @@ pub struct AssetFilterCriteria {
     pub person_id: Option<String>,
     /// Account id to scope the result set to a single account's assets.
     pub account_id: Option<String>,
+    /// Album membership: "in_album" (in at least one cached album) or
+    /// "not_in_album" (in no cached album).
+    pub album_membership: Option<String>,
     /// Structured metadata search (see `metadata_search`), e.g.
     /// `camera:sony after:2023 -tag:work beach`.
     pub query: Option<String>,
@@ -127,6 +130,10 @@ impl AssetFilterCriteria {
                 .map(str::trim)
                 .unwrap_or("")
                 .is_empty()
+            && !matches!(
+                self.album_membership.as_deref().map(str::trim),
+                Some("in_album" | "not_in_album")
+            )
             && self
                 .query
                 .as_deref()
@@ -543,6 +550,18 @@ fn criteria_filter(
             params.push(Box::new(account_id.to_string()));
             next_index += 1;
         }
+    }
+
+    match criteria.album_membership.as_deref().map(str::trim) {
+        Some("in_album") => {
+            log::info!("[album-membership.filter] restricting to assets in an album");
+            conditions.push("id IN (SELECT asset_id FROM album_assets)".to_string());
+        }
+        Some("not_in_album") => {
+            log::info!("[album-membership.filter] restricting to assets not in any album");
+            conditions.push("id NOT IN (SELECT asset_id FROM album_assets)".to_string());
+        }
+        _ => {}
     }
 
     if let Some(query) = criteria.query.as_deref().map(str::trim) {
@@ -4872,6 +4891,36 @@ mod account_local_navigation_tests {
         unlinked.live_photo_video_id = None;
         db.upsert_assets("account", &[unlinked]).unwrap();
         assert_eq!(db.get_all_assets(None, None, Some(&criteria), None).unwrap().len(), 3);
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn album_membership_filter_splits_assets_in_and_out_of_albums() {
+        let path = test_db_path("album-membership");
+        let db = Database::test_database(path.clone()).unwrap();
+        let assets: Vec<AssetSummary> = ["in-a", "in-b", "loose"].iter().map(|id| serde_json::from_value(serde_json::json!({
+            "id":id, "originalFileName":format!("{id}.jpg"), "originalPath":format!("/photos/{id}.jpg"),
+            "type":"IMAGE", "fileCreatedAt":"2026-10-11T12:00:00Z"
+        })).unwrap()).collect();
+        db.upsert_assets("account", &assets).unwrap();
+        db.replace_album_assets("account", "album-1", &["in-a".into()]).unwrap();
+        db.replace_album_assets("account", "album-2", &["in-a".into(), "in-b".into()]).unwrap();
+        let ids = |membership: Option<&str>| {
+            let criteria = AssetFilterCriteria { album_membership: membership.map(Into::into), ..Default::default() };
+            let mut ids: Vec<String> = db.get_all_assets(None, None, Some(&criteria), None).unwrap()
+                .into_iter().map(|asset| asset.id).collect();
+            ids.sort();
+            let mut folder: Vec<String> = db.get_all_folder_assets("/photos", Some(&criteria), None, false).unwrap()
+                .into_iter().map(|asset| asset.id).collect();
+            folder.sort();
+            assert_eq!(ids, folder);
+            ids
+        };
+        assert_eq!(ids(None), ["in-a", "in-b", "loose"]);
+        assert_eq!(ids(Some("in_album")), ["in-a", "in-b"]);
+        assert_eq!(ids(Some("not_in_album")), ["loose"]);
+        assert_eq!(ids(Some("unknown")), ["in-a", "in-b", "loose"]);
+        drop(db);
         cleanup_db(&path);
     }
 

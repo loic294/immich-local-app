@@ -9,6 +9,7 @@ import { TypeFilter } from "./TypeFilter";
 import { CameraFilter } from "./CameraFilter";
 import { PeopleFilter } from "./PeopleFilter";
 import { AccountFilter } from "./AccountFilter";
+import { AlbumFilter } from "./AlbumFilter";
 import { useI18n } from "../../i18n";
 
 interface FilterBarProps {
@@ -27,14 +28,7 @@ interface FilterBarProps {
  * (all photos, albums, calendar months, folders). Combines the reusable
  * filter controls and scopes the Camera/People options to the current view.
  */
-export function FilterBar({
-  open,
-  scope,
-  criteria,
-  isActive,
-  onChange,
-  onReset,
-}: FilterBarProps) {
+export function FilterBar({ open, scope, criteria, isActive, onChange, onReset }: FilterBarProps) {
   const { t } = useI18n();
   const camerasQuery = useCameras(scope, open);
   const peopleQuery = usePeople(scope, open);
@@ -62,9 +56,12 @@ export function FilterBar({
         onChange={(active) => onChange({ favoriteOnly: active ? true : null })}
       />
 
-      <TypeFilter
-        value={criteria.mediaType}
-        onChange={(mediaType) => onChange({ mediaType })}
+      <TypeFilter value={criteria.mediaType} onChange={(mediaType) => onChange({ mediaType })} />
+
+      <AlbumFilter
+        value={criteria.albumMembership}
+        disabled={scope.kind === "album"}
+        onChange={(albumMembership) => onChange({ albumMembership })}
       />
 
       <CameraFilter

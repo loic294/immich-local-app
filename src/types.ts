@@ -201,6 +201,9 @@ export type RatingMode = "eq" | "gte" | "lte";
 /** Media-type selector for the Type filter. */
 export type MediaTypeFilter = "photo" | "raw" | "photo_raw" | "video";
 
+/** Album-membership selector for the Album filter. */
+export type AlbumMembershipFilter = "in_album" | "not_in_album";
+
 /**
  * Structured, server-evaluated filter criteria applied on top of a photo grid
  * view (all photos, album, folder or calendar month). All fields are optional;
@@ -215,6 +218,8 @@ export type AssetFilterCriteria = {
   camera: string | null;
   personId: string | null;
   accountId: string | null;
+  /** Album membership; disabled in the UI inside an album view. */
+  albumMembership: AlbumMembershipFilter | null;
   /** Structured metadata search query (e.g. `beach camera:sony after:2023`), parsed in Rust. */
   query?: string | null;
 };
@@ -228,6 +233,7 @@ export const DEFAULT_FILTER_CRITERIA: AssetFilterCriteria = {
   camera: null,
   personId: null,
   accountId: null,
+  albumMembership: null,
   query: null,
 };
 
@@ -258,6 +264,7 @@ export function isFilterActive(criteria: AssetFilterCriteria): boolean {
     (criteria.camera != null && criteria.camera !== "") ||
     (criteria.personId != null && criteria.personId !== "") ||
     (criteria.accountId != null && criteria.accountId !== "") ||
+    criteria.albumMembership != null ||
     (criteria.query != null && criteria.query.trim() !== "")
   );
 }
