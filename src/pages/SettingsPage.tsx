@@ -29,6 +29,7 @@ import { DaisyCalendarPicker } from "../components/Settings/DaisyCalendarPicker"
 import { StorageSettings } from "../components/Settings/StorageSettings";
 import { AccountsBaseDirectorySettings } from "../components/Settings/AccountsBaseDirectorySettings";
 import { PhonePhotosSettings } from "../components/Settings/PhonePhotosSettings";
+import { AlbumCreationSettings } from "../components/Settings/AlbumCreationSettings";
 import { MediaSettings } from "../components/Media/MediaSettings";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { FullSyncProgress } from "../components/Layout/FullSyncProgress";
@@ -47,6 +48,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const settingsContentRef = useRef<HTMLDivElement>(null);
   const sections = [
     ["general", "settings.sectionGeneral"],
+    ["albums", "nav.albums"],
     ["my-photos", "settings.sectionMyPhotos"],
     ["phone-photos", "settings.sectionPhonePhotos"],
     ["navigation", "settings.sectionNavigation"],
@@ -431,6 +433,23 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             {section === "video" && <StorageSettings section="video" />}
             {section === "editing" && <MediaSettings section="editing" />}
             {section === "privacy" && <MediaSettings section="privacy" />}
+            {section === "albums" && settings && (
+              <>
+                {accounts.error && (
+                  <p role="alert" className="mb-4 text-error">
+                    {accounts.error}
+                  </p>
+                )}
+                <AlbumCreationSettings
+                  settings={settings}
+                  accounts={accounts.accounts}
+                  onSaved={(updated) => {
+                    setSettings(updated);
+                    void invalidateSettings();
+                  }}
+                />
+              </>
+            )}
             {section === "phone-photos" && settings && (
               <PhonePhotosSettings
                 settings={settings}

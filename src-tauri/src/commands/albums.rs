@@ -14,6 +14,10 @@ use std::path::Path;
 use std::time::Instant;
 use tauri::Emitter;
 
+#[path = "albums/creation.rs"]
+mod creation;
+use creation::create_album_with_assets_internal;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumSaveProgress {
@@ -195,68 +199,12 @@ pub async fn create_album_with_assets(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AlbumSummary, String> {
-    // New albums are created using the PRIMARY account.
-    let primary = state
-        .db
-        .get_primary_account()
-        .map_err(|err| format!("read primary account failed: {err}"))?
-        .ok_or_else(|| "no primary account configured".to_string())?;
-    let primary_client = state.client_for(Some(&primary.id));
-
-    let created = primary_client
-        .create_album_with_assets(&album_name, &asset_ids)
-        .await
-        .map_err(|err| format!("create album failed: {err}"))?;
-
-    // Add every OTHER account that lives on the SAME server as an album editor so
-    // the album is collaboratively editable across accounts. Accounts on a
-    // different server cannot be added and are skipped (logged).
-    let all_accounts = state
-        .db
-        .list_accounts()
-        .map_err(|err| format!("list accounts failed: {err}"))?;
-    for account in all_accounts {
-        if account.id == primary.id {
-            continue;
-        }
-        if account.server_url != primary.server_url {
-            log::warn!(
-                "[albums] skipping editor add for account {} on different server ({} != {})",
-                account.id, account.server_url, primary.server_url
-            );
-            continue;
-        }
-        match primary_client
-            .add_user_to_album(&created.id, &account.user_id, "editor")
-            .await
-        {
-            Ok(_) => log::info!(
-                "[albums] added account {} (user {}) as editor to album {}",
-                account.id, account.user_id, created.id
-            ),
-            Err(err) => log::warn!(
-                "[albums] failed to add account {} (user {}) as editor to album {}: {}",
-                account.id, account.user_id, created.id, err
-            ),
-        }
-    }
-
-    // Refresh and cache the primary account's album list.
-    let albums = primary_client
-        .get_albums()
-        .await
-        .map_err(|err| format!("refresh album list failed: {err}"))?;
-
-    state
-        .db
-        .upsert_albums(&primary.id, &albums)
-        .map_err(|err| format!("album cache write failed: {err}"))?;
-    if let Err(error) = state.db.record_recent_album(&created.id) {
-        log::warn!("[albums.recent] could not record newly created album {}: {}", created.id, error);
-    }
-
-    Ok(created)
+    create_album_with_assets_internal(&album_name, &asset_ids, &state).await
 }
+
+#[cfg(test)]
+#[path = "albums/creation_tests.rs"]
+mod creation_tests;
 
 #[tauri::command]
 pub async fn add_assets_to_album(
@@ -264,13 +212,36 @@ pub async fn add_assets_to_album(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    // Route to the account that owns the album.
-    let (account_id, client) = state.account_and_client_for_album(&album_id);
+    let result = add_assets_to_album_internal(&album_id, &asset_ids, &state).await;
+    if let Err(error) = &result {
+        log::error!("[albums.add-assets] failed album_id={album_id}: {error}");
+    }
+    result
+}
 
-    client
-        .add_assets_to_album(&album_id, &asset_ids)
-        .await
-        .map_err(|err| format!("add assets to album failed: {err}"))?;
+async fn add_assets_to_album_internal(
+    album_id: &str,
+    asset_ids: &[String],
+    state: &AppState,
+) -> Result<(), String> {
+    let account_id = state.db.get_album_account_id(album_id)?
+        .ok_or("Album has no cached account. Refresh the album list before adding photos.")?;
+    let account = state.db.get_account(&account_id)?
+        .ok_or("Album account no longer exists.")?;
+    let client = creation::account_client(state, &account)?;
+    let groups = creation::contributions(state, &account.server_url, asset_ids)?;
+    if !client.ping(&account.server_url).await {
+        return Err("offline: Connect to the album's server to add photos.".into());
+    }
+    let groups = creation::resolve_contributors(state, groups).await?;
+    for group in groups {
+        group.client
+            .add_assets_to_album(album_id, &group.asset_ids)
+            .await
+            .map_err(|err| {
+                format!("add assets to album failed for account {}: {err}", group.account.id)
+            })?;
+    }
 
     let albums = client
         .get_albums()
@@ -281,7 +252,7 @@ pub async fn add_assets_to_album(
         .db
         .upsert_albums(&account_id, &albums)
         .map_err(|err| format!("album cache write failed: {err}"))?;
-    if let Err(error) = state.db.record_recent_album(&album_id) {
+    if let Err(error) = state.db.record_recent_album(album_id) {
         log::warn!("[albums.recent] could not record updated album {}: {}", album_id, error);
     }
 
@@ -355,13 +326,25 @@ pub async fn get_album_share_users(
 
 #[tauri::command]
 pub async fn get_shareable_users(
+    account_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<AlbumUserCandidate>, String> {
-    state
-        .immich
+    let account = match account_id {
+        Some(id) => state.db.get_account(&id)?,
+        None => state.db.get_primary_account()?,
+    }
+    .ok_or("Account no longer exists. Sign in again.")?;
+    let client = creation::account_client(&state, &account)?;
+    if !client.ping(&account.server_url).await {
+        return Err("offline: Connect to the album owner's server to load collaborators.".into());
+    }
+    client
         .get_shareable_users()
         .await
-        .map_err(|err| format!("get shareable users failed: {err}"))
+        .map_err(|err| {
+            log::error!("[albums.settings] list collaborators failed account_id={}: {err}", account.id);
+            format!("get shareable users failed: {err}")
+        })
 }
 
 #[tauri::command]

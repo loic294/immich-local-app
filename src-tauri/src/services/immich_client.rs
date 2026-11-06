@@ -895,6 +895,16 @@ impl ImmichClient {
         parse_asset_summary_from_value(&value)
     }
 
+    pub async fn get_asset_owner_id(&self, asset_id: &str) -> Result<String, String> {
+        let value = self.get_asset_value(asset_id).await?;
+        value
+            .get("ownerId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("Photo {asset_id} has no owner in the server response."))
+    }
+
     pub async fn original_available(&self, asset_id: &str) -> Result<bool, String> {
         let session = self.session.lock().await.clone().ok_or("not authenticated")?;
         let mut response = self.client
@@ -1218,6 +1228,7 @@ impl ImmichClient {
             "ids": asset_ids,
         });
 
+        log::info!("[albums.add-assets] start album_id={album_id} count={}", asset_ids.len());
         let methods = [reqwest::Method::PUT, reqwest::Method::POST];
         let mut last_error = String::new();
 
@@ -1235,6 +1246,11 @@ impl ImmichClient {
             let body = response.text().await.map_err(|err| err.to_string())?;
 
             if status.is_success() {
+                validate_album_asset_results(&body, asset_ids).map_err(|error| {
+                    log::error!("[albums.add-assets] album_id={album_id}: {error}");
+                    error
+                })?;
+                log::info!("[albums.add-assets] complete album_id={album_id} count={}", asset_ids.len());
                 return Ok(());
             }
 
@@ -1244,8 +1260,14 @@ impl ImmichClient {
                 status,
                 truncate_for_log(&body)
             );
+            if status != reqwest::StatusCode::NOT_FOUND
+                && status != reqwest::StatusCode::METHOD_NOT_ALLOWED
+            {
+                break;
+            }
         }
 
+        log::error!("[albums.add-assets] album_id={album_id}: {last_error}");
         Err(last_error)
     }
 
@@ -1694,6 +1716,7 @@ impl ImmichClient {
 
         let url = format!("{}/api/albums/{}/users", session.server_url, album_id);
         let payloads = [
+            serde_json::json!({ "albumUsers": [{ "userId": user_id, "role": role }] }),
             serde_json::json!({ "userId": user_id, "role": role }),
             serde_json::json!({ "sharedUserIds": [user_id], "role": role }),
             serde_json::json!({ "ids": [user_id], "role": role }),
@@ -1736,8 +1759,12 @@ impl ImmichClient {
                 payload,
                 truncate_for_log(&body)
             );
+            if !matches!(status.as_u16(), 400 | 404 | 405 | 422) {
+                break;
+            }
         }
 
+        log::error!("[album-share.users] add failed album_id={album_id} user_id={user_id}: {last_error}");
         Err(last_error)
     }
 
@@ -3528,6 +3555,46 @@ impl ImmichClient {
             truncate_for_log(&assets_body)
         ))
     }
+}
+
+fn validate_album_asset_results(body: &str, asset_ids: &[String]) -> Result<(), String> {
+    let results: Vec<Value> = serde_json::from_str(body)
+        .map_err(|error| format!("Invalid album asset response: {error}"))?;
+    let mut confirmed = HashSet::new();
+    let mut failed = Vec::new();
+    for result in &results {
+        let id = result
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("Invalid album asset response: missing asset ID")?;
+        let success = result
+            .get("success")
+            .and_then(Value::as_bool)
+            .ok_or("Invalid album asset response: missing success flag")?;
+        if success || result.get("error").and_then(Value::as_str) == Some("duplicate") {
+            confirmed.insert(id);
+        } else {
+            failed.push(format!(
+                "{id}: {}",
+                result.get("error").and_then(Value::as_str).unwrap_or("rejected")
+            ));
+        }
+    }
+    let missing = asset_ids
+        .iter()
+        .filter(|id| !confirmed.contains(id.as_str()))
+        .count();
+    if missing > 0 || !failed.is_empty() {
+        return Err(format!(
+            "{missing} photo(s) were not added to the album. {}",
+            if failed.is_empty() {
+                "The server did not confirm every photo.".into()
+            } else {
+                failed.join(", ")
+            }
+        ));
+    }
+    Ok(())
 }
 
 fn deleted_bucket_ids(body: &Value) -> Result<Vec<String>, String> {

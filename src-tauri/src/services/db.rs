@@ -4315,6 +4315,14 @@ impl Database {
             .unwrap_or_default();
 
         Ok(Settings {
+            album_creation: stmt
+                .query_row(params!["album_creation"], |row| row.get::<_, String>(0))
+                .optional()
+                .map_err(|error| format!("[albums.settings] read failed: {error}"))?
+                .map(|raw| serde_json::from_str(&raw))
+                .transpose()
+                .map_err(|error| format!("[albums.settings] invalid preferences: {error}"))?
+                .flatten(),
             delete_behavior: stmt.query_row(params!["delete_behavior"], |row| row.get::<_, String>(0))
                 .ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default(),
             locale,
@@ -4333,12 +4341,39 @@ impl Database {
     }
 
     pub fn update_settings(&self, settings: &Settings) -> Result<Settings, String> {
+        let changed_album_preferences =
+            self.get_settings()?.album_creation != settings.album_creation;
+        if let Some(preferences) = settings.album_creation.as_ref()
+            .filter(|_| changed_album_preferences)
+        {
+            if self.get_account(&preferences.owner_account_id)?.is_none() {
+                log::error!("[albums.settings] owner account no longer exists");
+                return Err("Album owner account no longer exists. Choose an owner in Settings > Albums.".into());
+            }
+            if preferences.editor_user_ids.iter().any(|id| id.trim().is_empty()) {
+                log::error!("[albums.settings] empty editor user ID");
+                return Err("Album editors must have a valid user ID.".into());
+            }
+        }
         let phone_photos_folder_path = normalize_folder_path(&settings.phone_photos_folder_path)
             .map_err(|error| {
                 log::warn!("[phone_photos:settings] rejected folder path: {error}");
                 error
             })?;
         let conn = self.open()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings(key,value) VALUES('album_creation',?1)",
+            [serde_json::to_string(&settings.album_creation).map_err(|error| error.to_string())?],
+        )
+        .map_err(|error| {
+            log::error!("[albums.settings] save failed: {error}");
+            error.to_string()
+        })?;
+        log::info!(
+            "[albums.settings] saved owner_account_id={:?} editor_count={}",
+            settings.album_creation.as_ref().map(|value| &value.owner_account_id),
+            settings.album_creation.as_ref().map_or(0, |value| value.editor_user_ids.len())
+        );
         conn.execute(
             "INSERT OR REPLACE INTO settings(key,value) VALUES('delete_behavior',?1)",
             [serde_json::to_string(&settings.delete_behavior).map_err(|e| e.to_string())?],

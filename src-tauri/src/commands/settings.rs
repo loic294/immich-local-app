@@ -68,9 +68,19 @@ pub struct MenuItemPreference {
     pub group: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumCreationPreferences {
+    pub owner_account_id: String,
+    pub editor_user_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    /// None preserves the default: primary account plus other signed-in users on its server.
+    #[serde(default)]
+    pub album_creation: Option<AlbumCreationPreferences>,
     #[serde(default)]
     pub delete_behavior: DeleteBehavior,
     pub locale: String,

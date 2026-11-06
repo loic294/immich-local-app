@@ -681,8 +681,8 @@ export async function getAlbumShareUsers(albumId: string): Promise<AlbumShareUse
   });
 }
 
-export async function getShareableUsers(): Promise<AlbumUserCandidate[]> {
-  return invoke<AlbumUserCandidate[]>("get_shareable_users");
+export async function getShareableUsers(accountId?: string): Promise<AlbumUserCandidate[]> {
+  return invoke<AlbumUserCandidate[]>("get_shareable_users", { accountId });
 }
 
 export async function addUserToAlbum(albumId: string, userId: string, role: string): Promise<void> {

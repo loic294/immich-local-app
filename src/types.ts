@@ -153,6 +153,10 @@ export type MyPhotosRule = {
 };
 
 export type Settings = {
+  albumCreation: {
+    ownerAccountId: string;
+    editorUserIds: string[];
+  } | null;
   deleteBehavior: "archive" | "trash";
   locale: "en-CA" | "fr-CA";
   livePhotoAutoplay: boolean;

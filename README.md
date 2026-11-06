@@ -76,6 +76,19 @@ appear first, followed by year groups. Select an existing album or the
 **New album** result, then use the single Add/Create action. Read-only albums
 are excluded, and cached choices remain available offline.
 
+**Settings → Albums** chooses the signed-in account that owns new albums and
+additional collaborators on that server, including users not signed in locally.
+Immich supports one owner; collaborators are added as editors. All editors are
+added before any photos, then each signed-in source account contributes its own
+selection. Include those source accounts in the editor selection. Private photos
+from an account not signed in cannot be contributed on that user's behalf.
+Without custom settings, the app uses its primary account and the other signed-in
+accounts on the same server. Photos from different servers cannot share an album.
+Preferences are stored locally and remain editable offline; loading server users
+and creating or adding to an album require connectivity. Permission failures are
+reported, including any already-created album, rather than silently dropping photos.
+These settings affect new albums only and work on macOS and Windows.
+
 **People** in the Library sidebar shows cached face thumbnails and photo counts.
 Sort by name or photo count; the chosen order is kept for the session. The face
 grid scrolls independently of the sidebar. Choose a person to open the shared
