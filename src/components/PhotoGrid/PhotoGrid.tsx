@@ -1540,11 +1540,10 @@ export function PhotoGrid({
                       height: `${entry.height}px`,
                     }}
                   >
-                    <div className="group/day flex items-center gap-2">
+                    <div className="flex items-center gap-2">
                       <DaySelectionCheckbox
                         label={entry.label}
                         state={getSectionSelectionState(entry.sectionIndex)}
-                        isSelecting={selectedAssetIds.size > 0}
                         onToggle={() => toggleSectionSelection(entry.sectionIndex)}
                       />
                       <span>{entry.label}</span>

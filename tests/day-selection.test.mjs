@@ -273,7 +273,7 @@ test("the day checkbox is checked when all, indeterminate when some, and clear w
     });
     const onToggle = () => {};
 
-    const { props } = DaySelectionCheckbox({ label: "Today", state, isSelecting: true, onToggle });
+    const { props } = DaySelectionCheckbox({ label: "Today", state, onToggle });
     effects.forEach((effect) => effect());
 
     assert.equal(props.type, "checkbox", state);
@@ -291,7 +291,6 @@ test("the day checkbox renders as a small daisyUI checkbox that names its day", 
       React.createElement(DaySelectionCheckbox, {
         label: "Today",
         state,
-        isSelecting: true,
         onToggle() {},
       }),
     );
@@ -299,41 +298,35 @@ test("the day checkbox renders as a small daisyUI checkbox that names its day", 
   const checked = render("all");
   assert.match(checked, /^<input /);
   assert.match(checked, /type="checkbox"/);
-  assert.match(checked, /class="checkbox checkbox-sm checkbox-primary opacity-100"/);
+  assert.match(checked, /class="checkbox checkbox-sm checkbox-primary"/);
   assert.match(checked, /checked=""/);
   assert.match(checked, /aria-label="photoGrid\.deselectDayAria\(Today\)"/);
   assert.doesNotMatch(render("none"), /checked/);
   assert.doesNotMatch(render("some"), /checked/);
 });
 
-test("the day checkbox reveals on hover or focus when idle and stays visible while selecting", () => {
+test("the day checkbox stays visible and interactive in every selection state", () => {
   const { DaySelectionCheckbox } = load(`${GRID}DaySelectionCheckbox.tsx`, {
     react: { useRef: () => ({ current: null }), useEffect: () => {} },
     "../../i18n": i18n,
   });
   let toggles = 0;
-  const render = (isSelecting) =>
-    DaySelectionCheckbox({
+
+  for (const state of ["none", "some", "all"]) {
+    const { props } = DaySelectionCheckbox({
       label: "Today",
-      state: "none",
-      isSelecting,
+      state,
       onToggle: () => toggles++,
-    }).props;
+    });
 
-  const idle = render(false);
-  const classes = new Set(idle.className.split(/\s+/));
-  assert.ok(classes.has("opacity-0"));
-  assert.ok(classes.has("group-hover/day:opacity-100"));
-  assert.ok(classes.has("focus:opacity-100"), "keyboard focus also reveals the checkbox");
-  assert.ok(!classes.has("hidden") && !classes.has("invisible"), "keep the checkbox focusable");
-  assert.notEqual(idle.tabIndex, -1);
-  assert.notEqual(idle.disabled, true);
-  idle.onChange();
-  assert.equal(toggles, 1, "the checkbox can start selection mode");
+    assert.equal(props.className, "checkbox checkbox-sm checkbox-primary", state);
+    assert.notEqual(props.hidden, true, state);
+    assert.notEqual(props.tabIndex, -1, state);
+    assert.notEqual(props.disabled, true, state);
+    props.onChange();
+  }
 
-  const selecting = render(true);
-  assert.ok(selecting.className.split(/\s+/).includes("opacity-100"));
-  assert.ok(!selecting.className.split(/\s+/).includes("opacity-0"));
+  assert.equal(toggles, 3, "the checkbox can toggle the day in every selection state");
 });
 
 test("a selected placeholder looks selected before its page has loaded", () => {
@@ -397,15 +390,14 @@ test("day separators carry their index in the layout, even when a day key repeat
   );
 });
 
-test("the grid mounts the day checkbox beside the day label in a shared hover target", () => {
+test("the grid always mounts the day checkbox beside the day label", () => {
   const source = read(`${GRID}PhotoGrid.tsx`);
 
   assert.match(
     source,
-    /<div className="group\/day flex items-center gap-2">\s*<DaySelectionCheckbox[\s\S]*?\/>\s*<span>\{entry\.label\}<\/span>\s*<\/div>/,
-    "hovering the name or checkbox reveals the checkbox without a gap between hover targets",
+    /<div className="flex items-center gap-2">\s*<DaySelectionCheckbox[\s\S]*?\/>\s*<span>\{entry\.label\}<\/span>\s*<\/div>/,
+    "the checkbox is always mounted immediately before the day label",
   );
-  assert.match(source, /isSelecting=\{selectedAssetIds\.size > 0\}/);
   assert.doesNotMatch(source, /selectedAssetIds\.size > 0 \? \(\s*<DaySelectionCheckbox/);
   assert.match(source, /getSectionSelectionState\(entry\.sectionIndex\)/);
   assert.match(source, /toggleSectionSelection\(entry\.sectionIndex\)/);
