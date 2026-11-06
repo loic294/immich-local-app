@@ -1329,53 +1329,10 @@ impl ImmichClient {
             .clone()
             .ok_or_else(|| "not authenticated".to_string())?;
 
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            IMMICH_API_KEY_HEADER,
-            HeaderValue::from_str(&session.access_token).map_err(|err| err.to_string())?,
-        );
-
-        let url = format!("{}/api/albums/{}/users", session.server_url, album_id);
-        log::warn!(
-            "[album-share.can-manage] start album_id={} endpoint={}",
-            album_id,
-            url
-        );
-
-        let response = self
-            .client
-            .get(&url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
-
-        let status = response.status();
-        let body = response.text().await.map_err(|err| err.to_string())?;
-
-        if status.is_success() {
-            log::warn!(
-                "[album-share.can-manage] success album_id={} status={}",
-                album_id,
-                status
-            );
-            return Ok(true);
-        }
-
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            log::warn!(
-                "[album-share.can-manage] forbidden album_id={} status={}",
-                album_id,
-                status
-            );
-            return Ok(false);
-        }
-
-        Err(format!(
-            "can_manage_album_sharing failed with status {} ({})",
-            status,
-            truncate_for_log(&body)
-        ))
+        let (album, _) = self.get_album_sharing(album_id).await?;
+        let can_manage = album.owner_id == session.user_id;
+        log::info!("[album-share.can-manage] album_id={album_id} is_owner={can_manage}");
+        Ok(can_manage)
     }
 
     pub async fn get_or_create_album_share_link(&self, album_id: &str) -> Result<String, String> {
@@ -1578,6 +1535,13 @@ impl ImmichClient {
         &self,
         album_id: &str,
     ) -> Result<Vec<AlbumShareUser>, String> {
+        self.get_album_sharing(album_id).await.map(|(_, users)| users)
+    }
+
+    pub async fn get_album_sharing(
+        &self,
+        album_id: &str,
+    ) -> Result<(AlbumSummary, Vec<AlbumShareUser>), String> {
         let session = self
             .session
             .lock()
@@ -1596,33 +1560,12 @@ impl ImmichClient {
             album_id
         );
 
-        let users_url = format!("{}/api/albums/{}/users", session.server_url, album_id);
-        let users_response = self
-            .client
-            .get(&users_url)
-            .headers(headers.clone())
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
-
-        let users_status = users_response.status();
-        let users_body = users_response.text().await.map_err(|err| err.to_string())?;
-
-        if users_status.is_success() {
-            let users = parse_album_share_users_payload(&users_body)?;
-            log::warn!(
-                "[album-share.users] success album_id={} count={} via=users-endpoint",
-                album_id,
-                users.len()
-            );
-            return Ok(users);
-        }
-
         let details_url = format!("{}/api/albums/{}", session.server_url, album_id);
         let details_response = self
             .client
             .get(&details_url)
             .headers(headers)
+            .query(&[("withoutAssets", "true")])
             .send()
             .await
             .map_err(|err| err.to_string())?;
@@ -1633,22 +1576,23 @@ impl ImmichClient {
             .map_err(|err| err.to_string())?;
 
         if details_status.is_success() {
+            let album = parse_album_from_payload(&details_body)?;
             let users = parse_album_share_users_payload(&details_body)?;
             log::warn!(
                 "[album-share.users] success album_id={} count={} via=album-details",
                 album_id,
                 users.len()
             );
-            return Ok(users);
+            return Ok((album, users));
         }
 
-        Err(format!(
-            "get album share users failed: /users -> {} ({}), /albums/{{id}} -> {} ({})",
-            users_status,
-            truncate_for_log(&users_body),
+        let error = format!(
+            "get album sharing failed with status {} ({})",
             details_status,
             truncate_for_log(&details_body)
-        ))
+        );
+        log::error!("[album-share.users] album_id={album_id}: {error}");
+        Err(error)
     }
 
     pub async fn get_shareable_users(&self) -> Result<Vec<AlbumUserCandidate>, String> {
@@ -1733,7 +1677,7 @@ impl ImmichClient {
         for payload in payloads {
             let response = self
                 .client
-                .post(&url)
+                .put(&url)
                 .headers(headers.clone())
                 .json(&payload)
                 .send()
@@ -1766,6 +1710,41 @@ impl ImmichClient {
 
         log::error!("[album-share.users] add failed album_id={album_id} user_id={user_id}: {last_error}");
         Err(last_error)
+    }
+
+    pub async fn update_album_user_role(
+        &self,
+        album_id: &str,
+        user_id: &str,
+        role: &str,
+    ) -> Result<(), String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+        log::info!("[album-share.users] start album_id={album_id} action=update-role user_id={user_id} role={role}");
+        let response = self
+            .client
+            .put(format!("{}/api/albums/{album_id}/user/{user_id}", session.server_url))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token)
+            .json(&serde_json::json!({ "role": role }))
+            .send()
+            .await
+            .map_err(|error| {
+                log::error!("[album-share.users] update-role request failed album_id={album_id} user_id={user_id}: {error}");
+                error.to_string()
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.map_err(|error| error.to_string())?;
+            let error = format!("update album user role failed with status {status} ({})", truncate_for_log(&body));
+            log::error!("[album-share.users] album_id={album_id} user_id={user_id}: {error}");
+            return Err(error);
+        }
+        log::info!("[album-share.users] complete album_id={album_id} action=update-role user_id={user_id}");
+        Ok(())
     }
 
     pub async fn remove_user_from_album(

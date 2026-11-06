@@ -14,18 +14,36 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 struct ServerState {
     owner: String,
     editors: HashSet<String>,
+    viewers: HashSet<String>,
     assets: HashSet<String>,
     requests: Vec<(String, String, Value)>,
     reject_editor: bool,
+    reject_editor_user: Option<String>,
     reject_asset: Option<String>,
+    reject_contributor: Option<String>,
     asset_response: Option<Value>,
 }
 
 impl ServerState {
     fn album(&self) -> Value {
+        let users: Vec<_> = std::iter::once(json!({
+            "user": { "id": self.owner }, "role": "owner"
+        }))
+        .chain(self.editors.iter().map(|id| {
+            json!({
+                "user": { "id": id }, "role": "editor"
+            })
+        }))
+        .chain(self.viewers.iter().map(|id| {
+            json!({
+                "user": { "id": id }, "role": "viewer"
+            })
+        }))
+        .collect();
         json!({
-            "id": "album", "albumName": "Test album", "ownerId": self.owner,
-            "shared": !self.editors.is_empty(), "assetCount": self.assets.len()
+            "id": "album", "albumName": "Test album", "albumUsers": users,
+            "shared": !self.editors.is_empty() || !self.viewers.is_empty(),
+            "assetCount": self.assets.len()
         })
     }
 
@@ -120,31 +138,73 @@ impl Fixture {
                         data.owner = user.clone();
                         data.contribute(&user, &payload["assetIds"]);
                         (201, data.album())
-                    } else if request.starts_with("POST /api/albums/album/users ") {
-                        if data.reject_editor {
+                    } else if request.starts_with("PUT /api/albums/album/users ") {
+                        if data.reject_editor
+                            || user != data.owner
+                            || data.reject_editor_user.as_deref().is_some_and(|id| {
+                                payload["albumUsers"][0]["userId"].as_str() == Some(id)
+                            })
+                        {
                             (403, json!({"message": "no permission to share"}))
                         } else if let Some(users) = payload["albumUsers"].as_array() {
                             for user in users {
-                                data.editors
-                                    .insert(user["userId"].as_str().unwrap().to_string());
+                                assert_eq!(user["role"], "editor");
+                                let id = user["userId"].as_str().unwrap();
+                                if !data.viewers.contains(id) {
+                                    data.editors.insert(id.to_string());
+                                }
                             }
                             (200, data.album())
                         } else {
                             (400, json!({"message": "albumUsers must be an array"}))
                         }
+                    } else if let Some(path) = request.strip_prefix("PUT /api/albums/album/user/") {
+                        let id = path.split_whitespace().next().unwrap();
+                        if data.reject_editor || user != data.owner {
+                            (403, json!({"message": "no permission to share"}))
+                        } else if data.viewers.remove(id) {
+                            assert_eq!(payload, json!({"role": "editor"}));
+                            data.editors.insert(id.to_string());
+                            (204, Value::Null)
+                        } else {
+                            (400, json!({"message": "user is not a viewer"}))
+                        }
                     } else if request.starts_with("PUT /api/albums/album/assets ") {
-                        let response = data.contribute(&user, &payload["ids"]);
-                        (200, data.asset_response.clone().unwrap_or(response))
-                    } else if request.starts_with("GET /api/albums/album?") {
-                        let mut album = data.album();
-                        album["assets"] = json!(data
-                            .assets
-                            .iter()
-                            .map(|id| json!({
-                                "id": id, "originalFileName": "photo.jpg"
-                            }))
-                            .collect::<Vec<_>>());
-                        (200, album)
+                        if (user != data.owner && !data.editors.contains(&user))
+                            || data.reject_contributor.as_deref() == Some(&user)
+                        {
+                            (
+                                400,
+                                json!({"message": "Not found or no albumAsset.create access"}),
+                            )
+                        } else {
+                            let response = data.contribute(&user, &payload["ids"]);
+                            (200, data.asset_response.clone().unwrap_or(response))
+                        }
+                    } else if request.starts_with("GET /api/albums/album?")
+                        || request.starts_with("GET /api/albums/album ")
+                    {
+                        if user != data.owner
+                            && !data.editors.contains(&user)
+                            && !data.viewers.contains(&user)
+                        {
+                            (400, json!({"message": "Not found or no album.read access"}))
+                        } else {
+                            let mut album = data.album();
+                            album["assets"] = json!(data
+                                .assets
+                                .iter()
+                                .map(|id| json!({
+                                    "id": id, "originalFileName": "photo.jpg"
+                                }))
+                                .collect::<Vec<_>>());
+                            (200, album)
+                        }
+                    } else if request.starts_with("POST /api/albums/album/users ") {
+                        (
+                            404,
+                            json!({"message": "Cannot POST /api/albums/album/users"}),
+                        )
                     } else if request.starts_with("GET /api/albums?")
                         || request.starts_with("GET /api/albums ")
                     {
@@ -153,7 +213,11 @@ impl Fixture {
                         (404, json!({"message": "unknown fixture endpoint"}))
                     }
                 };
-                let body = response.to_string();
+                let body = if status == 204 {
+                    String::new()
+                } else {
+                    response.to_string()
+                };
                 stream.write_all(format!(
                     "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -205,6 +269,18 @@ impl Fixture {
             editor_user_ids: editors.iter().map(|id| id.to_string()).collect(),
         });
         self.state.db.update_settings(&settings).unwrap();
+    }
+
+    fn seed_album(&self, owner: &str, cached_account: usize) {
+        let mut server = self.server.lock().unwrap();
+        server.owner = owner.to_string();
+        let mut album = server.album();
+        album["ownerId"] = json!(owner);
+        let album: AlbumSummary = serde_json::from_value(album).unwrap();
+        self.state
+            .db
+            .upsert_albums(&self.accounts[cached_account].id, &[album])
+            .unwrap();
     }
 
     async fn create(&self, ids: &[&str]) -> Result<AlbumSummary, String> {
@@ -308,13 +384,13 @@ async fn configured_owner_and_remote_editors_are_persisted_and_all_shared_before
     let first_contribution = server
         .requests
         .iter()
-        .position(|(request, _, _)| request.starts_with("PUT "))
+        .position(|(request, _, _)| request.starts_with("PUT /api/albums/album/assets "))
         .unwrap();
     let invites: Vec<_> = server
         .requests
         .iter()
         .enumerate()
-        .filter(|(_, (request, _, _))| request.starts_with("POST /api/albums/album/users "))
+        .filter(|(_, (request, _, _))| request.starts_with("PUT /api/albums/album/users "))
         .collect();
     assert_eq!(invites.len(), 2);
     for (index, (_, user, payload)) in invites {
@@ -339,7 +415,7 @@ async fn sharing_failure_stops_before_any_photo_submission() {
     assert!(!server
         .requests
         .iter()
-        .any(|(request, _, _)| request.starts_with("PUT ")));
+        .any(|(request, _, _)| request.starts_with("PUT /api/albums/album/assets ")));
     assert_eq!(
         server
             .requests
@@ -427,7 +503,7 @@ async fn shared_album_cache_attribution_is_not_mistaken_for_photo_ownership() {
     let contribution = server
         .requests
         .iter()
-        .find(|(request, _, _)| request.starts_with("PUT "))
+        .find(|(request, _, _)| request.starts_with("PUT /api/albums/album/assets "))
         .unwrap();
     assert_eq!(contribution.1, "second");
     assert!(server.assets.contains("second-photo"));
@@ -574,7 +650,7 @@ async fn import_can_create_empty_album_with_selected_owner_and_remote_collaborat
     assert!(!server
         .requests
         .iter()
-        .any(|(request, _, _)| request.starts_with("PUT ")));
+        .any(|(request, _, _)| request.starts_with("PUT /api/albums/album/assets ")));
 }
 
 #[tokio::test]
@@ -610,4 +686,409 @@ async fn existing_album_additions_also_use_each_photos_owner() {
         fixture.state.db.get_albums().unwrap()[0].asset_count,
         Some(2)
     );
+}
+
+#[tokio::test]
+async fn existing_album_adds_configured_editors_before_any_photo() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second", "remote-user"]);
+    fixture.seed_album("first", 0);
+    add_assets_to_album_internal(
+        "album",
+        &["first-photo".into(), "second-photo".into()],
+        &fixture.state,
+    )
+    .await
+    .unwrap();
+    let server = fixture.server.lock().unwrap();
+    assert_eq!(server.assets.len(), 2);
+    assert_eq!(
+        server.editors,
+        HashSet::from(["second".into(), "remote-user".into()])
+    );
+    let first_photo = server
+        .requests
+        .iter()
+        .position(|(request, _, _)| request.starts_with("PUT /api/albums/album/assets "))
+        .unwrap();
+    let invites: Vec<_> = server
+        .requests
+        .iter()
+        .enumerate()
+        .filter(|(_, (request, _, _))| request.starts_with("PUT /api/albums/album/users "))
+        .collect();
+    assert_eq!(invites.len(), 2);
+    assert!(invites
+        .iter()
+        .all(|(index, (_, user, _))| *index < first_photo && user == "first"));
+    assert!(!server
+        .requests
+        .iter()
+        .any(|(request, _, _)| request.starts_with("POST ")));
+}
+
+#[tokio::test]
+async fn existing_album_promotes_selected_viewers_using_actual_owner_and_retry_is_idempotent() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second", "remote-user"]);
+    {
+        let mut server = fixture.server.lock().unwrap();
+        server.viewers.insert("second".into());
+        server.editors.insert("unselected-existing-editor".into());
+    }
+    fixture.seed_album("first", 1);
+    for _ in 0..2 {
+        add_assets_to_album_internal(
+            "album",
+            &["first-photo".into(), "second-photo".into()],
+            &fixture.state,
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        fixture
+            .state
+            .db
+            .get_album_account_id("album")
+            .unwrap()
+            .as_deref(),
+        Some(fixture.accounts[0].id.as_str())
+    );
+    let server = fixture.server.lock().unwrap();
+    assert_eq!(server.assets.len(), 2);
+    assert!(server.viewers.is_empty());
+    assert_eq!(
+        server.editors,
+        HashSet::from([
+            "second".into(),
+            "remote-user".into(),
+            "unselected-existing-editor".into()
+        ])
+    );
+    let sharing: Vec<_> = server
+        .requests
+        .iter()
+        .filter(|(request, _, _)| request.starts_with("PUT /api/albums/album/user"))
+        .collect();
+    assert_eq!(
+        sharing.len(),
+        2,
+        "Already-present editors must not be invited again"
+    );
+    assert!(sharing.iter().all(|(_, user, _)| user == "first"));
+    assert!(sharing
+        .iter()
+        .any(|(request, _, _)| { request.starts_with("PUT /api/albums/album/user/second ") }));
+}
+
+#[tokio::test]
+async fn failed_creation_can_be_retried_as_existing_album_without_recreating_it() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second", "remote-user"]);
+    fixture.server.lock().unwrap().reject_editor = true;
+    assert!(fixture
+        .create(&["second-photo"])
+        .await
+        .unwrap_err()
+        .contains("No photos were submitted"));
+    let error = add_assets_to_album_internal("album", &["second-photo".into()], &fixture.state)
+        .await
+        .unwrap_err();
+    assert!(error.contains("No photos were submitted"), "{error}");
+    {
+        let mut server = fixture.server.lock().unwrap();
+        assert!(server.assets.is_empty());
+        assert!(!server
+            .requests
+            .iter()
+            .any(|(request, _, _)| { request.starts_with("PUT /api/albums/album/assets ") }));
+        server.reject_editor = false;
+    }
+    add_assets_to_album_internal("album", &["second-photo".into()], &fixture.state)
+        .await
+        .unwrap();
+    let server = fixture.server.lock().unwrap();
+    assert_eq!(server.assets, HashSet::from(["second-photo".into()]));
+    assert_eq!(
+        server
+            .requests
+            .iter()
+            .filter(|(request, _, _)| { request.starts_with("POST /api/albums ") })
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn existing_album_with_other_owner_keeps_its_sharing_unchanged() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second", "remote-user"]);
+    fixture.seed_album("second", 1);
+    add_assets_to_album_internal("album", &["second-photo".into()], &fixture.state)
+        .await
+        .unwrap();
+    let server = fixture.server.lock().unwrap();
+    assert!(server.editors.is_empty());
+    assert_eq!(server.assets, HashSet::from(["second-photo".into()]));
+    assert!(!server
+        .requests
+        .iter()
+        .any(|(request, _, _)| { request.starts_with("PUT /api/albums/album/user") }));
+}
+
+#[tokio::test]
+async fn existing_album_checks_all_contributor_roles_before_any_write() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["remote-user"]);
+    fixture.seed_album("first", 0);
+    let error = add_assets_to_album_internal(
+        "album",
+        &["first-photo".into(), "second-photo".into()],
+        &fixture.state,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("second"), "{error}");
+    assert!(error.contains("editor access"), "{error}");
+    assert!(error.contains("No photos were submitted"), "{error}");
+    assert!(fixture
+        .server
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .all(|(request, _, _)| { request.starts_with("GET ") }));
+}
+
+#[tokio::test]
+async fn existing_album_cannot_grant_itself_access_when_configured_account_is_not_owner() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second", "remote-user"]);
+    fixture
+        .server
+        .lock()
+        .unwrap()
+        .viewers
+        .insert("first".into());
+    fixture.seed_album("second", 0);
+    let error = add_assets_to_album_internal(
+        "album",
+        &["first-photo".into(), "second-photo".into()],
+        &fixture.state,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("editor access"), "{error}");
+    assert!(fixture
+        .server
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .all(|(request, _, _)| { request.starts_with("GET ") }));
+}
+
+#[tokio::test]
+async fn matching_owner_user_id_on_different_server_never_changes_sharing() {
+    let fixture = Fixture::new().await;
+    let foreign = fixture
+        .state
+        .db
+        .upsert_account(
+            "http://different.invalid",
+            "first",
+            None,
+            None,
+            "api_key",
+            "fixture",
+        )
+        .unwrap();
+    let mut settings = fixture.state.db.get_settings().unwrap();
+    settings.album_creation = Some(AlbumCreationPreferences {
+        owner_account_id: foreign.id,
+        editor_user_ids: vec!["second".into()],
+    });
+    fixture.state.db.update_settings(&settings).unwrap();
+    fixture.seed_album("first", 0);
+    add_assets_to_album_internal("album", &["first-photo".into()], &fixture.state)
+        .await
+        .unwrap();
+    assert!(fixture.server.lock().unwrap().editors.is_empty());
+}
+
+#[tokio::test]
+async fn existing_album_api_key_rejection_is_reported_without_retrying_other_payloads() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second"]);
+    fixture.seed_album("first", 0);
+    fixture.server.lock().unwrap().reject_contributor = Some("second".into());
+    let error = add_assets_to_album_internal("album", &["second-photo".into()], &fixture.state)
+        .await
+        .unwrap_err();
+    assert!(error.contains("albumAsset.create"), "{error}");
+    assert!(error.contains("API-key"), "{error}");
+    let server = fixture.server.lock().unwrap();
+    assert!(server.editors.contains("second"));
+    assert!(server.assets.is_empty());
+    assert_eq!(
+        server
+            .requests
+            .iter()
+            .filter(|(request, _, _)| {
+                request.contains("/assets ") && !request.starts_with("GET ")
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        fixture.state.db.get_albums().unwrap()[0].asset_count,
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn existing_album_partial_results_are_cached_and_retry_preserves_existing_photos() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second"]);
+    fixture.seed_album("first", 0);
+    let denied: AssetSummary = serde_json::from_value(json!({
+        "id": "second-denied", "originalFileName": "denied.jpg"
+    }))
+    .unwrap();
+    fixture
+        .state
+        .db
+        .upsert_assets(&fixture.accounts[1].id, &[denied])
+        .unwrap();
+    fixture.server.lock().unwrap().reject_asset = Some("second-denied".into());
+    let ids = ["second-photo".into(), "second-denied".into()];
+    let error = add_assets_to_album_internal("album", &ids, &fixture.state)
+        .await
+        .unwrap_err();
+    assert!(error.contains("no_permission"), "{error}");
+    assert_eq!(
+        fixture.state.db.get_albums().unwrap()[0].asset_count,
+        Some(1)
+    );
+    let (cached, _) = fixture
+        .state
+        .db
+        .get_album_assets("album", 0, 100, None, None)
+        .unwrap();
+    assert_eq!(
+        cached
+            .iter()
+            .map(|asset| asset.id.as_str())
+            .collect::<Vec<_>>(),
+        ["second-photo"]
+    );
+    fixture.server.lock().unwrap().reject_asset = None;
+    add_assets_to_album_internal("album", &ids, &fixture.state)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.state.db.get_albums().unwrap()[0].asset_count,
+        Some(2)
+    );
+    assert_eq!(fixture.server.lock().unwrap().assets.len(), 2);
+}
+
+#[tokio::test]
+async fn offline_existing_album_does_not_change_sharing_or_cached_membership() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second"]);
+    fixture.seed_album("first", 0);
+    fixture.task.abort();
+    tokio::task::yield_now().await;
+    let error = add_assets_to_album_internal("album", &["second-photo".into()], &fixture.state)
+        .await
+        .unwrap_err();
+    assert!(error.starts_with("offline:"), "{error}");
+    assert_eq!(
+        fixture.state.db.get_albums().unwrap()[0].asset_count,
+        Some(0)
+    );
+    assert!(fixture.server.lock().unwrap().editors.is_empty());
+}
+
+#[tokio::test]
+async fn sharing_controls_use_album_details_and_only_the_owner_can_manage() {
+    let fixture = Fixture::new().await;
+    fixture
+        .server
+        .lock()
+        .unwrap()
+        .editors
+        .insert("second".into());
+    fixture.seed_album("first", 0);
+    let owner = fixture
+        .state
+        .accounts
+        .client(&fixture.accounts[0].id)
+        .unwrap();
+    let editor = fixture
+        .state
+        .accounts
+        .client(&fixture.accounts[1].id)
+        .unwrap();
+    assert!(owner.can_manage_album_sharing("album").await.unwrap());
+    assert!(!editor.can_manage_album_sharing("album").await.unwrap());
+    let users = owner.get_album_share_users("album").await.unwrap();
+    assert!(users
+        .iter()
+        .any(|user| user.id == "second" && user.role.as_deref() == Some("editor")));
+    assert!(fixture
+        .server
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .all(|(request, _, _)| { request.starts_with("GET /api/albums/album?") }));
+}
+
+#[tokio::test]
+async fn partial_editor_setup_preserves_shared_cache_and_retry_skips_confirmed_editors() {
+    for existing in [false, true] {
+        let fixture = Fixture::new().await;
+        fixture.configure(0, &["second", "z-remote"]);
+        fixture.server.lock().unwrap().reject_editor_user = Some("z-remote".into());
+        if existing {
+            fixture.seed_album("first", 0);
+            assert!(add_assets_to_album_internal(
+                "album",
+                &["second-photo".into()],
+                &fixture.state
+            )
+            .await
+            .is_err());
+        } else {
+            assert!(fixture.create(&["second-photo"]).await.is_err());
+        }
+        let album = fixture.state.db.get_albums().unwrap().remove(0);
+        assert!(album.shared);
+        assert_eq!(album.asset_count, Some(0));
+        {
+            let mut server = fixture.server.lock().unwrap();
+            assert!(server.assets.is_empty());
+            assert_eq!(server.editors, HashSet::from(["second".into()]));
+            server.reject_editor_user = None;
+        }
+        add_assets_to_album_internal("album", &["second-photo".into()], &fixture.state)
+            .await
+            .unwrap();
+        let server = fixture.server.lock().unwrap();
+        assert_eq!(server.assets, HashSet::from(["second-photo".into()]));
+        assert_eq!(
+            server
+                .requests
+                .iter()
+                .filter(|(request, _, payload)| {
+                    request.starts_with("PUT /api/albums/album/users ")
+                        && payload["albumUsers"][0]["userId"] == "second"
+                })
+                .count(),
+            1
+        );
+    }
 }

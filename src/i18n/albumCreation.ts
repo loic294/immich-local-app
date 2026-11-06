@@ -4,7 +4,7 @@ const messages = {
   "en-CA": {
     title: "New album ownership",
     description:
-      "Choose the account where new albums are created. These defaults apply to new albums only, on macOS and Windows.",
+      "Choose the account where new albums are created. Selected editors are also added before contributing photos to existing albums owned by this account. Other albums keep their sharing unchanged, on macOS and Windows.",
     owner: "Primary album owner",
     missingOwner: "Choose an available account",
     editors: "Additional collaborators (editors)",
@@ -24,7 +24,7 @@ const messages = {
   "fr-CA": {
     title: "Propriété des nouveaux albums",
     description:
-      "Choisissez le compte dans lequel les nouveaux albums sont créés. Ces réglages s'appliquent uniquement aux nouveaux albums, sur macOS et Windows.",
+      "Choisissez le compte dans lequel les nouveaux albums sont créés. Les éditeurs sélectionnés sont aussi ajoutés avant les photos aux albums existants de ce compte. Le partage des autres albums reste inchangé, sur macOS et Windows.",
     owner: "Propriétaire principal de l'album",
     missingOwner: "Choisir un compte disponible",
     editors: "Collaborateurs supplémentaires (éditeurs)",

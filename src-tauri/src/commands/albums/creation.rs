@@ -1,6 +1,6 @@
 use crate::services::{
     db::Account,
-    immich_client::{AlbumSummary, ImmichClient},
+    immich_client::{AlbumShareUser, AlbumSummary, ImmichClient},
 };
 use crate::AppState;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -122,6 +122,88 @@ pub(super) async fn resolve_contributors(
     Ok(resolved.into_values().collect())
 }
 
+pub(super) fn configuration(
+    state: &AppState,
+) -> Result<(Option<Account>, BTreeSet<String>), String> {
+    let settings = state.db.get_settings()?;
+    let owner = match &settings.album_creation {
+        Some(preferences) => state.db.get_account(&preferences.owner_account_id)?,
+        None => state.db.get_primary_account()?,
+    };
+    let editors = match settings.album_creation {
+        Some(preferences) => preferences.editor_user_ids,
+        None => state
+            .db
+            .list_accounts()?
+            .into_iter()
+            .filter(|account| {
+                owner.as_ref().is_some_and(|owner| {
+                    account.server_url.trim_end_matches('/')
+                        == owner.server_url.trim_end_matches('/')
+                })
+            })
+            .map(|account| account.user_id)
+            .collect(),
+    }
+    .into_iter()
+    .filter(|id| owner.as_ref().is_none_or(|owner| id != &owner.user_id))
+    .collect();
+    Ok((owner, editors))
+}
+
+pub(super) fn validate_contributor_access(
+    owner_id: &str,
+    users: &[AlbumShareUser],
+    editors_to_add: &BTreeSet<String>,
+    groups: &[Contribution],
+) -> Result<(), String> {
+    for group in groups {
+        let user_id = &group.account.user_id;
+        if user_id != owner_id
+            && !editors_to_add.contains(user_id)
+            && !users
+                .iter()
+                .any(|user| user.id == *user_id && user.role.as_deref() == Some("editor"))
+        {
+            return Err(format!(
+                "Photo account {} needs album editor access. Select it in Settings > Albums for the configured owner's albums, or ask this album's owner to grant editor access. No photos were submitted.",
+                group.account.user_name.as_deref().unwrap_or(user_id)
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn ensure_editors(
+    client: &ImmichClient,
+    album: &mut AlbumSummary,
+    editors: &BTreeSet<String>,
+    users: &[AlbumShareUser],
+) -> Result<(), String> {
+    let album_id = &album.id;
+    log::info!(
+        "[albums.editors] start album_id={album_id} configured_count={}",
+        editors.len()
+    );
+    for user_id in editors {
+        let result = match users.iter().find(|user| user.id == *user_id) {
+            Some(user) if matches!(user.role.as_deref(), Some("editor" | "owner")) => continue,
+            Some(_) => {
+                client
+                    .update_album_user_role(album_id, user_id, "editor")
+                    .await
+            }
+            None => client.add_user_to_album(album_id, user_id, "editor").await,
+        };
+        result.map_err(|error| {
+            format!("Could not give editor access to {user_id}: {error}. No photos were submitted.")
+        })?;
+        album.shared = true;
+    }
+    log::info!("[albums.editors] ready album_id={album_id}");
+    Ok(())
+}
+
 async fn create(
     album_name: &str,
     asset_ids: &[String],
@@ -131,39 +213,16 @@ async fn create(
     if album_name.is_empty() {
         return Err("Enter an album name.".into());
     }
-    let settings = state.db.get_settings()?;
-    let owner = match &settings.album_creation {
-        Some(preferences) => state.db.get_account(&preferences.owner_account_id)?,
-        None => state.db.get_primary_account()?,
-    }
-    .ok_or("Album owner account no longer exists. Choose an owner in Settings > Albums.")?;
+    let (owner, editors) = configuration(state)?;
+    let owner = owner
+        .ok_or("Album owner account no longer exists. Choose an owner in Settings > Albums.")?;
     let client = account_client(state, &owner)?;
-    let editors: BTreeSet<String> = match settings.album_creation {
-        Some(preferences) => preferences.editor_user_ids,
-        None => state
-            .db
-            .list_accounts()?
-            .into_iter()
-            .filter(|account| account.server_url == owner.server_url)
-            .map(|account| account.user_id)
-            .collect(),
-    }
-    .into_iter()
-    .filter(|id| id != &owner.user_id)
-    .collect();
     let groups = contributions(state, &owner.server_url, asset_ids)?;
     if !client.ping(&owner.server_url).await {
         return Err("offline: Connect to the album owner's server to create an album.".into());
     }
     let groups = resolve_contributors(state, groups).await?;
-    for group in &groups {
-        if group.account.user_id != owner.user_id && !editors.contains(&group.account.user_id) {
-            return Err(format!(
-                "Add photo owner {} as an album editor in Settings > Albums before creating this album.",
-                group.account.user_name.as_deref().unwrap_or(&group.account.user_id)
-            ));
-        }
-    }
+    validate_contributor_access(&owner.user_id, &[], &editors, &groups)?;
     log::info!(
         "[albums.create] start owner_account_id={} editor_count={} contributing_accounts={}",
         owner.id,
@@ -179,15 +238,7 @@ async fn create(
         state
             .db
             .upsert_albums(&owner.id, std::slice::from_ref(&album))?;
-        for user_id in editors {
-            client
-                .add_user_to_album(&album.id, &user_id, "editor")
-                .await
-                .map_err(|error| {
-                    format!("Could not add editor {user_id}: {error}. No photos were submitted.")
-                })?;
-            album.shared = true;
-        }
+        ensure_editors(&client, &mut album, &editors, &[]).await?;
         log::info!("[albums.create] collaborators ready album_id={}", album.id);
         for group in groups {
             log::info!(

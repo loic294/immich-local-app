@@ -87,7 +87,13 @@ accounts on the same server. Photos from different servers cannot share an album
 Preferences are stored locally and remain editable offline; loading server users
 and creating or adding to an album require connectivity. Permission failures are
 reported, including any already-created album, rather than silently dropping photos.
-These settings affect new albums only and work on macOS and Windows.
+When adding photos to an existing album owned by the configured account, the app
+also adds any missing selected editors and upgrades selected viewers to editors
+before submitting photos. Existing editors are kept, and albums belonging to
+other owners retain their sharing unchanged. An empty album left by an earlier
+failure can therefore be selected again instead of recreated. Contributor accounts
+still need an API key with `albumAsset.create` permission. This works on macOS and
+Windows.
 
 **People** in the Library sidebar shows cached face thumbnails and photo counts.
 Sort by name or photo count; the chosen order is kept for the session. The face

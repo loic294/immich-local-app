@@ -224,38 +224,81 @@ async fn add_assets_to_album_internal(
     asset_ids: &[String],
     state: &AppState,
 ) -> Result<(), String> {
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+    log::info!("[albums.add-assets] start album_id={album_id} selected_count={}", asset_ids.len());
     let account_id = state.db.get_album_account_id(album_id)?
         .ok_or("Album has no cached account. Refresh the album list before adding photos.")?;
-    let account = state.db.get_account(&account_id)?
+    let mut account = state.db.get_account(&account_id)?
         .ok_or("Album account no longer exists.")?;
-    let client = creation::account_client(state, &account)?;
+    let mut client = creation::account_client(state, &account)?;
     let groups = creation::contributions(state, &account.server_url, asset_ids)?;
     if !client.ping(&account.server_url).await {
         return Err("offline: Connect to the album's server to add photos.".into());
     }
     let groups = creation::resolve_contributors(state, groups).await?;
-    for group in groups {
-        group.client
-            .add_assets_to_album(album_id, &group.asset_ids)
-            .await
-            .map_err(|err| {
-                format!("add assets to album failed for account {}: {err}", group.account.id)
-            })?;
+    let (mut album, users) = client.get_album_sharing(album_id).await?;
+    let (configured_owner, mut editors) = creation::configuration(state)?;
+    if let Some(owner) = configured_owner.filter(|owner| {
+        owner.user_id == album.owner_id
+            && owner.server_url.trim_end_matches('/') == account.server_url.trim_end_matches('/')
+    }) {
+        // Shared-album sync can cache this album under a reader's account.
+        // Only the configured, actual owner may change its sharing.
+        client = creation::account_client(state, &owner)?;
+        account = owner;
+    } else {
+        editors.clear();
+        log::info!("[albums.add-assets] preserving sharing album_id={album_id} owner_is_not_configured=true");
     }
+    creation::validate_contributor_access(&album.owner_id, &users, &editors, &groups)?;
+    let sharing = creation::ensure_editors(&client, &mut album, &editors, &users).await;
+    state.db.upsert_albums(&account.id, std::slice::from_ref(&album))?;
+    sharing?;
 
-    let albums = client
-        .get_albums()
-        .await
-        .map_err(|err| format!("refresh album list failed: {err}"))?;
+    let outcome: Result<(), String> = async {
+        for group in groups {
+            log::info!("[albums.add-assets] contributing album_id={album_id} account_id={} count={}", group.account.id, group.asset_ids.len());
+            group.client
+                .add_assets_to_album(album_id, &group.asset_ids)
+                .await
+                .map_err(|error| format!(
+                    "Adding photos to album \"{}\" ({album_id}) failed for account {}: {error}. Check this account's album editor access and API-key albumAsset.create permission. Some photos may already have been added; retry this existing album.",
+                    album.album_name,
+                    group.account.user_name.as_deref().unwrap_or(&group.account.user_id)
+                ))?;
+        }
+        Ok(())
+    }.await;
 
-    state
-        .db
-        .upsert_albums(&account_id, &albums)
-        .map_err(|err| format!("album cache write failed: {err}"))?;
+    // Bulk requests can partially succeed. Reconcile only the selected album,
+    // including on failure, so retrying never hides confirmed photos.
+    let refresh: Result<(), String> = async {
+        let assets = client.get_album_assets(album_id).await?;
+        let ids: Vec<_> = assets.iter().map(|asset| asset.id.clone()).collect();
+        state.db.upsert_assets(&account.id, &assets)?;
+        state.db.replace_album_assets(&account.id, album_id, &ids)?;
+        album.asset_count = Some(ids.len() as u32);
+        if !album.album_thumbnail_asset_id.as_ref().is_some_and(|id| ids.contains(id)) {
+            album.album_thumbnail_asset_id = ids.first().cloned();
+        }
+        state.db.upsert_albums(&account.id, std::slice::from_ref(&album))?;
+        Ok(())
+    }.await;
+    if let Err(error) = refresh {
+        log::error!("[albums.add-assets] membership refresh failed album_id={album_id}: {error}");
+        return Err(match outcome {
+            Err(submission_error) => format!("{submission_error} Refreshing the album cache also failed: {error}"),
+            Ok(()) => format!("Photos were added to album {album_id}, but refreshing its cache failed: {error}"),
+        });
+    }
+    outcome?;
     if let Err(error) = state.db.record_recent_album(album_id) {
         log::warn!("[albums.recent] could not record updated album {}: {}", album_id, error);
     }
 
+    log::info!("[albums.add-assets] complete album_id={album_id}");
     Ok(())
 }
 
