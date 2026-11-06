@@ -89,6 +89,9 @@ export type MemorySummary = {
   id: string;
   title: string | null;
   memoryAt: string | null;
+  /** Start/end of the window in which Immich shows this memory. */
+  showAt: string | null;
+  hideAt: string | null;
   year: number | null;
   assets: AssetSummary[];
   /** Locally-generated id of the account this memory was fetched from. */

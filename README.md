@@ -27,8 +27,8 @@ title bar.
   favorites, and deleted assets.
 - Filter and sort the library by available details such as people, camera,
   media type, rating, favorite status, and account.
-- View photos and videos with metadata, location maps, and all memories returned
-  by the server, without applying a date filter.
+- View photos and videos with metadata, location maps, and the memories Immich
+  shows for today and yesterday (local date), today's first.
 - Browse Live Photos as one photo tile with linked motion playback. The server's
   pairing is retained offline; linked motion videos are not separate browsing
   tiles, while standalone videos remain visible. Deleted keeps individual assets

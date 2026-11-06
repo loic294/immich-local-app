@@ -150,6 +150,9 @@ pub struct MemorySummary {
     pub id: String,
     pub title: Option<String>,
     pub memory_at: Option<String>,
+    /// Start/end of the window in which Immich shows this memory.
+    pub show_at: Option<String>,
+    pub hide_at: Option<String>,
     pub year: Option<i32>,
     #[serde(default)]
     pub assets: Vec<AssetSummary>,
@@ -3731,21 +3734,96 @@ fn parse_asset_list(payload: &str) -> Result<AssetListResult, String> {
     Err("unknown asset payload shape".to_string())
 }
 
+/// Parses `GET /api/memories` leniently. Immich 3 sends the year as `data.year`
+/// and asset `duration` as an integer (ms), which strict deserialization into
+/// `MemorySummary` rejects; assets therefore go through `parse_asset_array`.
 fn parse_memories(payload: &str) -> Result<Vec<MemorySummary>, String> {
-    if let Ok(mut memories) = serde_json::from_str::<Vec<MemorySummary>>(payload) {
-        memories.retain(|memory| !memory.assets.is_empty());
-        return Ok(memories);
+    let value: Value = serde_json::from_str(payload)
+        .map_err(|err| format!("invalid memories payload: {err}"))?;
+
+    let items = value
+        .as_array()
+        .or_else(|| value.get("items").and_then(Value::as_array))
+        .ok_or_else(|| {
+            log::warn!(
+                "[memories.parse] unexpected payload shape: {}",
+                truncate_for_log(payload)
+            );
+            "unknown memories payload shape".to_string()
+        })?;
+
+    let mut memories = Vec::with_capacity(items.len());
+    let mut skipped = 0usize;
+    let mut first_error: Option<String> = None;
+    for (index, item) in items.iter().enumerate() {
+        match parse_memory_summary(item) {
+            Ok(memory) if memory.assets.is_empty() => {}
+            Ok(memory) => memories.push(memory),
+            Err(err) => {
+                log::warn!("[memories.parse] skipping memory at index {index}: {err}");
+                skipped += 1;
+                first_error.get_or_insert(err);
+            }
+        }
     }
 
-    let value: Value = serde_json::from_str(payload).map_err(|err| err.to_string())?;
-    if let Some(items) = value.get("items") {
-        let mut memories = serde_json::from_value::<Vec<MemorySummary>>(items.clone())
-            .map_err(|err| err.to_string())?;
-        memories.retain(|memory| !memory.assets.is_empty());
-        return Ok(memories);
+    // One unreadable memory must not hide the others, but if nothing was
+    // readable, surface the cause instead of reporting an empty strip.
+    if memories.is_empty() && skipped > 0 {
+        let cause = first_error.unwrap_or_default();
+        log::warn!(
+            "[memories.parse] no readable memories: {skipped} of {} failed ({cause})",
+            items.len()
+        );
+        return Err(format!(
+            "could not read {skipped} of {} memories: {cause}",
+            items.len()
+        ));
     }
 
-    Err("unknown memories payload shape".to_string())
+    if skipped > 0 {
+        log::warn!(
+            "[memories.parse] parsed {} memories, skipped {skipped} unreadable",
+            memories.len()
+        );
+    }
+
+    Ok(memories)
+}
+
+fn parse_memory_summary(value: &Value) -> Result<MemorySummary, String> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "memory missing id".to_string())?
+        .to_string();
+
+    let assets = match value.get("assets") {
+        Some(assets) if !assets.is_null() => parse_asset_array(assets)?,
+        _ => Vec::new(),
+    };
+
+    let year = [
+        value.get("year"),
+        value.get("data").and_then(|data| data.get("year")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_i64)
+    .and_then(|year| i32::try_from(year).ok());
+
+    let string_field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
+
+    Ok(MemorySummary {
+        id,
+        title: string_field("title"),
+        memory_at: string_field("memoryAt"),
+        show_at: string_field("showAt"),
+        hide_at: string_field("hideAt"),
+        year,
+        assets,
+        account_id: String::new(),
+    })
 }
 
 #[cfg(test)]
@@ -3839,6 +3917,100 @@ mod memory_api_tests {
         for payload in ["invalid", r#"{"message":"error"}"#, r#"{"items":null}"#] {
             assert!(parse_memories(payload).is_err());
         }
+    }
+
+    // Immich 3.x: `data.year`, no top-level `year`/`title`, extra fields, and
+    // `duration` as an integer (ms) for videos or null for stills.
+    const MEMORIES_V3: &str = r#"[
+        {
+            "id": "stills-only",
+            "createdAt": "2026-10-09T10:00:00.000Z",
+            "updatedAt": "2026-10-09T10:00:00.000Z",
+            "memoryAt": "2025-11-05T00:00:00.000Z",
+            "showAt": "2026-11-05T00:00:00.000Z",
+            "hideAt": "2026-11-05T23:59:59.999Z",
+            "ownerId": "owner",
+            "type": "on_this_day",
+            "isSaved": false,
+            "data": {"year": 2025},
+            "assets": [
+                {"id": "still", "originalFileName": "photo.jpg", "type": "IMAGE", "duration": null,
+                 "fileCreatedAt": "2025-11-05T08:00:00.000Z", "checksum": "abc"}
+            ]
+        },
+        {
+            "id": "with-video",
+            "memoryAt": "2020-11-05T00:00:00.000Z",
+            "type": "on_this_day",
+            "isSaved": false,
+            "data": {"year": 2020},
+            "assets": [
+                {"id": "clip", "originalFileName": "clip.mp4", "type": "VIDEO", "duration": 1200,
+                 "fileCreatedAt": "2020-11-05T08:00:00.000Z", "checksum": "def"},
+                {"id": "still-2", "originalFileName": "photo2.jpg", "type": "IMAGE", "duration": null,
+                 "fileCreatedAt": "2020-11-05T09:00:00.000Z", "checksum": "ghi"}
+            ]
+        }
+    ]"#;
+
+    #[test]
+    fn memories_parser_accepts_immich_v3_payload_with_numeric_duration() {
+        let memories = parse_memories(MEMORIES_V3).unwrap();
+        assert_eq!(memories.len(), 2);
+
+        assert_eq!(memories[0].id, "stills-only");
+        assert_eq!(memories[0].year, Some(2025));
+        assert_eq!(
+            memories[0].memory_at.as_deref(),
+            Some("2025-11-05T00:00:00.000Z")
+        );
+        assert_eq!(
+            memories[0].show_at.as_deref(),
+            Some("2026-11-05T00:00:00.000Z")
+        );
+        assert_eq!(
+            memories[0].hide_at.as_deref(),
+            Some("2026-11-05T23:59:59.999Z")
+        );
+        assert_eq!(memories[0].assets[0].duration, None);
+
+        assert_eq!(memories[1].id, "with-video");
+        assert_eq!(memories[1].year, Some(2020));
+        assert_eq!(memories[1].assets.len(), 2);
+        assert_eq!(memories[1].assets[0].r#type.as_deref(), Some("VIDEO"));
+        assert_eq!(memories[1].assets[0].duration.as_deref(), Some("1200"));
+        assert_eq!(memories[1].assets[1].duration, None);
+        assert!(memories.iter().all(|memory| memory.account_id.is_empty()));
+
+        let wrapped = format!(r#"{{"items":{MEMORIES_V3}}}"#);
+        assert_eq!(parse_memories(&wrapped).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn memories_parser_skips_unreadable_entries_but_reports_total_failure() {
+        let mixed = r#"[
+            {"assets":[{"id":"a","originalFileName":"a.jpg"}]},
+            {"id":"ok","assets":[{"id":"b","originalFileName":"b.jpg"}]}
+        ]"#;
+        let memories = parse_memories(mixed).unwrap();
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].id, "ok");
+
+        let error =
+            parse_memories(r#"[{"assets":[{"id":"a","originalFileName":"a.jpg"}]}]"#).unwrap_err();
+        assert!(error.contains("memory missing id"), "{error}");
+
+        let error = parse_memories(r#"[{"id":"bad","assets":[{"originalFileName":"a.jpg"}]}]"#)
+            .unwrap_err();
+        assert!(error.contains("asset missing id"), "{error}");
+    }
+
+    #[test]
+    fn log_truncation_never_splits_a_multibyte_character() {
+        let truncated = truncate_for_log(&"é".repeat(300));
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.len() <= 240 + 3);
+        assert_eq!(truncate_for_log("short"), "short");
     }
 }
 
@@ -4993,7 +5165,11 @@ fn truncate_for_log(input: &str) -> String {
     if input.len() <= LIMIT {
         input.to_string()
     } else {
-        format!("{}...", &input[..LIMIT])
+        let mut end = LIMIT;
+        while !input.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &input[..end])
     }
 }
 
