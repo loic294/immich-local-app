@@ -124,6 +124,7 @@ pub struct AppState {
     /// `true` by `cancel_asset_sync` and checked at each page boundary in the
     /// sync loop; reset to `false` whenever a new sync starts.
     pub sync_cancel: Arc<AtomicBool>,
+    pub sync_progress: Arc<commands::sync::SyncProgress>,
 }
 
 impl AppState {
@@ -251,6 +252,7 @@ pub fn main() {
             immich,
             accounts,
             sync_cancel,
+            sync_progress: Default::default(),
         })
         .invoke_handler(tauri::generate_handler![
             commands::media::get_media_preferences,

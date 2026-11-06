@@ -174,6 +174,11 @@ export function App() {
 
   // Auto-start sync if never done before and user is authenticated
   useEffect(() => {
+    if (syncStatus?.isSyncing) {
+      hasAutoStartedSync.current = true;
+      return;
+    }
+
     if (
       session &&
       !isRestoringSession &&

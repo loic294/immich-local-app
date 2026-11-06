@@ -38,12 +38,13 @@ export function usePhotoGridVirtualLayout({
     let cursor = 0;
     const sectionsForLayout = fullGridSections.length > 0 ? fullGridSections : gridSections;
 
-    for (const section of sectionsForLayout) {
+    for (const [sectionIndex, section] of sectionsForLayout.entries()) {
       nextSectionTopMap.set(section.key, cursor);
       entries.push({
         type: "header",
         key: `header-${section.key}`,
         sectionKey: section.key,
+        sectionIndex,
         label: section.label,
         top: cursor,
         height: headerHeight,

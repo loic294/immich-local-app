@@ -38,6 +38,8 @@ export type VirtualEntry =
       type: "header";
       key: string;
       sectionKey: string;
+      /** Position of the section in the layout; section keys can repeat (e.g. filename sort). */
+      sectionIndex: number;
       label: string;
       top: number;
       height: number;

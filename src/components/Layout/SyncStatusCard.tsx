@@ -1,10 +1,11 @@
 import { Check, RefreshCw, X } from "lucide-react";
 import { useSyncStatus } from "../../hooks/useSyncStatus";
 import { useI18n } from "../../i18n";
+import { FullSyncProgress } from "./FullSyncProgress";
 
 export function SyncStatusCard() {
   const { t } = useI18n();
-  const { syncStatus, isSyncing, isChecking, progress, error, checkForNewAssets, cancelSync } =
+  const { syncStatus, isSyncing, isChecking, error, checkForNewAssets, cancelSync } =
     useSyncStatus();
 
   const isBusy = isSyncing || isChecking;
@@ -37,19 +38,7 @@ export function SyncStatusCard() {
     <div className="card card-compact bg-base-200 shadow">
       <div className="card-body p-3 gap-3">
         {isSyncing && syncStatus ? (
-          <>
-            <progress
-              className="progress progress-primary progress-sm"
-              value={progress}
-              max="100"
-            ></progress>
-            <div className="text-xs text-base-content/70">
-              {t("syncCard.syncedCount", {
-                processed: syncStatus.processedAssets,
-                total: syncStatus.totalAssets,
-              })}
-            </div>
-          </>
+          <FullSyncProgress syncStatus={syncStatus} />
         ) : isChecking ? (
           <>
             <div className="flex items-center gap-2">

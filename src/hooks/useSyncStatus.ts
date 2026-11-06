@@ -1,6 +1,16 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+export type SyncPreparationProgress = {
+  stage: "people" | "albums";
+  accountIndex: number;
+  accountCount: number;
+  completedAlbums: number;
+  totalAlbums: number | null;
+  processedAlbumAssets: number;
+  totalAlbumAssets: number | null;
+};
+
 export type SyncStatus = {
   totalAssets: number;
   processedAssets: number;
@@ -10,6 +20,7 @@ export type SyncStatus = {
   checkStatus: string; // idle, checking, error
   createdAt: string;
   updatedAt: string;
+  preparation?: SyncPreparationProgress | null;
 };
 
 export type UseSyncStatusReturn = {
@@ -25,6 +36,7 @@ export type UseSyncStatusReturn = {
 };
 
 const CHECK_STALE_TIMEOUT = 2 * 60 * 1000; // 2 minutes
+const SYNC_STATUS_CHANGED = "immich:sync-status-changed";
 
 /**
  * Sync status + actions.
@@ -52,6 +64,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
         status.processedAssets,
         status.lastCheckedAt,
         status.updatedAt,
+        JSON.stringify(status.preparation),
       ].join("|");
 
       if (lastStatusLogKeyRef.current !== logKey) {
@@ -62,6 +75,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
           processedAssets: status.processedAssets,
           lastCheckedAt: status.lastCheckedAt,
           updatedAt: status.updatedAt,
+          preparation: status.preparation,
         });
         lastStatusLogKeyRef.current = logKey;
       }
@@ -69,10 +83,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
       setSyncStatus(status);
       setError(null);
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : "Unknown error fetching sync status";
+      const message = err instanceof Error ? err.message : "Unknown error fetching sync status";
       setError(message);
     }
   }, []);
@@ -84,6 +95,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
       await invoke<SyncStatus>("start_asset_sync");
       // Fetch updated status
       await fetchSyncStatus();
+      window.dispatchEvent(new Event(SYNC_STATUS_CHANGED));
     } catch (err) {
       let message = "Unknown error starting sync";
       if (err instanceof Error) {
@@ -103,10 +115,9 @@ export function useSyncStatus(): UseSyncStatusReturn {
       setError(null);
       console.info("[useSyncStatus] invoking force_full_asset_sync");
       await invoke<SyncStatus>("force_full_asset_sync");
-      console.info(
-        "[useSyncStatus] force_full_asset_sync invoked successfully",
-      );
+      console.info("[useSyncStatus] force_full_asset_sync invoked successfully");
       await fetchSyncStatus();
+      window.dispatchEvent(new Event(SYNC_STATUS_CHANGED));
     } catch (err) {
       let message = "Unknown error forcing full sync";
       if (err instanceof Error) {
@@ -129,6 +140,7 @@ export function useSyncStatus(): UseSyncStatusReturn {
       console.info("[useSyncStatus] invoking cancel_asset_sync");
       await invoke<SyncStatus>("cancel_asset_sync");
       await fetchSyncStatus();
+      window.dispatchEvent(new Event(SYNC_STATUS_CHANGED));
     } catch (err) {
       let message = "Unknown error cancelling sync";
       if (err instanceof Error) {
@@ -184,9 +196,12 @@ export function useSyncStatus(): UseSyncStatusReturn {
     }
   }, [fetchSyncStatus, syncStatus?.totalAssets]);
 
-  // Fetch initial status on mount
+  // Wake every mounted sync display when another view starts or cancels a run.
   useEffect(() => {
-    void fetchSyncStatus();
+    const refresh = () => void fetchSyncStatus();
+    window.addEventListener(SYNC_STATUS_CHANGED, refresh);
+    refresh();
+    return () => window.removeEventListener(SYNC_STATUS_CHANGED, refresh);
   }, [fetchSyncStatus]);
 
   // Poll for status updates while syncing or checking

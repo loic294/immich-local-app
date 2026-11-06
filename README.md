@@ -50,6 +50,10 @@ title bar.
   empty-trash action is triggered.
 - Run a full library sync when needed, or use quick and view-specific refreshes
   to check only for new assets or update the current album/month.
+  Full sync shows preparation activity for people and albums, including progress
+  through photos in the current album, before switching to the library scan.
+  Preparation progress is separate from the saved asset count used to resume an
+  interrupted sync.
 - Save album assets locally and detect changes to saved files.
 - Share albums and manage album access where supported by the Immich server.
 

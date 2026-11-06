@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AssetThumbnail } from "./AssetThumbnail";
+import { AssetPlaceholder } from "./AssetPlaceholder";
+import { DaySelectionCheckbox } from "./DaySelectionCheckbox";
 import { EditImportPill } from "../Media/EditImportPill";
 import { PhotoGridFullscreenOverlay } from "./PhotoGridFullscreenOverlay";
 import { VerticalTimeline } from "./VerticalTimeline";
@@ -33,13 +35,7 @@ import type {
   ScrollRestoreAnchor,
   VirtualEntry,
 } from "./PhotoGrid.types";
-import {
-  getAssetAspectRatio,
-  isVideoAsset,
-  preloadImage,
-  thumbhashToDataUrl,
-  toPlayableSrc,
-} from "./photoGridUtils";
+import { getAssetAspectRatio, isVideoAsset, preloadImage, toPlayableSrc } from "./photoGridUtils";
 import { usePhotoGridSelection } from "./usePhotoGridSelection";
 import { usePhotoGridVirtualLayout } from "./usePhotoGridVirtualLayout";
 import { usePhotoGridExternalEvents } from "./usePhotoGridExternalEvents";
@@ -481,8 +477,16 @@ export function PhotoGrid({
     () => new Map(displayAssets.map((asset) => [asset.id, asset])),
     [displayAssets],
   );
-  const { selectedAssetIds, assetIndexById, applySelection } = usePhotoGridSelection({
+  const layoutSections = isUsingFullLayout ? fullGridSections : gridSections;
+  const {
+    selectedAssetIds,
+    assetIndexById,
+    applySelection,
+    getSectionSelectionState,
+    toggleSectionSelection,
+  } = usePhotoGridSelection({
     displayAssets,
+    layoutSections,
     selectionCommand,
     onSelectedCountChange,
     onSelectedIdsChange,
@@ -1536,7 +1540,15 @@ export function PhotoGrid({
                       height: `${entry.height}px`,
                     }}
                   >
-                    <span>{entry.label}</span>
+                    <div className="group/day flex items-center gap-2">
+                      <DaySelectionCheckbox
+                        label={entry.label}
+                        state={getSectionSelectionState(entry.sectionIndex)}
+                        isSelecting={selectedAssetIds.size > 0}
+                        onToggle={() => toggleSectionSelection(entry.sectionIndex)}
+                      />
+                      <span>{entry.label}</span>
+                    </div>
                     <div className="h-px flex-1 bg-base-300" />
                   </div>
                 );
@@ -1554,22 +1566,13 @@ export function PhotoGrid({
                       // In full layout mode: render a placeholder so the virtual
                       // canvas stays stable while this page hasn't loaded yet
                       if (isUsingFullLayout) {
-                        const placeholderSrc = thumbhashToDataUrl(rowItem.thumbhash ?? null);
                         return (
-                          <div
+                          <AssetPlaceholder
                             key={rowItem.id}
-                            className="relative h-full shrink-0 overflow-hidden bg-base-300"
-                            style={{ width: `${rowItem.width}px` }}
-                          >
-                            {placeholderSrc ? (
-                              <img
-                                className="h-full w-full object-cover scale-110 blur-xl opacity-85"
-                                src={placeholderSrc}
-                                alt=""
-                                aria-hidden="true"
-                              />
-                            ) : null}
-                          </div>
+                            width={rowItem.width}
+                            thumbhash={rowItem.thumbhash ?? null}
+                            isSelected={selectedAssetIds.has(rowItem.id)}
+                          />
                         );
                       }
                       return null;

@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AssetSummary } from "../../types";
+import type { AssetSummary, GridLayoutSection } from "../../types";
 import type { SelectionCommand } from "./PhotoGrid.types";
+import {
+  getSectionAssetIds,
+  getSectionSelectionState,
+  retainKnownAssetIds,
+  type SectionSelectionState,
+} from "./photoGridSelectionUtils";
 
 type ApplySelectionModifiers = { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean };
 
 type UsePhotoGridSelectionParams = {
   displayAssets: AssetSummary[];
+  /** Layout sections (one per day separator), including assets that are not loaded yet. */
+  layoutSections: GridLayoutSection[];
   selectionCommand?: SelectionCommand;
   onSelectedCountChange?: (count: number) => void;
   onSelectedIdsChange?: (ids: string[]) => void;
@@ -13,6 +21,7 @@ type UsePhotoGridSelectionParams = {
 
 export function usePhotoGridSelection({
   displayAssets,
+  layoutSections,
   selectionCommand,
   onSelectedCountChange,
   onSelectedIdsChange,
@@ -26,25 +35,10 @@ export function usePhotoGridSelection({
   );
 
   useEffect(() => {
-    setSelectedAssetIds((current) => {
-      if (current.size === 0) {
-        return current;
-      }
-
-      const next = new Set<string>();
-      for (const id of current) {
-        if (assetIndexById.has(id)) {
-          next.add(id);
-        }
-      }
-
-      if (next.size === current.size) {
-        return current;
-      }
-
-      return next;
-    });
-  }, [assetIndexById]);
+    setSelectedAssetIds((current) =>
+      retainKnownAssetIds(current, (id) => assetIndexById.has(id), layoutSections),
+    );
+  }, [assetIndexById, layoutSections]);
 
   useEffect(() => {
     onSelectedCountChange?.(selectedAssetIds.size);
@@ -124,9 +118,50 @@ export function usePhotoGridSelection({
     setSelectionAnchorIndex(index);
   };
 
+  const getSectionState = (sectionIndex: number): SectionSelectionState => {
+    const section = layoutSections[sectionIndex];
+    return section ? getSectionSelectionState(section, selectedAssetIds) : "none";
+  };
+
+  /**
+   * Selects every photo under a day separator, or deselects them when they are
+   * all selected already. The layout lists photos whose page is not loaded yet,
+   * so the whole day is covered even while only part of it is in memory.
+   */
+  const toggleSectionSelection = (sectionIndex: number) => {
+    const section = layoutSections[sectionIndex];
+    if (!section) {
+      console.warn("[PhotoGrid] Day selection ignored: unknown section", { sectionIndex });
+      return;
+    }
+
+    const assetIds = getSectionAssetIds(section);
+    const shouldSelect = getSectionSelectionState(section, selectedAssetIds) !== "all";
+    console.log("[PhotoGrid] Day selection toggled", {
+      sectionIndex,
+      sectionKey: section.key,
+      assetCount: assetIds.length,
+      selected: shouldSelect,
+    });
+
+    setSelectedAssetIds((current) => {
+      const next = new Set(current);
+      for (const id of assetIds) {
+        if (shouldSelect) {
+          next.add(id);
+        } else {
+          next.delete(id);
+        }
+      }
+      return next;
+    });
+  };
+
   return {
     selectedAssetIds,
     assetIndexById,
     applySelection,
+    getSectionSelectionState: getSectionState,
+    toggleSectionSelection,
   };
 }

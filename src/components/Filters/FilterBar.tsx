@@ -58,12 +58,6 @@ export function FilterBar({ open, scope, criteria, isActive, onChange, onReset }
 
       <TypeFilter value={criteria.mediaType} onChange={(mediaType) => onChange({ mediaType })} />
 
-      <AlbumFilter
-        value={criteria.albumMembership}
-        disabled={scope.kind === "album"}
-        onChange={(albumMembership) => onChange({ albumMembership })}
-      />
-
       <CameraFilter
         value={criteria.camera}
         cameras={camerasQuery.data ?? []}
@@ -76,6 +70,12 @@ export function FilterBar({ open, scope, criteria, isActive, onChange, onReset }
         people={peopleQuery.data ?? []}
         isLoading={peopleQuery.isLoading}
         onChange={(personId) => onChange({ personId })}
+      />
+
+      <AlbumFilter
+        value={criteria.albumMembership}
+        disabled={scope.kind === "album"}
+        onChange={(albumMembership) => onChange({ albumMembership })}
       />
 
       {accounts.length > 1 && (

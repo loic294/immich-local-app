@@ -1216,7 +1216,7 @@ mod tests {
         *client.session.lock().await = Some(AuthSession { server_url: url, access_token: "fixture".into(), refresh_token: None, user_id: "fixture".into(), user_name: None });
         let accounts = Arc::new(AccountManager::new());
         accounts.insert("account".into(), client.clone());
-        let state = AppState { db: db.clone(), immich: client, accounts, sync_cancel: Arc::new(AtomicBool::new(false)) };
+        let state = AppState { db: db.clone(), immich: client, accounts, sync_cancel: Arc::new(AtomicBool::new(false)), sync_progress: Default::default() };
         let (first, competing) = tokio::join!(process_media_uploads(&state), process_media_uploads(&state));
         assert_eq!(first.unwrap(), 0);
         assert_eq!(competing.unwrap(), 0);

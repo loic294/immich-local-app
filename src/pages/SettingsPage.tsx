@@ -31,6 +31,7 @@ import { AccountsBaseDirectorySettings } from "../components/Settings/AccountsBa
 import { PhonePhotosSettings } from "../components/Settings/PhonePhotosSettings";
 import { MediaSettings } from "../components/Media/MediaSettings";
 import { useSyncStatus } from "../hooks/useSyncStatus";
+import { FullSyncProgress } from "../components/Layout/FullSyncProgress";
 import { useAppUpdate } from "../hooks/useAppUpdate";
 import { useInvalidateSettings } from "../hooks/useSettings";
 import { useAccounts } from "../hooks/useAccounts";
@@ -74,16 +75,8 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const [isCancellingSync, setIsCancellingSync] = useState(false);
   const [isSyncingAlbumsList, setIsSyncingAlbumsList] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const {
-    forceFullSync,
-    cancelSync,
-    checkForNewAssets,
-    syncStatus,
-    isSyncing,
-    isChecking,
-    progress,
-    error,
-  } = useSyncStatus();
+  const { forceFullSync, cancelSync, checkForNewAssets, syncStatus, isSyncing, isChecking, error } =
+    useSyncStatus();
   const appUpdate = useAppUpdate();
   const invalidateSettings = useInvalidateSettings();
 
@@ -538,19 +531,9 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
                     </div>
                   </>
                 ) : isSyncing && syncStatus ? (
-                  <>
-                    <progress
-                      className="progress progress-primary progress-sm mb-2"
-                      value={progress}
-                      max="100"
-                    ></progress>
-                    <div className="text-xs text-base-content/70 mb-3">
-                      {t("settings.syncedCount", {
-                        processed: syncStatus.processedAssets,
-                        total: syncStatus.totalAssets,
-                      })}
-                    </div>
-                  </>
+                  <div className="mb-3">
+                    <FullSyncProgress syncStatus={syncStatus} />
+                  </div>
                 ) : isChecking ? (
                   <div className="flex items-center gap-2 mb-3">
                     <span className="loading loading-spinner loading-xs"></span>

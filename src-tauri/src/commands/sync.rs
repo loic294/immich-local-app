@@ -14,6 +14,12 @@ use std::time::{Instant, UNIX_EPOCH};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+mod progress;
+#[cfg(test)]
+mod progress_tests;
+use progress::{PreparationSender, PreparationStage, SyncPreparationProgress};
+pub use progress::SyncProgress;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSavedFileChangeResponse {
@@ -51,6 +57,7 @@ pub struct SyncStatusResponse {
     pub check_status: String,
     pub created_at: String,
     pub updated_at: String,
+    pub preparation: Option<SyncPreparationProgress>,
 }
 
 impl From<SyncState> for SyncStatusResponse {
@@ -64,7 +71,17 @@ impl From<SyncState> for SyncStatusResponse {
             check_status: state.check_status,
             created_at: state.created_at,
             updated_at: state.updated_at,
+            preparation: None,
         }
+    }
+}
+
+impl SyncStatusResponse {
+    fn with_preparation(mut self, progress: &PreparationSender) -> Self {
+        if self.is_syncing {
+            self.preparation = progress.borrow().clone();
+        }
+        self
     }
 }
 
@@ -73,7 +90,7 @@ pub async fn get_sync_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<SyncStatusResponse, String> {
     let sync_state = state.db.get_sync_state()?;
-    Ok(SyncStatusResponse::from(sync_state))
+    Ok(SyncStatusResponse::from(sync_state).with_preparation(&state.sync_progress.preparation))
 }
 
 #[tauri::command]
@@ -103,6 +120,7 @@ pub async fn cancel_asset_sync(
 ) -> Result<SyncStatusResponse, String> {
     log::warn!("[sync] cancel_asset_sync invoked — requesting sync cancellation");
     state.sync_cancel.store(true, Ordering::SeqCst);
+    state.sync_progress.preparation.send_replace(None);
     let sync_state = state.db.cancel_sync().map_err(|err| {
         log::warn!("[sync] failed to mark sync as cancelled: {}", err);
         format!("Failed to cancel sync: {}", err)
@@ -118,6 +136,18 @@ async fn start_asset_sync_internal(
         "start_asset_sync_internal(force_full_sync={})",
         force_full_sync
     );
+    // Status is shared by several views; a live run must not be mistaken for
+    // an interrupted run by the launch-time resume effect.
+    let Some(run) = state.sync_progress.try_start() else {
+        log::info!("[sync] full sync already running; returning current progress");
+        let current = get_sync_status(state).await?;
+        if !current.is_syncing {
+            log::warn!("[sync] full sync is still starting or stopping; retry later");
+            return Err("Full sync is still starting or stopping. Please try again shortly.".into());
+        }
+        return Ok(current);
+    };
+    state.sync_cancel.store(false, Ordering::SeqCst);
 
     // Local-first multi-account: gather every account that should participate in
     // the sync. Skip accounts whose server is unreachable rather than failing the
@@ -171,6 +201,11 @@ async fn start_asset_sync_internal(
     if reachable.is_empty() {
         log::warn!("[sync] no reachable accounts — offline");
         return Err("offline: server unreachable".to_string());
+    }
+
+    if state.sync_cancel.load(Ordering::SeqCst) {
+        log::info!("[sync] cancelled during account discovery");
+        return get_sync_status(state).await;
     }
 
     log::warn!(
@@ -230,12 +265,15 @@ async fn start_asset_sync_internal(
 
     // Spawn background task to fetch and save assets across all accounts.
     let db = state.db.clone();
-    // Reset the cancellation flag for this run and hand a clone to the task so
-    // it can stop cooperatively at the next page boundary.
+    // Hand cancellation to the task so it can stop at an album/page boundary.
     let cancel = state.sync_cancel.clone();
-    cancel.store(false, Ordering::SeqCst);
+    let preparation = state.sync_progress.preparation.clone();
+    preparation.send_replace(
+        (start_page == 0).then(|| SyncPreparationProgress::people(1, reachable.len())),
+    );
 
     tauri::async_runtime::spawn(async move {
+        let _run = run;
         log::warn!("Starting background sync task from page {}", start_page);
         if let Err(e) = sync_all_assets_background(
             reachable,
@@ -244,6 +282,7 @@ async fn start_asset_sync_internal(
             sync_state.processed_assets,
             single_account,
             cancel,
+            preparation,
         )
         .await
         {
@@ -251,7 +290,7 @@ async fn start_asset_sync_internal(
         }
     });
 
-    Ok(SyncStatusResponse::from(sync_state))
+    Ok(SyncStatusResponse::from(sync_state).with_preparation(&state.sync_progress.preparation))
 }
 
 async fn sync_all_assets_background(
@@ -261,11 +300,16 @@ async fn sync_all_assets_background(
     initial_processed_count: i32,
     allow_resume: bool,
     cancel: Arc<AtomicBool>,
+    preparation: PreparationSender,
 ) -> Result<(), String> {
     let page_size = 100u32;
     let mut processed_count = initial_processed_count;
 
-    for (account_id, immich) in &accounts {
+    for (account_index, (account_id, immich)) in accounts.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            db.cancel_sync()?;
+            return Ok(());
+        }
         // Resume (skipping the up-front people/album refresh) only applies to the
         // single-account fast path. For every other account we always start at
         // page 0 and refresh its people/album caches first.
@@ -280,6 +324,11 @@ async fn sync_all_assets_background(
                 initial_processed_count
             );
         } else {
+            preparation.send_replace(Some(SyncPreparationProgress::people(
+                account_index + 1,
+                accounts.len(),
+            )));
+            log::info!("[sync.prepare] account={} refreshing people", account_id);
             match immich.get_all_people().await {
                 Ok(people) => {
                     if let Err(err) = db.replace_people(account_id, &people) {
@@ -297,7 +346,19 @@ async fn sync_all_assets_background(
                 ),
             }
 
-            if let Err(err) = refresh_album_cache(account_id, immich.clone(), db.clone()).await {
+            if cancel.load(Ordering::SeqCst) {
+                db.cancel_sync()?;
+                return Ok(());
+            }
+            if let Err(err) = refresh_album_cache(
+                account_id,
+                immich.clone(),
+                db.clone(),
+                &preparation,
+                &cancel,
+            )
+            .await
+            {
                 log::warn!(
                     "[sync] failed to refresh album cache for account {}: {}",
                     account_id,
@@ -306,6 +367,8 @@ async fn sync_all_assets_background(
             }
         }
 
+        preparation.send_replace(None);
+        log::info!("[sync.prepare] account={} starting asset scan", account_id);
         let mut page = account_start_page;
 
         loop {
@@ -356,7 +419,7 @@ async fn sync_all_assets_background(
 
             // Hydrate each asset with full metadata from asset detail endpoint.
             let enriched_assets =
-                enrich_assets_with_full_metadata(immich.clone(), result.items).await;
+                enrich_assets_with_full_metadata(immich.clone(), result.items, |_, _| {}).await;
             let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = enriched_assets
                 .iter()
                 .map(|value| value.asset.clone())
@@ -430,7 +493,15 @@ async fn refresh_album_cache(
     account_id: &str,
     immich: Arc<ImmichClient>,
     db: Arc<Database>,
+    preparation: &PreparationSender,
+    cancel: &AtomicBool,
 ) -> Result<(), String> {
+    preparation.send_modify(|current| {
+        if let Some(current) = current {
+            current.stage = PreparationStage::Albums;
+        }
+    });
+    log::info!("[sync.prepare] account={} fetching album list", account_id);
     let albums = immich
         .get_albums()
         .await
@@ -439,12 +510,45 @@ async fn refresh_album_cache(
     db.upsert_albums(account_id, &albums)
         .map_err(|err| format!("cache album list failed: {}", err))?;
 
-    for album in &albums {
-        if let Err(err) =
-            refresh_single_album(account_id, immich.clone(), db.clone(), &album.id).await
+    preparation.send_modify(|current| {
+        if let Some(current) = current {
+            current.total_albums = Some(albums.len());
+        }
+    });
+    log::info!(
+        "[sync.prepare] account={} preparing {} albums",
+        account_id,
+        albums.len()
+    );
+
+    for (index, album) in albums.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if let Err(err) = refresh_single_album(
+            account_id,
+            immich.clone(),
+            db.clone(),
+            &album.id,
+            Some(preparation),
+        )
+        .await
         {
             log::warn!("Failed to refresh album {}: {}", album.id, err);
         }
+        preparation.send_modify(|current| {
+            if let Some(current) = current {
+                current.completed_albums = index + 1;
+                current.processed_album_assets = 0;
+                current.total_album_assets = None;
+            }
+        });
+        log::info!(
+            "[sync.prepare] account={} processed album {}/{}",
+            account_id,
+            index + 1,
+            albums.len()
+        );
     }
 
     Ok(())
@@ -458,6 +562,7 @@ async fn refresh_single_album(
     immich: Arc<ImmichClient>,
     db: Arc<Database>,
     album_id: &str,
+    preparation: Option<&PreparationSender>,
 ) -> Result<(), String> {
     let assets = immich
         .get_album_assets(album_id)
@@ -472,7 +577,21 @@ async fn refresh_single_album(
 
     // Enrich assets with full metadata (exif, people, tags, etc.)
     let enrich_started_at = Instant::now();
-    let enriched_assets = enrich_assets_with_full_metadata(immich.clone(), assets.clone()).await;
+    let enriched_assets = enrich_assets_with_full_metadata(
+        immich.clone(),
+        assets.clone(),
+        |processed, total| {
+            if let Some(preparation) = preparation {
+                preparation.send_modify(|current| {
+                    if let Some(current) = current {
+                        current.processed_album_assets = processed;
+                        current.total_album_assets = Some(total);
+                    }
+                });
+            }
+        },
+    )
+    .await;
     log::warn!(
         "[refresh_single_album] album_id={} enriched_count={} duration_ms={}",
         album_id,
@@ -568,7 +687,7 @@ pub async fn refresh_album_assets(
         }
     }
 
-    refresh_single_album(&account_id, client, state.db.clone(), &album_id).await?;
+    refresh_single_album(&account_id, client, state.db.clone(), &album_id, None).await?;
 
     log::warn!("[sync.refresh_album_assets] album_id={} done", album_id);
     Ok(())
@@ -1308,7 +1427,7 @@ async fn quick_sync_one_account(
         // Hydrate the new / recently-edited assets with full metadata and upsert.
         let enrich_started_at = Instant::now();
         let enriched_assets =
-            enrich_assets_with_full_metadata(immich.clone(), assets_to_enrich).await;
+            enrich_assets_with_full_metadata(immich.clone(), assets_to_enrich, |_, _| {}).await;
         log::warn!(
             "[sync.check_for_new_assets] enriched page={} enriched_count={} skipped_cached={} new_on_page={} duration_ms={}",
             page,
@@ -1428,10 +1547,12 @@ async fn quick_sync_one_account(
 async fn enrich_assets_with_full_metadata(
     immich: std::sync::Arc<crate::services::immich_client::ImmichClient>,
     assets: Vec<crate::services::immich_client::AssetSummary>,
+    mut on_progress: impl FnMut(usize, usize),
 ) -> Vec<EnrichedAssetRecord> {
     const MAX_CONCURRENT_METADATA_REQUESTS: usize = 8;
 
     let total_assets = assets.len();
+    on_progress(0, total_assets);
     let semaphore = std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_METADATA_REQUESTS));
     let mut join_set = JoinSet::new();
 
@@ -1458,11 +1579,14 @@ async fn enrich_assets_with_full_metadata(
     }
 
     let mut enriched_assets = Vec::with_capacity(total_assets);
+    let mut processed = 0;
     while let Some(join_result) = join_set.join_next().await {
         match join_result {
             Ok(asset) => enriched_assets.push(asset),
             Err(err) => log::warn!("Metadata enrichment task join failed: {}", err),
         }
+        processed += 1;
+        on_progress(processed, total_assets);
     }
 
     enriched_assets
