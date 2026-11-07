@@ -14,6 +14,7 @@ import {
 interface AssetThumbnailProps {
   asset: AssetSummary;
   isSelected: boolean;
+  isSelectionMode: boolean;
   onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
   onToggleSelection: (event: MouseEvent<HTMLDivElement>) => void;
   durationSeconds?: number;
@@ -29,6 +30,7 @@ interface AssetThumbnailProps {
 export function AssetThumbnail({
   asset,
   isSelected,
+  isSelectionMode,
   onOpen,
   onToggleSelection,
   durationSeconds,
@@ -58,6 +60,15 @@ export function AssetThumbnail({
   const isLivePhoto = asset.livePhotoVideoId != null;
   const thumbnailFetchStartedAtRef = useRef<number | null>(null);
   const fullImageReadyLoggedRef = useRef(false);
+  const actionLabel = t(
+    isSelectionMode
+      ? isSelected
+        ? "photoGrid.deselectAssetAria"
+        : "photoGrid.selectAssetAria"
+      : "photoGrid.openFullscreenAria",
+    { name: asset.originalFileName },
+  );
+  const cursorClass = isSelectionMode ? "cursor-pointer" : "cursor-zoom-in";
 
   useEffect(() => {
     fullImageReadyLoggedRef.current = false;
@@ -273,11 +284,10 @@ export function AssetThumbnail({
     return (
       <button
         type="button"
-        className="relative block h-full w-full cursor-zoom-in"
+        className={`relative block h-full w-full ${cursorClass}`}
         onClick={onOpen}
-        aria-label={t("photoGrid.openFullscreenAria", {
-          name: asset.originalFileName,
-        })}
+        aria-label={actionLabel}
+        aria-pressed={isSelectionMode ? isSelected : undefined}
       >
         {thumbhashPlaceholderSrc ? (
           <img
@@ -298,7 +308,7 @@ export function AssetThumbnail({
   return (
     <button
       type="button"
-      className="relative block h-full w-full cursor-zoom-in"
+      className={`relative block h-full w-full ${cursorClass}`}
       onClick={onOpen}
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => {
@@ -310,9 +320,8 @@ export function AssetThumbnail({
           retryTimeoutRef.current = null;
         }
       }}
-      aria-label={t("photoGrid.openFullscreenAria", {
-        name: asset.originalFileName,
-      })}
+      aria-label={actionLabel}
+      aria-pressed={isSelectionMode ? isSelected : undefined}
     >
       <div
         role="button"

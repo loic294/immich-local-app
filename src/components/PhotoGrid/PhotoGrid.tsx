@@ -505,6 +505,7 @@ export function PhotoGrid({
     onSelectedCountChange,
     onSelectedIdsChange,
   });
+  const isSelectionMode = selectedAssetIds.size > 0;
 
   const {
     virtualEntries,
@@ -1500,7 +1501,7 @@ export function PhotoGrid({
   });
   usePhotoGridShortcuts({
     activeAsset,
-    hasSelection: selectedAssetIds.size > 0,
+    hasSelection: isSelectionMode,
     closeViewer: closeLightbox,
     showPrevious: goPrev,
     showNext: goNext,
@@ -1599,9 +1600,26 @@ export function PhotoGrid({
                           key={(versionAssetsBySlotId[asset.id] ?? asset).id}
                           asset={versionAssetsBySlotId[asset.id] ?? asset}
                           isSelected={isSelected}
+                          isSelectionMode={isSelectionMode}
                           onOpen={(event) => {
-                            if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                            if (
+                              isSelectionMode ||
+                              event.shiftKey ||
+                              event.metaKey ||
+                              event.ctrlKey
+                            ) {
                               if (assetIndex >= 0) {
+                                console.debug(
+                                  "[PhotoGrid] Asset click selects instead of opening",
+                                  {
+                                    assetId: asset.id,
+                                    isSelectionMode,
+                                    isSelected,
+                                    shiftKey: event.shiftKey,
+                                    metaKey: event.metaKey,
+                                    ctrlKey: event.ctrlKey,
+                                  },
+                                );
                                 applySelection(asset.id, assetIndex, {
                                   shiftKey: event.shiftKey,
                                   metaKey: event.metaKey,

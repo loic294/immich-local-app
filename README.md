@@ -20,7 +20,9 @@ the Immich server.
 
 On macOS the native traffic lights sit inside the app header (overlay title
 bar), keeping the native window chrome; drag an empty header area to move the
-window and double-click it to zoom. Windows and Linux use the standard native
+window and double-click it to zoom. In native macOS full-screen mode, the sidebar
+menu moves to the top and the header drops its traffic-light clearance; that
+space returns when leaving full screen. Windows and Linux use the standard native
 title bar. On macOS and Windows, reopening the app restores its last window
 size, position, and maximized state. Window placement is saved locally on close
 or quit; if the previous display is unavailable, the window opens centered on
@@ -147,6 +149,9 @@ Folders, and Calendar. **Update time** adjusts selected photos by an offset,
 optionally calculated from a reference photo in the same view. It changes
 Immich metadata and the local cache, never the original files, and queues
 changes while offline.
+While any assets are selected, clicking a photo or video toggles its selection
+instead of opening fullscreen. Checkboxes and Shift/Cmd/Ctrl selection still work;
+clearing the selection restores normal fullscreen opening.
 Modify time and Delete are in the selection toolbar's three-dot menu; Delete
 still requires confirmation. Timeline month/year markers remain available for
 date navigation without a separate Go to date dialog.
