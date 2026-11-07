@@ -125,8 +125,12 @@ impl Fixture {
     }
 
     fn seed_album(&self, account: usize) {
+        self.seed_album_owned_by("first", account);
+    }
+
+    fn seed_album_owned_by(&self, owner: &str, account: usize) {
         let album: AlbumSummary = serde_json::from_value(json!({
-            "id": "album", "albumName": "Old name", "ownerId": "first",
+            "id": "album", "albumName": "Old name", "ownerId": owner,
             "shared": true, "assetCount": 3
         }))
         .unwrap();
@@ -273,21 +277,46 @@ async fn delete_refused_by_the_server_keeps_the_album_cached() {
 }
 
 #[tokio::test]
-async fn albums_of_an_account_that_is_not_signed_in_are_never_sent_with_another_login() {
+async fn albums_whose_owner_is_not_signed_in_are_never_sent_with_another_login() {
+    for cached_account in [1, 0] {
+        let fixture = Fixture::new().await;
+        fixture.seed_album_owned_by("second", cached_account);
+
+        let rename = rename_album_internal("album", "Summer 2025", &fixture.state)
+            .await
+            .unwrap_err();
+        let delete = delete_album_internal("album", &fixture.state)
+            .await
+            .unwrap_err();
+
+        assert!(rename.contains("not signed in"), "{rename}");
+        assert!(delete.contains("not signed in"), "{delete}");
+        assert!(fixture.requests().is_empty());
+        assert_eq!(fixture.cached_name().as_deref(), Some("Old name"));
+    }
+}
+
+#[tokio::test]
+async fn rename_and_delete_use_the_signed_in_owner_when_the_cache_names_a_reader() {
     let fixture = Fixture::new().await;
     fixture.seed_album(1);
 
-    let rename = rename_album_internal("album", "Summer 2025", &fixture.state)
+    let saved = rename_album_internal("album", "Summer 2025", &fixture.state)
         .await
-        .unwrap_err();
-    let delete = delete_album_internal("album", &fixture.state)
+        .unwrap();
+    assert_eq!(saved, "Summer 2025");
+    delete_album_internal("album", &fixture.state)
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert!(rename.contains("not signed in"), "{rename}");
-    assert!(delete.contains("not signed in"), "{delete}");
-    assert!(fixture.requests().is_empty());
-    assert_eq!(fixture.cached_name().as_deref(), Some("Old name"));
+    assert_eq!(
+        fixture.requests(),
+        vec![
+            "PATCH /api/albums/album HTTP/1.1",
+            "DELETE /api/albums/album HTTP/1.1"
+        ]
+    );
+    assert_eq!(fixture.cached_name(), None);
 }
 
 #[tokio::test]

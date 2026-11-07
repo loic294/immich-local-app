@@ -1,3 +1,4 @@
+use super::sharing::owner_account;
 use crate::services::immich_client::ImmichClient;
 use crate::AppState;
 use std::sync::Arc;
@@ -8,15 +9,30 @@ struct AlbumTarget {
     client: Arc<ImmichClient>,
 }
 
+/// Only the owner may rename or delete an album, and shared-album refreshes can
+/// cache it under a reader's account, so act through the owner's account when
+/// it exists. An owner who is not signed in is reported, never replaced by
+/// another login.
 fn resolve_target(state: &AppState, album_id: &str, action: &str) -> Result<AlbumTarget, String> {
     let account_id = state
         .db
         .get_album_account_id(album_id)?
         .ok_or("Album has no cached account. Refresh the album list and try again.")?;
-    let account = state
+    let cached = state
         .db
         .get_account(&account_id)?
         .ok_or("Album account no longer exists.")?;
+    let account = match owner_account(state, album_id, &cached.id)? {
+        Some(owner) => {
+            log::info!(
+                "[albums.route] album_id={album_id} cached_account_id={} owner_account_id={}",
+                cached.id,
+                owner.id
+            );
+            owner
+        }
+        None => cached,
+    };
     let client = state
         .accounts
         .client(&account.id)

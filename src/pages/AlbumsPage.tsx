@@ -23,6 +23,7 @@ import { FilterBar } from "../components/Filters/FilterBar";
 import { useAlbumAssets } from "../hooks/useAlbumAssets";
 import { useAlbums } from "../hooks/useAlbums";
 import { useAlbumLocalStatus } from "../hooks/useAlbumLocalStatus";
+import { useAlbumOwnerAccess } from "../hooks/useAlbumOwnerAccess";
 import { useAssetFilters } from "../hooks/useAssetFilters";
 import { useSortPreference } from "../hooks/useSortPreference";
 import { useConnectionContext } from "../hooks/connectionContext";
@@ -32,7 +33,6 @@ import { useI18n } from "../i18n";
 import { deleteAssets } from "../api/deletion";
 import {
   addAssetsToAlbum,
-  canManageAlbumSharing,
   createAlbumWithAssets,
   createShareLinkForAssets,
   deleteLocalAlbum,
@@ -71,7 +71,6 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [photoGridHeight, setPhotoGridHeight] = useState(0);
   const [showShareAlbumModal, setShowShareAlbumModal] = useState(false);
-  const [canManageSharing, setCanManageSharing] = useState(false);
   const [isSavingAlbum, setIsSavingAlbum] = useState(false);
   const [isDeletingLocalAlbum, setIsDeletingLocalAlbum] = useState(false);
   const [saveAlbumError, setSaveAlbumError] = useState<string | null>(null);
@@ -133,6 +132,11 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   const selectedAlbum = useMemo(
     () => (albumsQuery.data ?? []).find((album) => album.id === selectedAlbumId) ?? null,
     [albumsQuery.data, selectedAlbumId],
+  );
+  const ownerAccess = useAlbumOwnerAccess(
+    selectedAlbum?.id ?? null,
+    selectedAlbum?.ownerId ?? null,
+    session.userId,
   );
 
   const albumAssetsQuery = useAlbumAssets(
@@ -296,39 +300,6 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
       setSelectionCommand(null);
     }
   }, [selectedAlbumId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const evaluatePermission = async () => {
-      if (!selectedAlbum) {
-        setCanManageSharing(false);
-        return;
-      }
-
-      if (selectedAlbum.ownerId === session.userId) {
-        setCanManageSharing(true);
-        return;
-      }
-
-      try {
-        const canManage = await canManageAlbumSharing(selectedAlbum.id);
-        if (!cancelled) {
-          setCanManageSharing(canManage);
-        }
-      } catch {
-        if (!cancelled) {
-          setCanManageSharing(false);
-        }
-      }
-    };
-
-    void evaluatePermission();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedAlbum, session.userId]);
 
   const handleSaveAlbumLocally = async () => {
     if (!selectedAlbum) {
@@ -701,7 +672,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                     </>
                   )}
 
-                  {canManageSharing ? (
+                  {ownerAccess === "owner" ? (
                     <button
                       type="button"
                       className="btn btn-sm btn-primary shrink-0"
@@ -712,17 +683,16 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                     </button>
                   ) : null}
 
-                  {selectedAlbum.ownerId === session.userId ? (
-                    <AlbumActions
-                      album={selectedAlbum}
-                      onDeleted={(deletedAlbumId) => {
-                        setSelectedAlbumId((current) =>
-                          current === deletedAlbumId ? null : current,
-                        );
-                        setSearchInput("");
-                      }}
-                    />
-                  ) : null}
+                  <AlbumActions
+                    album={selectedAlbum}
+                    access={ownerAccess}
+                    onDeleted={(deletedAlbumId) => {
+                      setSelectedAlbumId((current) =>
+                        current === deletedAlbumId ? null : current,
+                      );
+                      setSearchInput("");
+                    }}
+                  />
                 </div>
               </div>
 

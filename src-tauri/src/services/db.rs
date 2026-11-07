@@ -3473,6 +3473,22 @@ impl Database {
         })
     }
 
+    /// The Immich user id that owns a cached album. Unlike `account_id`, this
+    /// does not depend on which signed-in account's refresh cached the album last.
+    pub fn get_album_owner_id(&self, album_id: &str) -> Result<Option<String>, String> {
+        let conn = self.open()?;
+        conn.query_row(
+            "SELECT owner_id FROM albums WHERE id = ?1",
+            params![album_id],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|value| Some(value).filter(|id| !id.is_empty()))
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other.to_string()),
+        })
+    }
+
     /// Resolve which account a person belongs to, for routing face-thumbnail
     /// loads to the owning account's server session.
     pub fn get_person_account_id(&self, person_id: &str) -> Result<Option<String>, String> {

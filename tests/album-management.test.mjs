@@ -76,7 +76,10 @@ function createHookHost() {
 const labels = {
   actionsAria: "Album actions",
   offlineHint: "OFFLINE HINT",
+  checkingHint: "CHECKING HINT",
+  notOwnerHint: "NOT OWNER HINT",
   rename: "Rename album",
+  manageAccess: "Manage access",
   renameTitle: "RENAME TITLE",
   renameField: "Album name",
   renameEmpty: "EMPTY NAME",
@@ -181,6 +184,7 @@ function mountHook({ isOnline = true, rename, remove } = {}) {
       },
     },
     "../i18n/albumManagement": labelsDouble,
+    "../utils/albumFailure": load("src/utils/albumFailure.ts"),
     "./connectionContext": { useConnectionContext: () => ({ isOnline }) },
   });
   return {
@@ -307,12 +311,19 @@ function mountMenu(props = {}) {
   const calls = [];
   const { AlbumActionsMenu } = load("src/components/Albums/AlbumActionsMenu.tsx", {
     react: { ...React, useRef: (current) => ({ current }), useEffect: () => {} },
-    "lucide-react": { MoreHorizontal: () => null, Pencil: () => null, Trash2: () => null },
+    "lucide-react": {
+      MoreHorizontal: () => null,
+      Pencil: () => null,
+      Trash2: () => null,
+      Users: () => null,
+    },
     "../../i18n/albumManagement": labelsDouble,
   });
   const tree = AlbumActionsMenu({
     online: true,
+    access: "owner",
     onRename: () => calls.push("rename"),
+    onManageAccess: () => calls.push("access"),
     onDelete: () => calls.push("delete"),
     ...props,
   });
@@ -321,42 +332,88 @@ function mountMenu(props = {}) {
     text: textOf(tree),
     summary: findAll(tree, (node) => node.type === "summary")[0],
     buttons: findAll(tree, (node) => node.type === "button"),
+    items: findAll(
+      tree,
+      (node) => node.type === "li" && node.props.className !== "menu-title normal-case",
+    ),
   };
 }
 
-test("the three-dot menu offers Rename and Delete album", () => {
+test("the three-dot menu offers Rename, Manage access and Delete album", () => {
   const menu = mountMenu();
   assert.equal(menu.summary.props["aria-label"], "Album actions");
   assert.deepEqual(
     menu.buttons.map((button) => textOf(button)),
-    ["Rename album", "Delete album"],
+    ["Rename album", "Manage access", "Delete album"],
   );
   assert.ok(menu.buttons.every((button) => button.props.disabled === false));
-  assert.doesNotMatch(menu.text, /OFFLINE HINT/);
-  menu.buttons[0].props.onClick();
-  menu.buttons[1].props.onClick();
-  assert.deepEqual(menu.calls, ["rename", "delete"]);
+  assert.ok(menu.items.every((item) => item.props.className === undefined));
+  assert.doesNotMatch(menu.text, /HINT/);
+  for (const button of menu.buttons) button.props.onClick();
+  assert.deepEqual(menu.calls, ["rename", "access", "delete"]);
 });
 
-test("the three-dot menu disables both actions and explains why while offline", () => {
-  const menu = mountMenu({ online: false });
-  assert.ok(menu.buttons.every((button) => button.props.disabled === true));
-  assert.match(menu.text, /OFFLINE HINT/);
+test("the three-dot menu stays visible but greys out every action until ownership is confirmed", () => {
+  const cases = [
+    { props: { online: false }, hint: /OFFLINE HINT/ },
+    { props: { online: false, access: "checking" }, hint: /OFFLINE HINT/ },
+    { props: { access: "checking" }, hint: /CHECKING HINT/ },
+    { props: { access: "not-owner" }, hint: /NOT OWNER HINT/ },
+  ];
+  for (const { props, hint } of cases) {
+    const menu = mountMenu(props);
+    const label = JSON.stringify(props);
+    assert.deepEqual(
+      menu.buttons.map((button) => textOf(button)),
+      ["Rename album", "Manage access", "Delete album"],
+      `${label} still lists every action`,
+    );
+    assert.ok(
+      menu.buttons.every((button) => button.props.disabled === true),
+      label,
+    );
+    assert.ok(
+      menu.items.every((item) => item.props.className === "menu-disabled"),
+      `${label} greys out each item`,
+    );
+    assert.match(menu.text, hint, label);
+    assert.equal(menu.text.match(/HINT/g)?.length, 1, `${label} explains only the main reason`);
+    assert.ok(
+      menu.buttons.every((button) => !String(button.props.className ?? "").includes("text-error")),
+      `${label} drops the destructive colour while greyed out`,
+    );
+  }
 });
 
-function mountActions(management) {
+function mountActions(management, access = "owner") {
   const Menu = () => null;
+  const AccessModal = () => null;
   const RenameModal = () => null;
   const DeleteDialog = () => null;
   const { AlbumActions } = load("src/components/Albums/AlbumActions.tsx", {
     "../../hooks/useAlbumManagement": { useAlbumManagement: () => management },
+    "./AlbumAccessModal": { AlbumAccessModal: AccessModal },
     "./AlbumActionsMenu": { AlbumActionsMenu: Menu },
     "./AlbumRenameModal": { AlbumRenameModal: RenameModal },
     "./AlbumDeleteConfirmDialog": { AlbumDeleteConfirmDialog: DeleteDialog },
   });
-  const tree = AlbumActions({ album: { ...album, shared: true }, onDeleted() {} });
+  const tree = AlbumActions({
+    album: {
+      ...album,
+      shared: true,
+      ownerId: "owner-1",
+      owner: { id: "owner-1", name: "Ana", email: "ana@x.io" },
+    },
+    access,
+    onDeleted() {},
+  });
   const find = (type) => findAll(tree, (node) => node.type === type)[0];
-  return { menu: find(Menu), rename: find(RenameModal), remove: find(DeleteDialog) };
+  return {
+    menu: find(Menu),
+    access: find(AccessModal),
+    rename: find(RenameModal),
+    remove: find(DeleteDialog),
+  };
 }
 
 test("choosing Delete album only opens the confirmation; removal needs the explicit confirm", () => {
@@ -375,16 +432,20 @@ test("choosing Delete album only opens the confirmation; removal needs the expli
   const idle = mountActions(management);
   assert.equal(idle.rename, undefined);
   assert.equal(idle.remove, undefined);
+  assert.equal(idle.access, undefined);
   idle.menu.props.onDelete();
   idle.menu.props.onRename();
+  idle.menu.props.onManageAccess();
   assert.deepEqual(calls, [
     ["open", "delete"],
     ["open", "rename"],
+    ["open", "access"],
   ]);
 
   calls.length = 0;
   const confirming = mountActions({ ...management, dialog: "delete" });
   assert.equal(confirming.rename, undefined);
+  assert.equal(confirming.access, undefined);
   assert.equal(confirming.remove.props.albumName, "Holiday");
   assert.equal(confirming.remove.props.shared, true);
   confirming.remove.props.onClose();
@@ -395,9 +456,47 @@ test("choosing Delete album only opens the confirmation; removal needs the expli
   calls.length = 0;
   const renaming = mountActions({ ...management, dialog: "rename" });
   assert.equal(renaming.remove, undefined);
+  assert.equal(renaming.access, undefined);
   assert.equal(renaming.rename.props.currentName, "Holiday");
   renaming.rename.props.onSubmit("Summer");
   assert.deepEqual(calls, [["rename", "Summer"]]);
+});
+
+test("Manage access opens the access modal for this album and closes through the shared dialog state", () => {
+  const calls = [];
+  const management = {
+    dialog: "access",
+    busy: false,
+    error: null,
+    online: true,
+    openDialog: (kind) => calls.push(["open", kind]),
+    closeDialog: () => calls.push(["close"]),
+    rename: async () => {},
+    remove: async () => {},
+  };
+  const managing = mountActions(management);
+  assert.equal(managing.rename, undefined);
+  assert.equal(managing.remove, undefined);
+  assert.equal(managing.access.props.albumId, "album-1");
+  assert.equal(managing.access.props.albumName, "Holiday");
+  assert.equal(managing.access.props.ownerId, "owner-1");
+  assert.equal(managing.access.props.owner.name, "Ana");
+  managing.access.props.onClose();
+  assert.deepEqual(calls, [["close"]]);
+});
+
+test("the menu receives the album's ownership state so it can grey itself out", () => {
+  const management = {
+    dialog: null,
+    online: true,
+    openDialog() {},
+    closeDialog() {},
+  };
+  for (const access of ["checking", "owner", "not-owner"]) {
+    const { menu } = mountActions(management, access);
+    assert.equal(menu.props.access, access);
+    assert.equal(menu.props.online, true);
+  }
 });
 
 function mountDeleteDialog(props = {}) {
@@ -568,14 +667,25 @@ test("the rename modal locks the form while saving and shows server errors", () 
   assert.equal(failed.view().save.props.disabled, false, "the user can retry");
 });
 
-test("the album header shows the actions menu right after Share, for the album owner only", () => {
+test("the album header always shows the actions menu right after Share, and Share waits for ownership", () => {
   const page = read("src/pages/AlbumsPage.tsx");
   assert.match(page, /import \{ AlbumActions \} from "\.\.\/components\/Albums\/AlbumActions";/);
   const share = page.indexOf('{t("albums.shareAlbum")}');
   const actions = page.indexOf("<AlbumActions");
   assert.ok(share !== -1 && share < actions, "the menu follows the Share button");
   assert.doesNotMatch(page.slice(share, actions), /<button/, "nothing sits between them");
-  assert.match(page, /selectedAlbum\.ownerId === session\.userId \? \(\s*<AlbumActions/);
+  assert.match(
+    page,
+    /useAlbumOwnerAccess\(\s*selectedAlbum\?\.id \?\? null,\s*selectedAlbum\?\.ownerId \?\? null,\s*session\.userId,?\s*\)/,
+  );
+  assert.match(page, /\{ownerAccess === "owner" \? \(\s*<button/, "Share needs the owner");
+  assert.match(page, /<AlbumActions\s+album=\{selectedAlbum\}\s+access=\{ownerAccess\}/);
+  assert.doesNotMatch(
+    page,
+    /\? \(\s*<AlbumActions/,
+    "the menu is never hidden; its items grey out instead",
+  );
+  assert.doesNotMatch(page, /canManageAlbumSharing|setCanManageSharing/, "one ownership check");
   assert.match(
     page,
     /setSelectedAlbumId\(\(current\) =>\s*current === deletedAlbumId \? null : current/,

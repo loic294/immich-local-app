@@ -128,6 +128,11 @@ export type AlbumSummary = {
   isReadOnly: boolean | null;
 };
 
+export type AlbumUserRole = "editor" | "viewer";
+
+/** Whether the signed-in account owns an album; "checking" until the server answers. */
+export type AlbumOwnerAccess = "checking" | "owner" | "not-owner";
+
 export type AlbumShareUser = {
   id: string;
   name: string | null;

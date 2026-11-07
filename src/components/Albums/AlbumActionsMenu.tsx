@@ -1,16 +1,39 @@
 import { useEffect, useRef } from "react";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
 import { useAlbumManagementLabels } from "../../i18n/albumManagement";
+import type { AlbumOwnerAccess } from "../../types";
 
 interface AlbumActionsMenuProps {
   online: boolean;
+  access: AlbumOwnerAccess;
   onRename: () => void;
+  onManageAccess: () => void;
   onDelete: () => void;
 }
 
-export function AlbumActionsMenu({ online, onRename, onDelete }: AlbumActionsMenuProps) {
+type MenuLabels = ReturnType<typeof useAlbumManagementLabels>;
+
+/** Why the actions are greyed out, or null when they are available. */
+function unavailableHint(online: boolean, access: AlbumOwnerAccess, labels: MenuLabels) {
+  if (!online) return labels.offlineHint;
+  if (access === "checking") return labels.checkingHint;
+  if (access === "not-owner") return labels.notOwnerHint;
+  return null;
+}
+
+/** Always shown; every action needs the owner's server, so they grey out otherwise. */
+export function AlbumActionsMenu({
+  online,
+  access,
+  onRename,
+  onManageAccess,
+  onDelete,
+}: AlbumActionsMenuProps) {
   const labels = useAlbumManagementLabels();
   const menuRef = useRef<HTMLDetailsElement>(null);
+  const enabled = online && access === "owner";
+  const hint = unavailableHint(online, access, labels);
+  const itemClass = enabled ? undefined : "menu-disabled";
 
   const closeMenu = () => {
     if (menuRef.current) menuRef.current.open = false;
@@ -59,12 +82,12 @@ export function AlbumActionsMenu({ online, onRename, onDelete }: AlbumActionsMen
       >
         <MoreHorizontal size={16} />
       </summary>
-      <ul className="menu dropdown-content z-[130] mt-2 w-60 rounded-box border border-base-300 bg-base-100 p-1 shadow">
-        {!online ? <li className="menu-title normal-case">{labels.offlineHint}</li> : null}
-        <li>
+      <ul className="menu dropdown-content z-[130] mt-2 w-64 rounded-box border border-base-300 bg-base-100 p-1 shadow">
+        {hint ? <li className="menu-title normal-case">{hint}</li> : null}
+        <li className={itemClass}>
           <button
             type="button"
-            disabled={!online}
+            disabled={!enabled}
             onClick={() => {
               closeMenu();
               onRename();
@@ -74,11 +97,24 @@ export function AlbumActionsMenu({ online, onRename, onDelete }: AlbumActionsMen
             {labels.rename}
           </button>
         </li>
-        <li>
+        <li className={itemClass}>
           <button
             type="button"
-            className="text-error"
-            disabled={!online}
+            disabled={!enabled}
+            onClick={() => {
+              closeMenu();
+              onManageAccess();
+            }}
+          >
+            <Users size={14} />
+            {labels.manageAccess}
+          </button>
+        </li>
+        <li className={itemClass}>
+          <button
+            type="button"
+            className={enabled ? "text-error" : undefined}
+            disabled={!enabled}
             onClick={() => {
               closeMenu();
               onDelete();

@@ -162,12 +162,15 @@ impl Fixture {
                         let id = path.split_whitespace().next().unwrap();
                         if data.reject_editor || user != data.owner {
                             (403, json!({"message": "no permission to share"}))
+                        } else if payload["role"] == "viewer" && data.editors.remove(id) {
+                            data.viewers.insert(id.to_string());
+                            (204, Value::Null)
                         } else if data.viewers.remove(id) {
                             assert_eq!(payload, json!({"role": "editor"}));
                             data.editors.insert(id.to_string());
                             (204, Value::Null)
                         } else {
-                            (400, json!({"message": "user is not a viewer"}))
+                            (400, json!({"message": "user has no role to change"}))
                         }
                     } else if request.starts_with("PUT /api/albums/album/assets ") {
                         if (user != data.owner && !data.editors.contains(&user))
@@ -209,6 +212,15 @@ impl Fixture {
                         || request.starts_with("GET /api/albums ")
                     {
                         (200, json!([data.album()]))
+                    } else if request.starts_with("GET /api/users ") {
+                        (
+                            200,
+                            json!([
+                                {"id": "first", "name": "First", "email": "first@example.com"},
+                                {"id": "second", "name": "Second", "email": "second@example.com"},
+                                {"id": "third", "name": "Third", "email": "third@example.com"}
+                            ]),
+                        )
                     } else {
                         (404, json!({"message": "unknown fixture endpoint"}))
                     }
@@ -1045,6 +1057,151 @@ async fn sharing_controls_use_album_details_and_only_the_owner_can_manage() {
         .requests
         .iter()
         .all(|(request, _, _)| { request.starts_with("GET /api/albums/album?") }));
+}
+
+#[tokio::test]
+async fn sharing_uses_the_signed_in_owner_when_the_cache_names_a_reader() {
+    for (owner, reader, cached_account) in [("second", "first", 0), ("first", "second", 1)] {
+        let fixture = Fixture::new().await;
+        fixture.server.lock().unwrap().viewers.insert(reader.into());
+        fixture.seed_album(owner, cached_account);
+
+        let cached = fixture.state.account_and_client_for_album("album").1;
+        assert!(!cached.can_manage_album_sharing("album").await.unwrap());
+
+        let client = sharing_client(&fixture.state, "album");
+        assert!(client.can_manage_album_sharing("album").await.unwrap());
+        let users = client.get_album_share_users("album").await.unwrap();
+        assert!(users.iter().any(|user| user.id == reader));
+        let server = fixture.server.lock().unwrap();
+        assert_eq!(server.requests.last().unwrap().1, owner);
+    }
+}
+
+#[tokio::test]
+async fn sharing_keeps_the_cached_account_when_the_owner_is_not_signed_in() {
+    let fixture = Fixture::new().await;
+    fixture
+        .server
+        .lock()
+        .unwrap()
+        .viewers
+        .insert("first".into());
+    fixture.seed_album("second", 0);
+    fixture.state.accounts.remove(&fixture.accounts[1].id);
+
+    let client = sharing_client(&fixture.state, "album");
+    assert!(!client.can_manage_album_sharing("album").await.unwrap());
+    assert_eq!(
+        fixture.server.lock().unwrap().requests.last().unwrap().1,
+        "first"
+    );
+}
+
+#[tokio::test]
+async fn sharing_keeps_the_cached_account_when_it_already_owns_the_album() {
+    let fixture = Fixture::new().await;
+    fixture.seed_album("first", 0);
+
+    let client = sharing_client(&fixture.state, "album");
+    assert!(client.can_manage_album_sharing("album").await.unwrap());
+    assert_eq!(
+        fixture.server.lock().unwrap().requests.last().unwrap().1,
+        "first"
+    );
+}
+
+#[tokio::test]
+async fn album_user_roles_change_in_both_directions_through_the_signed_in_owner() {
+    for (owner, reader, cached_account) in [("second", "first", 0), ("first", "second", 1)] {
+        let fixture = Fixture::new().await;
+        fixture.server.lock().unwrap().viewers.insert(reader.into());
+        fixture.seed_album(owner, cached_account);
+
+        sharing::update_user_role(&fixture.state, "album", reader, "editor")
+            .await
+            .unwrap();
+        {
+            let server = fixture.server.lock().unwrap();
+            assert!(server.editors.contains(reader) && server.viewers.is_empty());
+            assert_eq!(server.requests.last().unwrap().1, owner);
+        }
+
+        sharing::update_user_role(&fixture.state, "album", reader, "viewer")
+            .await
+            .unwrap();
+        let server = fixture.server.lock().unwrap();
+        assert!(server.viewers.contains(reader) && server.editors.is_empty());
+        assert_eq!(server.requests.last().unwrap().1, owner);
+    }
+}
+
+#[tokio::test]
+async fn album_user_roles_other_than_editor_and_viewer_never_reach_the_server() {
+    let fixture = Fixture::new().await;
+    fixture.seed_album("first", 0);
+
+    for role in ["owner", "admin", ""] {
+        let error = sharing::update_user_role(&fixture.state, "album", "second", role)
+            .await
+            .unwrap_err();
+        assert!(error.contains("editor or viewer"), "{error}");
+    }
+
+    assert!(fixture.server.lock().unwrap().requests.is_empty());
+}
+
+#[tokio::test]
+async fn album_user_role_refused_by_the_server_is_reported_and_changes_nothing() {
+    let fixture = Fixture::new().await;
+    fixture
+        .server
+        .lock()
+        .unwrap()
+        .viewers
+        .insert("first".into());
+    fixture.seed_album("second", 0);
+    fixture.state.accounts.remove(&fixture.accounts[1].id);
+
+    let error = sharing::update_user_role(&fixture.state, "album", "first", "editor")
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("update album user role failed"), "{error}");
+    assert!(error.contains("403"), "{error}");
+    assert!(fixture.server.lock().unwrap().viewers.contains("first"));
+}
+
+#[tokio::test]
+async fn album_collaborators_are_listed_through_the_signed_in_owner() {
+    for (owner, cached_account) in [("second", 0), ("first", 1)] {
+        let fixture = Fixture::new().await;
+        fixture.seed_album(owner, cached_account);
+
+        let users = sharing::album_shareable_users(&fixture.state, "album")
+            .await
+            .unwrap();
+
+        assert_eq!(users.len(), 3);
+        let server = fixture.server.lock().unwrap();
+        let (request, user, _) = server.requests.last().unwrap();
+        assert!(request.starts_with("GET /api/users "), "{request}");
+        assert_eq!(user, owner);
+    }
+}
+
+#[tokio::test]
+async fn album_collaborators_report_offline_instead_of_failing_opaquely() {
+    let fixture = Fixture::new().await;
+    fixture.seed_album("first", 0);
+    fixture.task.abort();
+    tokio::task::yield_now().await;
+
+    let error = sharing::album_shareable_users(&fixture.state, "album")
+        .await
+        .unwrap_err();
+
+    assert!(error.starts_with("offline:"), "{error}");
 }
 
 #[tokio::test]

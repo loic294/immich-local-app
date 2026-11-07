@@ -79,6 +79,15 @@ appear first, followed by year groups. Select an existing album or the
 **New album** result, then use the single Add/Create action. Read-only albums
 are excluded, and cached choices remain available offline.
 
+The album three-dot menu is always shown. **Rename**, **Manage access** and
+**Delete** are enabled for the album's owner while online and are greyed out, with
+a one-line reason, when the album belongs to someone else, the owner is still being
+checked or the server is unreachable. An album owned by another signed-in account is
+managed through that account. **Manage access** lists the owner and everyone the
+album is shared with. The owner can switch each person between editor and viewer,
+remove them after a confirmation, or add anyone else on the server. The dialog is
+read-only offline. This works on macOS and Windows.
+
 **Settings → Albums** chooses the signed-in account that owns new albums and
 additional collaborators on that server, including users not signed in locally.
 Immich supports one owner; collaborators are added as editors. All editors are

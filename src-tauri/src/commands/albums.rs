@@ -19,6 +19,9 @@ mod creation;
 use creation::create_album_with_assets_internal;
 #[path = "albums/management.rs"]
 mod management;
+#[path = "albums/sharing.rs"]
+mod sharing;
+use sharing::sharing_client;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -354,7 +357,7 @@ pub async fn can_manage_album_sharing(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
-    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    let client = sharing_client(&state, &album_id);
     client
         .can_manage_album_sharing(&album_id)
         .await
@@ -366,7 +369,7 @@ pub async fn get_or_create_album_share_link(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    let client = sharing_client(&state, &album_id);
     client
         .get_or_create_album_share_link(&album_id)
         .await
@@ -378,7 +381,7 @@ pub async fn get_album_share_link(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    let client = sharing_client(&state, &album_id);
     client
         .get_album_share_link(&album_id)
         .await
@@ -390,7 +393,7 @@ pub async fn get_album_share_users(
     album_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<AlbumShareUser>, String> {
-    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    let client = sharing_client(&state, &album_id);
     client
         .get_album_share_users(&album_id)
         .await
@@ -421,17 +424,35 @@ pub async fn get_shareable_users(
 }
 
 #[tauri::command]
+pub async fn get_album_shareable_users(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AlbumUserCandidate>, String> {
+    sharing::album_shareable_users(&state, &album_id).await
+}
+
+#[tauri::command]
 pub async fn add_user_to_album(
     album_id: String,
     user_id: String,
     role: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    let client = sharing_client(&state, &album_id);
     client
         .add_user_to_album(&album_id, &user_id, &role)
         .await
         .map_err(|err| format!("add user to album failed: {err}"))
+}
+
+#[tauri::command]
+pub async fn update_album_user_role(
+    album_id: String,
+    user_id: String,
+    role: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    sharing::update_user_role(&state, &album_id, &user_id, &role).await
 }
 
 #[tauri::command]
@@ -440,7 +461,7 @@ pub async fn remove_user_from_album(
     user_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let (_account_id, client) = state.account_and_client_for_album(&album_id);
+    let client = sharing_client(&state, &album_id);
     client
         .remove_user_from_album(&album_id, &user_id)
         .await

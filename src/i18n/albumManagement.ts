@@ -3,8 +3,11 @@ import { useI18n } from "./index";
 const messages = {
   "en-CA": {
     actionsAria: "Album actions",
-    offlineHint: "Connect to your server to rename or delete this album.",
+    offlineHint: "Connect to your server to rename, delete or manage access to this album.",
+    checkingHint: "Checking whether you own this album…",
+    notOwnerHint: "Only the album owner can rename, delete or manage access to this album.",
     rename: "Rename album",
+    manageAccess: "Manage access",
     renameTitle: "Rename album",
     renameField: "Album name",
     renameEmpty: "Enter an album name.",
@@ -31,8 +34,13 @@ const messages = {
   },
   "fr-CA": {
     actionsAria: "Actions de l’album",
-    offlineHint: "Connectez-vous à votre serveur pour renommer ou supprimer cet album.",
+    offlineHint:
+      "Connectez-vous à votre serveur pour renommer, supprimer ou gérer l’accès à cet album.",
+    checkingHint: "Vérification de la propriété de cet album…",
+    notOwnerHint:
+      "Seul le propriétaire de l’album peut le renommer, le supprimer ou gérer l’accès.",
     rename: "Renommer l’album",
+    manageAccess: "Gérer l’accès",
     renameTitle: "Renommer l’album",
     renameField: "Nom de l’album",
     renameEmpty: "Saisissez un nom d’album.",

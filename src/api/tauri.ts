@@ -7,6 +7,7 @@ import type {
   AlbumSummary,
   AlbumShareUser,
   AlbumUserCandidate,
+  AlbumUserRole,
   AssetVisibility,
   AssetPage,
   AssetDateJumpTarget,
@@ -686,8 +687,24 @@ export async function getShareableUsers(accountId?: string): Promise<AlbumUserCa
   return invoke<AlbumUserCandidate[]>("get_shareable_users", { accountId });
 }
 
+export async function getAlbumShareableUsers(albumId: string): Promise<AlbumUserCandidate[]> {
+  return invoke<AlbumUserCandidate[]>("get_album_shareable_users", { albumId });
+}
+
 export async function addUserToAlbum(albumId: string, userId: string, role: string): Promise<void> {
   return invoke<void>("add_user_to_album", {
+    albumId,
+    userId,
+    role,
+  });
+}
+
+export async function updateAlbumUserRole(
+  albumId: string,
+  userId: string,
+  role: AlbumUserRole,
+): Promise<void> {
+  return invoke<void>("update_album_user_role", {
     albumId,
     userId,
     role,

@@ -3,20 +3,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { deleteAlbum, renameAlbum } from "../api/albumManagement";
 import { useAlbumManagementLabels } from "../i18n/albumManagement";
 import type { AlbumSummary } from "../types";
+import { failureMessage } from "../utils/albumFailure";
 import { useConnectionContext } from "./connectionContext";
 
-export type AlbumManagementDialog = "rename" | "delete";
-
-function failureMessage(failure: unknown, fallback: string, offline: string): string {
-  const raw =
-    failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "";
-  return raw.startsWith("offline:") ? offline : fallback;
-}
+export type AlbumManagementDialog = "rename" | "delete" | "access";
 
 /**
- * Owns the rename/delete flow for one album: which dialog is open, the in-flight
- * request and its error. Both actions need the album's server, so they are never
- * queued offline; the local caches are updated directly instead of re-syncing.
+ * Owns the three-dot menu's flows for one album: which dialog is open, plus the
+ * rename/delete request and its error. Both actions need the album's server, so
+ * they are never queued offline; the local caches are updated directly instead
+ * of re-syncing. The Manage access dialog keeps its own state in `useAlbumAccess`.
  */
 export function useAlbumManagement(album: AlbumSummary, onDeleted: (albumId: string) => void) {
   const queryClient = useQueryClient();
