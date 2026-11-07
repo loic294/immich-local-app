@@ -553,6 +553,12 @@ export function SelectionActions({
         <details
           ref={moreMenuRef}
           className="dropdown dropdown-end ml-auto"
+          onMouseDown={(event) => {
+            // Keep WebKit from dismissing the menu before the button's click.
+            if (event.button === 0 && (event.target as HTMLElement).closest("button")) {
+              event.preventDefault();
+            }
+          }}
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget) && moreMenuRef.current)
               moreMenuRef.current.open = false;
