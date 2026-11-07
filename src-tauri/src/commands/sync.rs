@@ -507,8 +507,16 @@ async fn refresh_album_cache(
         .await
         .map_err(|err| format!("fetch albums failed: {}", err))?;
 
-    db.upsert_albums(account_id, &albums)
+    let removed = db
+        .replace_albums(account_id, &albums)
         .map_err(|err| format!("cache album list failed: {}", err))?;
+    if !removed.is_empty() {
+        log::info!(
+            "[sync.prepare] account={} removed {} album(s) no longer on server",
+            account_id,
+            removed.len()
+        );
+    }
 
     preparation.send_modify(|current| {
         if let Some(current) = current {
@@ -741,10 +749,18 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
             }
         };
 
-        state
+        let removed = state
             .db
-            .upsert_albums(&account_id, &albums)
+            .replace_albums(&account_id, &albums)
             .map_err(|err| format!("cache album list failed: {err}"))?;
+        if !removed.is_empty() {
+            log::warn!(
+                "[sync.refresh_album_list] account {} removed {} album(s) no longer on server: {:?}",
+                account_id,
+                removed.len(),
+                removed
+            );
+        }
         total += albums.len() as u32;
     }
 

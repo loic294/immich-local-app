@@ -849,9 +849,14 @@ export async function refreshFolderAssets(path: string): Promise<number> {
   return invoke<number>("refresh_folder_assets", { path });
 }
 
-/** Refresh only the cached album list metadata (local-first). */
+/**
+ * Refresh the cached album list metadata (local-first). Albums the server no
+ * longer returns are pruned from the cache, so recent-album lists are refreshed.
+ */
 export async function refreshAlbumList(): Promise<number> {
-  return invoke<number>("refresh_album_list");
+  const count = await invoke<number>("refresh_album_list");
+  window.dispatchEvent(new Event("recent-albums-changed"));
+  return count;
 }
 
 export async function scanSavedLocalFiles(): Promise<number> {

@@ -3217,9 +3217,59 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|err| err.to_string())?;
+        Self::upsert_album_rows(&tx, account_id, albums)?;
+        tx.commit().map_err(|err| err.to_string())
+    }
 
+    /// Replace an account's complete, successfully fetched album list: upsert
+    /// every returned album and drop that account's cached albums the server no
+    /// longer returns (deleted, or no longer shared with the account). Returns
+    /// the ids of the removed albums.
+    pub fn replace_albums(
+        &self,
+        account_id: &str,
+        albums: &[crate::services::immich_client::AlbumSummary],
+    ) -> Result<Vec<String>, String> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+        Self::upsert_album_rows(&tx, account_id, albums)?;
+
+        let current: HashSet<&str> = albums.iter().map(|album| album.id.as_str()).collect();
+        let stale: Vec<String> = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM albums WHERE account_id = ?1")
+                .map_err(|err| err.to_string())?;
+            let ids = stmt
+                .query_map(params![account_id], |row| row.get::<_, String>(0))
+                .map_err(|err| err.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| err.to_string())?;
+            ids.into_iter()
+                .filter(|id| !current.contains(id.as_str()))
+                .collect()
+        };
+        for album_id in &stale {
+            Self::delete_album_rows(&tx, album_id)?;
+        }
+
+        tx.commit().map_err(|err| err.to_string())?;
+        log::info!(
+            "[albums.cache] snapshot replaced account={} count={} removed={} removed_ids={:?}",
+            account_id,
+            albums.len(),
+            stale.len(),
+            stale
+        );
+        Ok(stale)
+    }
+
+    fn upsert_album_rows(
+        conn: &Connection,
+        account_id: &str,
+        albums: &[crate::services::immich_client::AlbumSummary],
+    ) -> Result<(), String> {
         for album in albums {
-            tx.execute(
+            conn.execute(
                 "
                 INSERT INTO albums (
                     id, account_id, album_name, album_thumbnail_asset_id, owner_id, shared,
@@ -3264,7 +3314,7 @@ impl Database {
             .map_err(|err| err.to_string())?;
         }
 
-        tx.commit().map_err(|err| err.to_string())
+        Ok(())
     }
 
     pub fn get_albums(&self) -> Result<Vec<CachedAlbumSummary>, String> {
@@ -3347,24 +3397,29 @@ impl Database {
     pub fn delete_cached_album(&self, album_id: &str) -> Result<(), String> {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|err| err.to_string())?;
-        tx.execute(
+        Self::delete_album_rows(&tx, album_id)?;
+        tx.commit().map_err(|err| err.to_string())
+    }
+
+    fn delete_album_rows(conn: &Connection, album_id: &str) -> Result<(), String> {
+        conn.execute(
             "DELETE FROM album_assets WHERE album_id = ?1",
             params![album_id],
         )
         .map_err(|err| err.to_string())?;
-        tx.execute(
+        conn.execute(
             "DELETE FROM recent_albums WHERE album_id = ?1",
             params![album_id],
         )
         .map_err(|err| err.to_string())?;
-        tx.execute(
+        conn.execute(
             "UPDATE local_saved_assets SET album_id = NULL WHERE album_id = ?1",
             params![album_id],
         )
         .map_err(|err| err.to_string())?;
-        tx.execute("DELETE FROM albums WHERE id = ?1", params![album_id])
+        conn.execute("DELETE FROM albums WHERE id = ?1", params![album_id])
             .map_err(|err| err.to_string())?;
-        tx.commit().map_err(|err| err.to_string())
+        Ok(())
     }
 
     pub fn has_album(&self, album_id: &str) -> Result<bool, String> {
@@ -5359,6 +5414,98 @@ mod account_local_navigation_tests {
         assert_eq!(doomed_copy.album_id, None);
         let kept_copy = saved.iter().find(|copy| copy.local_path == "/saved/kept/image.jpg").unwrap();
         assert_eq!(kept_copy.album_id.as_deref(), Some("kept"));
+        cleanup_db(&path);
+    }
+
+    fn server_album(id: &str, name: &str) -> crate::services::immich_client::AlbumSummary {
+        crate::services::immich_client::AlbumSummary {
+            id: id.to_string(),
+            album_name: name.to_string(),
+            album_thumbnail_asset_id: None,
+            owner_id: "owner".to_string(),
+            shared: false,
+            created_at: None,
+            updated_at: None,
+            start_date: None,
+            end_date: None,
+            asset_count: Some(1),
+            owner: None,
+            description: None,
+            saved_local_folder_path: None,
+            role: None,
+            is_read_only: None,
+        }
+    }
+
+    #[test]
+    fn replace_albums_prunes_albums_missing_from_the_accounts_server_list() {
+        let path = test_db_path("replace-albums");
+        let db = Database::test_database(path.clone()).unwrap();
+        db.upsert_albums(
+            "account-a",
+            &[server_album("kept", "Kept"), server_album("deleted", "Deleted")],
+        )
+        .unwrap();
+        db.upsert_albums("account-b", &[server_album("other-account", "Other")])
+            .unwrap();
+        {
+            let conn = db.open().unwrap();
+            conn.execute(
+                "INSERT INTO assets(id, account_id, original_file_name, original_path, updated_at) VALUES('asset-1', 'account-a', 'image.jpg', '/photos/image.jpg', 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO album_assets(album_id, asset_id, account_id) VALUES('deleted', 'asset-1', 'account-a')",
+                [],
+            )
+            .unwrap();
+        }
+        db.record_recent_album("deleted").unwrap();
+        db.upsert_local_saved_asset("asset-1", Some("deleted"), "/saved/deleted/image.jpg", "image.jpg", "album", None, None)
+            .unwrap();
+
+        let removed = db
+            .replace_albums(
+                "account-a",
+                &[server_album("kept", "Kept renamed"), server_album("new", "New")],
+            )
+            .unwrap();
+
+        assert_eq!(removed, vec!["deleted".to_string()]);
+        let mut albums: Vec<_> = db
+            .get_albums()
+            .unwrap()
+            .into_iter()
+            .map(|album| (album.id, album.album_name, album.account_id))
+            .collect();
+        albums.sort();
+        assert_eq!(
+            albums,
+            vec![
+                ("kept".into(), "Kept renamed".into(), "account-a".into()),
+                ("new".into(), "New".into(), "account-a".into()),
+                ("other-account".into(), "Other".into(), "account-b".into()),
+            ]
+        );
+        assert!(db.get_recent_albums(10).unwrap().is_empty());
+        let conn = db.open().unwrap();
+        let membership: i64 = conn
+            .query_row("SELECT COUNT(*) FROM album_assets WHERE album_id = 'deleted'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(membership, 0);
+        let asset_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assets WHERE id = 'asset-1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(asset_rows, 1);
+        drop(conn);
+        let saved = db.list_local_saved_assets().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].album_id, None);
+
+        assert_eq!(db.replace_albums("account-a", &[]).unwrap().len(), 2);
+        let remaining: Vec<_> = db.get_albums().unwrap().into_iter().map(|album| album.id).collect();
+        assert_eq!(remaining, vec!["other-account".to_string()]);
         cleanup_db(&path);
     }
 
