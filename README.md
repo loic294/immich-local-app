@@ -20,9 +20,7 @@ the Immich server.
 
 On macOS the native traffic lights sit inside the app header (overlay title
 bar), keeping the native window chrome; drag an empty header area to move the
-window and double-click it to zoom. In native macOS full-screen mode, the sidebar
-menu moves to the top and the header drops its traffic-light clearance; that
-space returns when leaving full screen. Windows and Linux use the standard native
+window and double-click it to zoom. Windows and Linux use the standard native
 title bar. On macOS and Windows, reopening the app restores its last window
 size, position, and maximized state. Window placement is saved locally on close
 or quit; if the previous display is unavailable, the window opens centered on
