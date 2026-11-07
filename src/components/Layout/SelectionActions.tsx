@@ -453,6 +453,13 @@ export function SelectionActions({
       <details
         ref={shareMenuRef}
         className="dropdown dropdown-end"
+        onMouseDown={(event) => {
+          // WebKit blurs the summary without focusing the clicked button,
+          // which would dismiss the menu before the button receives its click.
+          if (event.button === 0 && (event.target as HTMLElement).closest("button")) {
+            event.preventDefault();
+          }
+        }}
         onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget) && shareMenuRef.current)
             shareMenuRef.current.open = false;

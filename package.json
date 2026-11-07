@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "node --test tests/people.test.mjs tests/photo-loading.test.mjs tests/month-year-picker.test.mjs tests/sync-progress.test.mjs tests/day-selection.test.mjs tests/filter-bar.test.mjs",
+    "test": "node --test tests/people.test.mjs tests/photo-loading.test.mjs tests/month-year-picker.test.mjs tests/sync-progress.test.mjs tests/day-selection.test.mjs tests/filter-bar.test.mjs tests/selection-sharing.test.mjs",
     "clean": "cargo clean --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri",
