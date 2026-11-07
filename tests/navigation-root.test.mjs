@@ -82,6 +82,7 @@ function renderSidebar(activePage, onNavigateRoot, group = "main") {
     "../../i18n/browsing": { useBrowsingI18n: () => (key) => key },
     "./SidebarButton": { SidebarButton: "SidebarButton" },
     "../../hooks/useRecentAlbums": { useRecentAlbums: () => ({ data: [{ id: "recent" }] }) },
+    "../../hooks/useWindowFullscreen": { useWindowFullscreen: () => false },
   };
   runInNewContext(transpile(readSource("components/Layout/Sidebar.tsx")), {
     exports,

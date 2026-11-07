@@ -21,6 +21,7 @@ import { isMacPlatform } from "../../utils/platform";
 import { useBrowsingI18n } from "../../i18n/browsing";
 import { SidebarButton } from "./SidebarButton";
 import { useRecentAlbums } from "../../hooks/useRecentAlbums";
+import { useWindowFullscreen } from "../../hooks/useWindowFullscreen";
 import type { AlbumSummary } from "../../types";
 
 const EMPTY_RECENT_ALBUMS: AlbumSummary[] = [];
@@ -142,6 +143,7 @@ export function Sidebar({
     page === activePage && (page !== "albums" || !hasActiveRecentAlbum);
 
   const mac = isMacPlatform();
+  const isWindowFullscreen = useWindowFullscreen();
 
   useEffect(() => {
     // Keep header navigation on the page's existing route callback, even when
@@ -157,7 +159,9 @@ export function Sidebar({
   return (
     <aside className="hidden h-screen min-w-0 overflow-x-hidden overflow-y-auto border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
       <div className="flex h-full min-h-0 min-w-0 w-full flex-col px-3 pb-3">
-        {mac ? <div aria-hidden data-tauri-drag-region className="h-16 shrink-0" /> : null}
+        {mac && !isWindowFullscreen ? (
+          <div aria-hidden data-tauri-drag-region className="h-16 shrink-0" />
+        ) : null}
         <div className="flex min-h-0 min-w-0 flex-1 w-full flex-col gap-6 overflow-x-hidden overflow-y-auto pr-1">
           {mainItems.length > 0 ? (
             <nav className="menu menu-vertical w-full shrink-0 rounded-box bg-base-100 p-1">
