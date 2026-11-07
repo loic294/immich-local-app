@@ -17,7 +17,6 @@ import { OfflineBanner } from "./OfflineBanner";
 import { useConnectionContext } from "../../hooks/connectionContext";
 import { useSettings } from "../../hooks/useSettings";
 import { useI18n } from "../../i18n";
-import logoUrl from "../../assets/logo_with_title.svg";
 import { isMacPlatform } from "../../utils/platform";
 import { useBrowsingI18n } from "../../i18n/browsing";
 import { SidebarButton } from "./SidebarButton";
@@ -157,18 +156,8 @@ export function Sidebar({
 
   return (
     <aside className="hidden h-screen min-w-0 overflow-x-hidden overflow-y-auto border-r border-base-300 bg-base-100 lg:sticky lg:top-0 lg:flex">
-      <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-6 p-3">
-        <div
-          data-tauri-drag-region
-          className={`flex h-10 items-center gap-2 text-3xl font-bold text-primary ${mac ? "pl-[78px] pr-2" : "px-2"}`}
-        >
-          <img
-            src={logoUrl}
-            alt=""
-            className={`pointer-events-none min-w-0 max-w-full ${mac ? "h-8" : "h-10"}`}
-          />
-        </div>
-
+      <div className="flex h-full min-h-0 min-w-0 w-full flex-col px-3 pb-3">
+        {mac ? <div aria-hidden data-tauri-drag-region className="h-16 shrink-0" /> : null}
         <div className="flex min-h-0 min-w-0 flex-1 w-full flex-col gap-6 overflow-x-hidden overflow-y-auto pr-1">
           {mainItems.length > 0 ? (
             <nav className="menu menu-vertical w-full shrink-0 rounded-box bg-base-100 p-1">
@@ -210,7 +199,7 @@ export function Sidebar({
           ) : null}
         </div>
 
-        <div className="shrink-0 w-full space-y-6 pb-2">
+        <div className="mt-6 shrink-0 w-full space-y-6 pb-2">
           <div className="px-2">
             {isOnline === false ? (
               <OfflineBanner pendingCount={pendingCount} />

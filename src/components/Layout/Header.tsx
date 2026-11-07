@@ -125,7 +125,7 @@ export function Header({
   }, [userId]);
 
   return (
-    <WindowHeader>
+    <WindowHeader flushEnd>
       <div data-tauri-drag-region className="flex w-full min-w-0 flex-wrap items-center gap-3">
         <div
           data-tauri-drag-region

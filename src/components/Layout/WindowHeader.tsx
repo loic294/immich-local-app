@@ -4,6 +4,7 @@ import { isMacPlatform } from "../../utils/platform";
 interface WindowHeaderProps {
   children?: ReactNode;
   floating?: boolean;
+  flushEnd?: boolean;
 }
 
 /**
@@ -12,7 +13,7 @@ interface WindowHeaderProps {
  * space for them and expose a drag region.
  * Other platforms keep their standard native title bar.
  */
-export function WindowHeader({ children, floating = false }: WindowHeaderProps) {
+export function WindowHeader({ children, floating = false, flushEnd = false }: WindowHeaderProps) {
   const mac = isMacPlatform();
   if (floating) {
     return mac ? (
@@ -28,7 +29,9 @@ export function WindowHeader({ children, floating = false }: WindowHeaderProps) 
         <div aria-hidden className="w-16 shrink-0 self-stretch lg:hidden" data-tauri-drag-region />
       )}
       {children}
-      <div className="h-12 min-w-6 flex-1 self-stretch" data-tauri-drag-region />
+      {!flushEnd ? (
+        <div className="h-12 min-w-6 flex-1 self-stretch" data-tauri-drag-region />
+      ) : null}
     </header>
   );
 }

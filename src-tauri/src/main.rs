@@ -4,6 +4,7 @@ mod commands;
 mod db;
 mod services;
 mod util;
+mod window_state;
 use tauri::Manager;
 use commands::album_local_status::get_album_local_status;
 
@@ -224,7 +225,9 @@ pub fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(window_state::on_window_event)
         .setup(|app| {
+            window_state::initialize(app)?;
             // Editor watchers belong only to this app launch, including after a crash.
             app.state::<AppState>().db.clear_editor_jobs()?;
             // Finish any disposable-cache cleanup interrupted by the previous exit.
@@ -384,6 +387,9 @@ pub fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                window_state::save(app);
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 if let Err(error) = app.state::<AppState>().db.clear_editor_jobs() {
                     log::error!("[media:editor] failed to clear watchers on exit: {error}");
