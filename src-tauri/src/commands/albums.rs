@@ -17,6 +17,8 @@ use tauri::Emitter;
 #[path = "albums/creation.rs"]
 mod creation;
 use creation::create_album_with_assets_internal;
+#[path = "albums/management.rs"]
+mod management;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -205,6 +207,34 @@ pub async fn create_album_with_assets(
 #[cfg(test)]
 #[path = "albums/creation_tests.rs"]
 mod creation_tests;
+#[cfg(test)]
+#[path = "albums/management_tests.rs"]
+mod management_tests;
+
+#[tauri::command]
+pub async fn rename_album(
+    album_id: String,
+    album_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let result = management::rename_album_internal(&album_id, &album_name, &state).await;
+    if let Err(error) = &result {
+        log::error!("[albums.rename] failed album_id={album_id}: {error}");
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn delete_album(
+    album_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let result = management::delete_album_internal(&album_id, &state).await;
+    if let Err(error) = &result {
+        log::error!("[albums.delete] failed album_id={album_id}: {error}");
+    }
+    result
+}
 
 #[tauri::command]
 pub async fn add_assets_to_album(

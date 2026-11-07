@@ -9,10 +9,11 @@ use commands::album_local_status::get_album_local_status;
 
 use commands::albums::{
     add_assets_to_album, add_user_to_album, can_manage_album_sharing, create_album_with_assets,
-    create_share_link_for_assets, delete_local_album, fetch_albums, get_album_assets_paged,
-    get_album_share_link, get_album_share_users, get_cached_album_full_grid_layout,
-    get_or_create_album_share_link, get_recent_albums, get_shareable_users,
-    record_recent_album, remove_user_from_album, save_album_locally,
+    create_share_link_for_assets, delete_album, delete_local_album, fetch_albums,
+    get_album_assets_paged, get_album_share_link, get_album_share_users,
+    get_cached_album_full_grid_layout, get_or_create_album_share_link, get_recent_albums,
+    get_shareable_users, record_recent_album, remove_user_from_album, rename_album,
+    save_album_locally,
 };
 use commands::assets::{
     calculate_grid_layout, fetch_assets, fetch_assets_by_month, flush_pending_mutations,
@@ -344,6 +345,8 @@ pub fn main() {
             remove_user_from_album,
             save_album_locally,
             get_album_local_status,
+            delete_album,
+            rename_album,
             delete_local_album,
             get_unique_original_paths,
             get_folder_assets_paged,

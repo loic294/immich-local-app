@@ -11,6 +11,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import type { GridLayoutResponse } from "../types";
+import { AlbumActions } from "../components/Albums/AlbumActions";
 import { AlbumCard } from "../components/Albums/AlbumCard";
 import { AlbumShareModal } from "../components/Albums/AlbumShareModal";
 import { AlbumSaveProgressModal } from "../components/Albums/AlbumSaveProgressModal";
@@ -699,6 +700,18 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
                       <Link size={16} />
                       {t("albums.shareAlbum")}
                     </button>
+                  ) : null}
+
+                  {selectedAlbum.ownerId === session.userId ? (
+                    <AlbumActions
+                      album={selectedAlbum}
+                      onDeleted={(deletedAlbumId) => {
+                        setSelectedAlbumId((current) =>
+                          current === deletedAlbumId ? null : current,
+                        );
+                        setSearchInput("");
+                      }}
+                    />
                   ) : null}
                 </div>
               </div>

@@ -3322,6 +3322,48 @@ impl Database {
         Ok(())
     }
 
+    /// Updates the cached name after the server confirmed a rename. Only the
+    /// name changes, so cached counts, cover and sharing stay untouched.
+    pub fn rename_cached_album(&self, album_id: &str, album_name: &str) -> Result<(), String> {
+        let conn = self.open()?;
+        let updated = conn
+            .execute(
+                "UPDATE albums SET album_name = ?2 WHERE id = ?1",
+                params![album_id, album_name],
+            )
+            .map_err(|err| err.to_string())?;
+        if updated == 0 {
+            return Err(format!("album not found in local cache: {album_id}"));
+        }
+        Ok(())
+    }
+
+    /// Drops a server-deleted album from the local cache. Cached assets and
+    /// locally saved files are kept (the photos still exist in the library);
+    /// saved copies are only detached from the removed album.
+    pub fn delete_cached_album(&self, album_id: &str) -> Result<(), String> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM album_assets WHERE album_id = ?1",
+            params![album_id],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM recent_albums WHERE album_id = ?1",
+            params![album_id],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.execute(
+            "UPDATE local_saved_assets SET album_id = NULL WHERE album_id = ?1",
+            params![album_id],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM albums WHERE id = ?1", params![album_id])
+            .map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())
+    }
+
     pub fn has_album(&self, album_id: &str) -> Result<bool, String> {
         let conn = self.open()?;
         let exists = conn
@@ -5165,6 +5207,95 @@ mod account_local_navigation_tests {
         let recent = db.get_recent_albums(1).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, "newer");
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn rename_cached_album_changes_only_the_name() {
+        let path = test_db_path("rename-cached-album");
+        let db = Database::test_database(path.clone()).unwrap();
+        db.open()
+            .unwrap()
+            .execute(
+                "INSERT INTO albums(id, account_id, album_name, owner_id, shared, asset_count)
+                 VALUES('album-1', 'account-a', 'Old name', 'owner', 1, 7)",
+                [],
+            )
+            .unwrap();
+
+        db.rename_cached_album("album-1", "New name").unwrap();
+
+        let albums = db.get_albums().unwrap();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(albums[0].album_name, "New name");
+        assert!(albums[0].shared);
+        assert_eq!(albums[0].asset_count, Some(7));
+        assert_eq!(albums[0].account_id, "account-a");
+        assert!(db.rename_cached_album("missing", "Anything").is_err());
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn delete_cached_album_clears_cache_rows_and_keeps_assets_and_local_copies() {
+        let path = test_db_path("delete-cached-album");
+        let db = Database::test_database(path.clone()).unwrap();
+        {
+            let conn = db.open().unwrap();
+            for album_id in ["doomed", "kept"] {
+                conn.execute(
+                    "INSERT INTO albums(id, account_id, album_name, owner_id) VALUES(?1, 'account-a', ?1, 'owner')",
+                    [album_id],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO album_assets(album_id, asset_id, account_id) VALUES(?1, 'asset-1', 'account-a')",
+                    [album_id],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO assets(id, account_id, original_file_name, original_path, updated_at) VALUES('asset-1', 'account-a', 'image.jpg', '/photos/image.jpg', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        db.record_recent_album("doomed").unwrap();
+        db.record_recent_album("kept").unwrap();
+        db.upsert_local_saved_asset("asset-1", Some("doomed"), "/saved/doomed/image.jpg", "image.jpg", "album", None, None)
+            .unwrap();
+        db.upsert_local_saved_asset("asset-1", Some("kept"), "/saved/kept/image.jpg", "image.jpg", "album", None, None)
+            .unwrap();
+
+        db.delete_cached_album("doomed").unwrap();
+
+        let remaining: Vec<_> = db.get_albums().unwrap().into_iter().map(|album| album.id).collect();
+        assert_eq!(remaining, vec!["kept".to_string()]);
+        let recent: Vec<_> = db.get_recent_albums(10).unwrap().into_iter().map(|album| album.id).collect();
+        assert_eq!(recent, vec!["kept".to_string()]);
+        let conn = db.open().unwrap();
+        let membership: Vec<String> = conn
+            .prepare("SELECT album_id FROM album_assets ORDER BY album_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(membership, vec!["kept".to_string()]);
+        let recent_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM recent_albums WHERE album_id = 'doomed'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(recent_rows, 0);
+        let asset_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assets WHERE id = 'asset-1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(asset_rows, 1);
+        drop(conn);
+
+        let saved = db.list_local_saved_assets().unwrap();
+        let doomed_copy = saved.iter().find(|copy| copy.local_path == "/saved/doomed/image.jpg").unwrap();
+        assert_eq!(doomed_copy.album_id, None);
+        let kept_copy = saved.iter().find(|copy| copy.local_path == "/saved/kept/image.jpg").unwrap();
+        assert_eq!(kept_copy.album_id.as_deref(), Some("kept"));
         cleanup_db(&path);
     }
 

@@ -1824,6 +1824,88 @@ impl ImmichClient {
         Err(last_error)
     }
 
+    /// Renames an album on the server and returns the name Immich saved.
+    /// Requires album ownership and an API key with `album.update`.
+    pub async fn rename_album(&self, album_id: &str, album_name: &str) -> Result<String, String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+        log::info!("[albums.rename] request album_id={album_id}");
+        let response = self
+            .client
+            .patch(format!("{}/api/albums/{album_id}", session.server_url))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token)
+            .json(&serde_json::json!({ "albumName": album_name }))
+            .send()
+            .await
+            .map_err(|error| {
+                log::error!("[albums.rename] request failed album_id={album_id}: {error}");
+                error.to_string()
+            })?;
+        let status = response.status();
+        let body = response.text().await.map_err(|error| error.to_string())?;
+        if !status.is_success() {
+            let error = format!(
+                "rename album failed with status {status} ({})",
+                truncate_for_log(&body)
+            );
+            log::error!("[albums.rename] album_id={album_id}: {error}");
+            return Err(error);
+        }
+
+        // Lenient on purpose: only the saved name matters, and the request is
+        // already known to have succeeded.
+        let saved_name = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("albumName")
+                    .and_then(|name| name.as_str())
+                    .map(str::to_string)
+            })
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| album_name.to_string());
+        log::info!("[albums.rename] request complete album_id={album_id}");
+        Ok(saved_name)
+    }
+
+    /// Deletes an album on the server. Its photos stay in the library.
+    /// Requires album ownership and an API key with `album.delete`.
+    pub async fn delete_album(&self, album_id: &str) -> Result<(), String> {
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "not authenticated".to_string())?;
+        log::info!("[albums.delete] request album_id={album_id}");
+        let response = self
+            .client
+            .delete(format!("{}/api/albums/{album_id}", session.server_url))
+            .header(IMMICH_API_KEY_HEADER, &session.access_token)
+            .send()
+            .await
+            .map_err(|error| {
+                log::error!("[albums.delete] request failed album_id={album_id}: {error}");
+                error.to_string()
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.map_err(|error| error.to_string())?;
+            let error = format!(
+                "delete album failed with status {status} ({})",
+                truncate_for_log(&body)
+            );
+            log::error!("[albums.delete] album_id={album_id}: {error}");
+            return Err(error);
+        }
+        log::info!("[albums.delete] request complete album_id={album_id}");
+        Ok(())
+    }
+
     pub async fn get_unique_original_paths(&self) -> Result<Vec<String>, String> {
         let session = self
             .session
