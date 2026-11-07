@@ -129,6 +129,9 @@ overlaid on the rendered map, inset from its edges, to jump to that photo's loca
 In the info panel, click the filename to reveal or hide its cached file path.
 Photo and memory fullscreen headers remain draggable on macOS and Windows;
 their toolbar buttons retain normal click behavior.
+Deleting a photo or video in the shared grid's fullscreen viewer advances to the
+next media without closing the viewer during the cached timeline refresh.
+At the end of the list, it shows the previous item; it closes only when none remain.
 The download-status badge is the first item in the fullscreen Info panel,
 with spacing below it; its download action and progress remain available there.
 The main header's empty areas also support window dragging without affecting

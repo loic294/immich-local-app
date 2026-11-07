@@ -79,9 +79,9 @@ export function useAssetWindow(
     [filter, searchTerm, JSON.stringify(criteria ?? null), JSON.stringify(sort ?? null)],
   );
 
-  const replaceWithPage = useCallback(
-    async (page: number) => {
-      console.log("[useAssetWindow] replaceWithPage start", { page });
+  const replaceWithPages = useCallback(
+    async (pageNumbers: number[], preserveOnError = false) => {
+      console.log("[useAssetWindow] replaceWithPages start", { pageNumbers, preserveOnError });
       const version = requestVersionRef.current + 1;
       requestVersionRef.current = version;
       isReplacingRef.current = true;
@@ -90,27 +90,32 @@ export function useAssetWindow(
       setError(null);
 
       try {
-        const currentPage = await loadPage(page);
-        console.log("[useAssetWindow] replaceWithPage loaded", {
-          page,
-          itemCount: currentPage.items.length,
-          hasNextPage: currentPage.hasNextPage,
+        const loadedPages = await Promise.all(pageNumbers.map(loadPage));
+        console.log("[useAssetWindow] replaceWithPages loaded", {
+          pageNumbers,
+          itemCount: loadedPages.reduce((count, page) => count + page.items.length, 0),
         });
         if (version !== requestVersionRef.current) {
-          console.log("[useAssetWindow] stale replacement ignored", { page, version });
+          console.log("[useAssetWindow] stale replacement ignored", { pageNumbers, version });
           return;
         }
-        setPages({ [page]: currentPage });
-        setOrderedPages([page]);
+        setPages(Object.fromEntries(loadedPages.map((page) => [page.page, page])));
+        setOrderedPages(pageNumbers);
       } catch (err) {
         if (version !== requestVersionRef.current) return;
-        console.warn("[useAssetWindow] replacement failed", { page, error: String(err) });
-        setPages({});
-        setOrderedPages([]);
+        console.warn("[useAssetWindow] replacement failed", {
+          pageNumbers,
+          preserveOnError,
+          error: String(err),
+        });
+        if (!preserveOnError) {
+          setPages({});
+          setOrderedPages([]);
+        }
         setError(err instanceof Error ? err : new Error("Failed to load assets"));
       } finally {
         if (version !== requestVersionRef.current) return;
-        console.log("[useAssetWindow] replaceWithPage done, isInitialLoading -> false");
+        console.log("[useAssetWindow] replaceWithPages done, isInitialLoading -> false");
         isReplacingRef.current = false;
         setIsInitialLoading(false);
       }
@@ -118,16 +123,29 @@ export function useAssetWindow(
     [loadPage],
   );
 
+  const loadedPagesRef = useRef(orderedPages);
+  loadedPagesRef.current = orderedPages;
+  const previousQueryRef = useRef<typeof loadPage | null>(null);
+
   useEffect(() => {
+    const isRefresh = previousQueryRef.current === loadPage;
+    previousQueryRef.current = enabled ? loadPage : null;
     if (!enabled) {
+      requestVersionRef.current += 1;
+      isReplacingRef.current = false;
+      setIsInitialLoading(false);
       setPages({});
       setOrderedPages([]);
       setError(null);
       return;
     }
 
-    void replaceWithPage(0);
-  }, [enabled, replaceWithPage, refreshToken]);
+    // Refresh the loaded window atomically so a later fullscreen item never
+    // disappears while its pages are reloaded. New queries still start at zero.
+    const pageNumbers =
+      isRefresh && loadedPagesRef.current.length > 0 ? loadedPagesRef.current : [0];
+    void replaceWithPages(pageNumbers, isRefresh);
+  }, [enabled, loadPage, replaceWithPages, refreshToken]);
 
   const loadNextPage = useCallback(async () => {
     if (isReplacingRef.current) {
@@ -255,9 +273,9 @@ export function useAssetWindow(
 
   const jumpToPage = useCallback(
     async (page: number) => {
-      await replaceWithPage(page);
+      await replaceWithPages([page]);
     },
-    [replaceWithPage],
+    [replaceWithPages],
   );
 
   const assets = useMemo(

@@ -412,6 +412,18 @@ export function PhotoGrid({
     [assetOverrides, assets, hideArchivedAssets, viewScope?.filter],
   );
 
+  // Adjust before committing so removing the final item cannot unmount and
+  // reopen the overlay when another item is still available.
+  if (activeIndex !== null && activeIndex >= displayAssets.length && !hasNextPage) {
+    const nextIndex = displayAssets.length > 0 ? displayAssets.length - 1 : null;
+    console.info("[PhotoGrid] Fullscreen selection adjusted after removal", {
+      previousIndex: activeIndex,
+      nextIndex,
+      remainingCount: displayAssets.length,
+    });
+    setActiveIndex(nextIndex);
+  }
+
   useEffect(() => {
     const changed = (event: Event) => {
       const asset = (event as CustomEvent<AssetSummary>).detail;
@@ -916,9 +928,15 @@ export function PhotoGrid({
     };
   }, [displayAssets, viewportWidth]);
 
-  const hasActive = activeIndex !== null && activeIndex >= 0 && activeIndex < lightboxAssets.length;
-  const activeAsset = hasActive && activeIndex !== null ? lightboxAssets[activeIndex] : null;
-  const activeAssetRef = useRef(activeAsset);
+  const activeAssetRef = useRef<AssetSummary | null>(null);
+  const isWaitingForNextAsset =
+    activeIndex !== null && activeIndex >= lightboxAssets.length && hasNextPage;
+  // Keep the viewer mounted at a page boundary until its replacement arrives.
+  const activeAsset =
+    activeIndex === null
+      ? null
+      : (lightboxAssets[activeIndex] ?? (isWaitingForNextAsset ? activeAssetRef.current : null));
+  const hasActive = !!activeAsset;
   activeAssetRef.current = activeAsset;
 
   useEffect(() => {
@@ -1293,7 +1311,7 @@ export function PhotoGrid({
     }
 
     if (hasNextPage) {
-      pendingFullscreenAdvanceRef.current = true;
+      pendingFullscreenAdvanceRef.current = !isWaitingForNextAsset;
       requestFullscreenLoadMore();
     }
   };
@@ -1711,7 +1729,7 @@ export function PhotoGrid({
           showInfoPanel={showInfoPanel}
           onToggleInfoPanel={() => setShowInfoPanel((current) => !current)}
           favoriteUpdateId={favoriteUpdateId}
-          archiveUpdateId={archiveUpdateId}
+          archiveUpdateId={isWaitingForNextAsset ? activeAsset.id : archiveUpdateId}
           ratingUpdateId={ratingUpdateId}
           descriptionUpdateId={descriptionUpdateId}
           cachedAssetDetails={cachedAssetDetails}
