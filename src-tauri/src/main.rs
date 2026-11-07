@@ -8,6 +8,7 @@ mod util;
 mod window_state;
 use tauri::Manager;
 use commands::album_local_status::get_album_local_status;
+use commands::album_statistics::get_album_statistics;
 
 use commands::albums::{
     add_assets_to_album, add_user_to_album, can_manage_album_sharing, create_album_with_assets,
@@ -349,6 +350,7 @@ pub fn main() {
             remove_user_from_album,
             save_album_locally,
             get_album_local_status,
+            get_album_statistics,
             delete_album,
             rename_album,
             delete_local_album,

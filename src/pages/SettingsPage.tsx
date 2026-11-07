@@ -30,6 +30,7 @@ import { StorageSettings } from "../components/Settings/StorageSettings";
 import { AccountsBaseDirectorySettings } from "../components/Settings/AccountsBaseDirectorySettings";
 import { PhonePhotosSettings } from "../components/Settings/PhonePhotosSettings";
 import { AlbumCreationSettings } from "../components/Settings/AlbumCreationSettings";
+import { AlbumStatisticsCard } from "../components/Settings/AlbumStatisticsCard";
 import { ShortcutSettings } from "../components/Settings/ShortcutSettings";
 import { MediaSettings } from "../components/Media/MediaSettings";
 import { useSyncStatus } from "../hooks/useSyncStatus";
@@ -437,6 +438,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             {section === "privacy" && <MediaSettings section="privacy" />}
             {section === "albums" && settings && (
               <>
+                <AlbumStatisticsCard accounts={accounts.accounts} />
                 {accounts.error && (
                   <p role="alert" className="mb-4 text-error">
                     {accounts.error}

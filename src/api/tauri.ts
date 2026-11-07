@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { deleteAsset } from "./deletion";
 import { ThumbnailQueue, type ThumbnailRequestOptions } from "./thumbnailQueue";
+import type { AlbumStatistics } from "../types/albumStatistics";
 import type {
   AlbumSummary,
   AlbumShareUser,
@@ -713,6 +714,11 @@ export async function getAlbumLocalStatus(albumId: string): Promise<{
   missingCount: number;
 }> {
   return invoke("get_album_local_status", { albumId });
+}
+
+/** Album coverage of the cached library; reads SQLite only, works offline. */
+export async function getAlbumStatistics(): Promise<AlbumStatistics> {
+  return invoke<AlbumStatistics>("get_album_statistics");
 }
 
 export async function deleteLocalAlbum(albumId: string): Promise<void> {

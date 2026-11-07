@@ -1,5 +1,6 @@
 pub mod albums;
 pub mod album_local_status;
+pub mod album_statistics;
 pub mod assets;
 pub mod deletion;
 mod download_destination;

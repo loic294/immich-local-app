@@ -393,6 +393,13 @@ pub(crate) fn live_photo_visibility_filter(alias: &str) -> String {
           AND UPPER(COALESCE(photo.asset_type,''))='IMAGE'))")
 }
 
+/// Predicate over the unaliased `assets` table selecting the assets shown in
+/// browsable views: hides stack secondaries, Live Photo motion halves and
+/// trashed items.
+pub(crate) fn timeline_visibility_filter() -> String {
+    format!("COALESCE(is_stack_secondary,0)=0 AND {} AND id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id)", live_photo_visibility_filter("assets"))
+}
+
 /// Build the optional `AND <id_column> IN (SELECT id FROM assets WHERE ...)`
 /// fragment plus its bind parameters for the given criteria. The fragment is
 /// self-contained (always selects from the `assets` table) so it can be appended
@@ -415,9 +422,7 @@ fn criteria_filter(
     deleted_view: bool,
 ) -> (String, DynParams) {
     let mut params: DynParams = Vec::new();
-    let stack_filter = if deleted_view { "1=1".to_string() } else {
-        format!("COALESCE(is_stack_secondary,0)=0 AND {} AND id NOT IN (SELECT t.asset_id FROM trashed_assets t JOIN assets owner ON owner.id=t.asset_id AND owner.account_id=t.account_id)", live_photo_visibility_filter("assets"))
-    };
+    let stack_filter = if deleted_view { "1=1".to_string() } else { timeline_visibility_filter() };
     let Some(criteria) = criteria.filter(|c| !c.is_empty()) else {
         return (format!(" AND {id_column} IN (SELECT id FROM assets WHERE {stack_filter})"), params);
     };
