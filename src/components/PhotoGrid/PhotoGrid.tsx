@@ -37,6 +37,8 @@ import type {
 } from "./PhotoGrid.types";
 import { getAssetAspectRatio, isVideoAsset, preloadImage, toPlayableSrc } from "./photoGridUtils";
 import { usePhotoGridSelection } from "./usePhotoGridSelection";
+import { usePhotoGridShortcuts } from "./usePhotoGridShortcuts";
+import { useSelectionFavorite } from "./useSelectionFavorite";
 import { usePhotoGridVirtualLayout } from "./usePhotoGridVirtualLayout";
 import { usePhotoGridExternalEvents } from "./usePhotoGridExternalEvents";
 import { FixTimeHost } from "../FixTime/FixTimeHost";
@@ -1187,37 +1189,6 @@ export function PhotoGrid({
   }, [activeAsset?.id]);
 
   useEffect(() => {
-    if (!hasActive) {
-      return;
-    }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setActiveIndex(null);
-        setActiveSrc(null);
-        setActiveStillSrc(null);
-        setIsPlayingLivePhoto(false);
-        setShouldAutoplayLivePhoto(false);
-        return;
-      }
-
-      if (event.key === "ArrowLeft") {
-        goPrev();
-        return;
-      }
-
-      if (event.key === "ArrowRight") {
-        goNext();
-      }
-    };
-
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [activeIndex, lightboxAssets.length, hasActive]);
-
-  useEffect(() => {
     if (!activeAsset) {
       return;
     }
@@ -1521,6 +1492,24 @@ export function PhotoGrid({
       };
     });
   };
+
+  const favoriteSelection = useSelectionFavorite({
+    selectedAssetIds,
+    assetsById,
+    setAssetOverrides,
+  });
+  usePhotoGridShortcuts({
+    activeAsset,
+    hasSelection: selectedAssetIds.size > 0,
+    closeViewer: closeLightbox,
+    showPrevious: goPrev,
+    showNext: goNext,
+    toggleActiveFavorite: () => void handleFavoriteToggle(),
+    deleteActive: () => void handleArchiveToggle(),
+    setActiveRating: (rating) => void handleRatingChange(rating),
+    toggleInfoPanel: () => setShowInfoPanel((current) => !current),
+    favoriteSelection: () => void favoriteSelection(),
+  });
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-1">

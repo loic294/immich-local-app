@@ -30,6 +30,7 @@ function renderActions(props) {
     "../../i18n": { useI18n: () => ({ t }) },
     "../../i18n/searchTime": { useSearchTimeI18n: () => t },
     "../../i18n/albumPicker": { useAlbumPickerLabels: () => ({}) },
+    "./useSelectionActionShortcuts": { useSelectionActionShortcuts: () => {} },
     "../../api/tauri": {
       copyAssetsToClipboard: async (ids) => calls.push(["clipboard", ids]),
       getSettings: async () => {

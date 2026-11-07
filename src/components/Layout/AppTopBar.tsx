@@ -6,6 +6,7 @@ import type { Session } from "../../hooks/useSession";
 import type { AlbumSummary, SortPreference, ViewScope } from "../../types";
 import { Header } from "./Header";
 import { SelectionActions } from "./SelectionActions";
+import { useTopBarShortcuts } from "./useTopBarShortcuts";
 import { useI18n } from "../../i18n";
 
 interface AppTopBarProps {
@@ -81,6 +82,22 @@ export function AppTopBar({
       setSelectionError(null);
     }
   }, [selectedCount]);
+
+  useTopBarShortcuts({
+    selectedCount,
+    onSelectAll,
+    onClearSelection,
+    onRequestDelete:
+      onArchiveSelected && !onUnarchiveSelected
+        ? () => {
+            setSelectionError(null);
+            setShowArchiveModal(true);
+          }
+        : undefined,
+    onToggleFilter: showFilterButton ? onToggleFilter : undefined,
+    sortPreference: showSortButton ? sortPreference : undefined,
+    onSortChange,
+  });
 
   const submitArchive = async () => {
     if (!onArchiveSelected || !canRunSelectionAction) {
@@ -182,7 +199,10 @@ export function AppTopBar({
         ) : null}
 
         {showArchiveModal ? (
-          <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/45 p-4">
+          <div
+            data-shortcut-modal=""
+            className="fixed inset-0 z-120 flex items-center justify-center bg-black/45 p-4"
+          >
             <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
               <h3 className="m-0 text-lg font-semibold">{t("topBar.archiveConfirmTitle")}</h3>
               <p className="mb-4 mt-1 text-sm text-base-content/70">

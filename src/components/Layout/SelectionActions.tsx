@@ -19,6 +19,7 @@ import { useSearchTimeI18n } from "../../i18n/searchTime";
 import { AlbumPickerModal } from "../Albums/AlbumPickerModal";
 import type { AlbumChoice } from "../Albums/AlbumPicker";
 import { useAlbumPickerLabels } from "../../i18n/albumPicker";
+import { useSelectionActionShortcuts } from "./useSelectionActionShortcuts";
 
 type SelectionActionsProps = {
   selectedAssetIds: string[];
@@ -144,6 +145,13 @@ export function SelectionActions({
     setShowAlbumModal(true);
     setShareLink("");
     await loadAlbumsForModal();
+  };
+
+  const openShareModal = () => {
+    setSelectionError(null);
+    setShareLink("");
+    setLinkCopyStatus("idle");
+    setShowShareModal(true);
   };
 
   const submitAlbumChoice = async (choice: AlbumChoice | null) => {
@@ -430,6 +438,18 @@ export function SelectionActions({
       ? t("selectionActions.subjectSingle")
       : t("selectionActions.subjectMultiple", { count: selectedCount });
 
+  useSelectionActionShortcuts({
+    scope: variant === "preview" ? "viewer" : "browse",
+    enabled: canRunSelectionAction,
+    addToAlbum: () => void openAlbumModal(),
+    shareWithLink: openShareModal,
+    copyToClipboard:
+      disableCopy || isCopyingImages ? undefined : () => void submitCopyImagesToClipboard(),
+    showInFolder: isCopyingToLocalFolder ? undefined : () => void submitOpenInFileExplorer(),
+    copyToFolder: isCopyingToLocalFolder ? undefined : () => void submitCopyToUsbFolder(),
+    fixTime: showTimeButton ? () => requestFixTime(selectedAssetIds) : undefined,
+  });
+
   return (
     <>
       <button
@@ -491,15 +511,7 @@ export function SelectionActions({
         </summary>
         <ul className={shareMenuClass}>
           <li>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectionError(null);
-                setShareLink("");
-                setLinkCopyStatus("idle");
-                setShowShareModal(true);
-              }}
-            >
+            <button type="button" onClick={openShareModal}>
               <Link size={14} />
               {t("selectionActions.shareWithLink")}
             </button>
@@ -631,6 +643,7 @@ export function SelectionActions({
 
       {showShareModal ? (
         <div
+          data-shortcut-modal=""
           className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
         >
           <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
@@ -690,6 +703,7 @@ export function SelectionActions({
 
       {showLocalCopyIssuesModal && localCopyIssueDetails ? (
         <div
+          data-shortcut-modal=""
           className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
         >
           <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
@@ -718,6 +732,7 @@ export function SelectionActions({
 
       {showLocalCopyFallbackModal && localCopyFallbackPrompt ? (
         <div
+          data-shortcut-modal=""
           className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
         >
           <div className="w-full max-w-lg rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
@@ -760,6 +775,7 @@ export function SelectionActions({
 
       {isCopyingToLocalFolder && !showLocalCopyFallbackModal ? (
         <div
+          data-shortcut-modal=""
           className={`fixed inset-0 ${modalZIndexClass} flex items-center justify-center bg-black/45 p-4`}
         >
           <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">

@@ -1,6 +1,7 @@
 use crate::services::storage::{self, FeaturePreferences, StorageSummary};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -102,10 +103,74 @@ pub struct Settings {
     /// Empty means "use the localized default description".
     #[serde(default)]
     pub phone_photos_info_description: String,
+    /// Keyboard shortcut overrides by action id. Missing actions use the frontend defaults and
+    /// an empty list means the action is intentionally unbound.
+    #[serde(default)]
+    pub keyboard_shortcuts: BTreeMap<String, Vec<String>>,
 }
 
 fn default_phone_photos_info_visible() -> bool {
     true
+}
+
+const MAX_SHORTCUT_ACTIONS: usize = 128;
+const MAX_COMBOS_PER_ACTION: usize = 8;
+const MAX_SHORTCUT_ACTION_ID_LEN: usize = 64;
+const MAX_SHORTCUT_COMBO_LEN: usize = 48;
+
+/// Guards the shape of stored shortcut overrides. The frontend catalog decides which actions and
+/// combos are meaningful, so malformed entries are dropped (never rejected) to keep unrelated
+/// settings saveable. An override whose combos are all malformed falls back to the defaults.
+pub(crate) fn sanitize_keyboard_shortcuts(
+    shortcuts: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut sanitized = BTreeMap::new();
+    let mut dropped = 0usize;
+    for (action_id, combos) in shortcuts {
+        let valid_id = !action_id.is_empty()
+            && action_id.len() <= MAX_SHORTCUT_ACTION_ID_LEN
+            && action_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        if !valid_id || sanitized.len() >= MAX_SHORTCUT_ACTIONS {
+            dropped += 1;
+            continue;
+        }
+
+        let mut kept: Vec<String> = Vec::new();
+        for combo in combos {
+            let combo = combo.trim();
+            let valid = !combo.is_empty()
+                && combo.len() <= MAX_SHORTCUT_COMBO_LEN
+                && combo.chars().all(|c| c.is_ascii_graphic());
+            if !valid
+                || kept.len() >= MAX_COMBOS_PER_ACTION
+                || kept.iter().any(|existing| existing == combo)
+            {
+                dropped += 1;
+                continue;
+            }
+            kept.push(combo.to_string());
+        }
+        if kept.is_empty() && !combos.is_empty() {
+            continue;
+        }
+        sanitized.insert(action_id.clone(), kept);
+    }
+    if dropped > 0 {
+        log::warn!("[shortcuts.settings] dropped {dropped} malformed or excess shortcut entries");
+    }
+    sanitized
+}
+
+pub(crate) fn parse_keyboard_shortcuts(raw: &str) -> BTreeMap<String, Vec<String>> {
+    match serde_json::from_str::<BTreeMap<String, Vec<String>>>(raw) {
+        Ok(parsed) => sanitize_keyboard_shortcuts(&parsed),
+        Err(error) => {
+            log::warn!("[shortcuts.settings] ignoring unreadable stored shortcuts: {error}");
+            BTreeMap::new()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -18,20 +18,13 @@ interface AlbumShareModalProps {
   onClose: () => void;
 }
 
-export function AlbumShareModal({
-  open,
-  albumId,
-  albumName,
-  onClose,
-}: AlbumShareModalProps) {
+export function AlbumShareModal({ open, albumId, albumName, onClose }: AlbumShareModalProps) {
   const [shareLink, setShareLink] = useState("");
   const [isCreatingLink, setIsCreatingLink] = useState(false);
   const [isCopyingLink, setIsCopyingLink] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [sharedUsers, setSharedUsers] = useState<AlbumShareUser[]>([]);
-  const [shareableUsers, setShareableUsers] = useState<AlbumUserCandidate[]>(
-    [],
-  );
+  const [shareableUsers, setShareableUsers] = useState<AlbumUserCandidate[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [userEmailInput, setUserEmailInput] = useState("");
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
@@ -39,10 +32,7 @@ export function AlbumShareModal({
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const usedUserIds = useMemo(
-    () => new Set(sharedUsers.map((user) => user.id)),
-    [sharedUsers],
-  );
+  const usedUserIds = useMemo(() => new Set(sharedUsers.map((user) => user.id)), [sharedUsers]);
 
   const addableUsers = useMemo(
     () => shareableUsers.filter((user) => !usedUserIds.has(user.id)),
@@ -61,12 +51,11 @@ export function AlbumShareModal({
     setLinkCopied(false);
 
     const load = async () => {
-      const [usersResult, candidatesResult, linkResult] =
-        await Promise.allSettled([
-          getAlbumShareUsers(albumId),
-          getShareableUsers(),
-          getAlbumShareLink(albumId),
-        ]);
+      const [usersResult, candidatesResult, linkResult] = await Promise.allSettled([
+        getAlbumShareUsers(albumId),
+        getShareableUsers(),
+        getAlbumShareLink(albumId),
+      ]);
 
       if (cancelled) {
         return;
@@ -84,10 +73,7 @@ export function AlbumShareModal({
         setShareLink(linkResult.value ?? "");
       }
 
-      if (
-        usersResult.status === "rejected" ||
-        candidatesResult.status === "rejected"
-      ) {
+      if (usersResult.status === "rejected" || candidatesResult.status === "rejected") {
         const loadError =
           usersResult.status === "rejected"
             ? usersResult.reason
@@ -97,9 +83,7 @@ export function AlbumShareModal({
 
         if (!cancelled) {
           const message =
-            loadError instanceof Error
-              ? loadError.message
-              : "Could not load album sharing data";
+            loadError instanceof Error ? loadError.message : "Could not load album sharing data";
           setError(message);
         }
       }
@@ -145,9 +129,7 @@ export function AlbumShareModal({
       setLinkCopied(true);
     } catch (createError) {
       const message =
-        createError instanceof Error
-          ? createError.message
-          : "Could not create album share link";
+        createError instanceof Error ? createError.message : "Could not create album share link";
       setError(message);
     } finally {
       setIsCreatingLink(false);
@@ -166,8 +148,7 @@ export function AlbumShareModal({
       await copyTextToClipboard(shareLink);
       setLinkCopied(true);
     } catch (copyError) {
-      const message =
-        copyError instanceof Error ? copyError.message : "Could not copy link";
+      const message = copyError instanceof Error ? copyError.message : "Could not copy link";
       setError(message);
     } finally {
       setIsCopyingLink(false);
@@ -186,9 +167,8 @@ export function AlbumShareModal({
     if (!userId && userEmailInput.trim()) {
       const normalizedInput = userEmailInput.trim().toLowerCase();
       userId =
-        addableUsers.find(
-          (candidate) => candidate.email?.toLowerCase() === normalizedInput,
-        )?.id ?? "";
+        addableUsers.find((candidate) => candidate.email?.toLowerCase() === normalizedInput)?.id ??
+        "";
     }
 
     if (!userId) {
@@ -203,8 +183,7 @@ export function AlbumShareModal({
       setSelectedUserId("");
       setUserEmailInput("");
     } catch (addError) {
-      const message =
-        addError instanceof Error ? addError.message : "Could not add user";
+      const message = addError instanceof Error ? addError.message : "Could not add user";
       setError(message);
     } finally {
       setIsAddingUser(false);
@@ -218,10 +197,7 @@ export function AlbumShareModal({
       await removeUserFromAlbum(albumId, userId);
       await refreshSharedUsers();
     } catch (removeError) {
-      const message =
-        removeError instanceof Error
-          ? removeError.message
-          : "Could not remove user";
+      const message = removeError instanceof Error ? removeError.message : "Could not remove user";
       setError(message);
     } finally {
       setRemovingUserId(null);
@@ -229,7 +205,10 @@ export function AlbumShareModal({
   };
 
   return (
-    <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/45 p-4">
+    <div
+      data-shortcut-modal=""
+      className="fixed inset-0 z-120 flex items-center justify-center bg-black/45 p-4"
+    >
       <div className="w-full max-w-2xl rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
         <h3 className="m-0 text-lg font-semibold">Share album</h3>
         <p className="mb-4 mt-1 text-sm text-base-content/70">
@@ -347,9 +326,7 @@ export function AlbumShareModal({
 
               <div className="mt-4 max-h-56 overflow-y-auto rounded-box border border-base-300 bg-base-100">
                 {sharedUsers.length === 0 ? (
-                  <div className="p-3 text-sm text-base-content/70">
-                    No users added yet.
-                  </div>
+                  <div className="p-3 text-sm text-base-content/70">No users added yet.</div>
                 ) : (
                   <ul className="list p-2">
                     {sharedUsers.map((user) => (
@@ -371,9 +348,7 @@ export function AlbumShareModal({
                             void removeUser(user.id);
                           }}
                         >
-                          {removingUserId === user.id
-                            ? "Removing..."
-                            : "Remove"}
+                          {removingUserId === user.id ? "Removing..." : "Remove"}
                         </button>
                       </li>
                     ))}
@@ -383,10 +358,7 @@ export function AlbumShareModal({
             </section>
 
             {error ? (
-              <div
-                role="alert"
-                className="alert alert-error alert-soft mt-4 py-2 text-sm"
-              >
+              <div role="alert" className="alert alert-error alert-soft mt-4 py-2 text-sm">
                 <span>{error}</span>
               </div>
             ) : null}

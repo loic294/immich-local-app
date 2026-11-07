@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { trackFeature } from "../../api/media";
 import { useSearchTimeI18n } from "../../i18n/searchTime";
+import { useShortcutHandler } from "../../shortcuts/useShortcutHandler";
 import type { ViewScope } from "../../types";
 import { countMetadataFilters } from "../../utils/metadataQuery";
 import { MetadataSearchPanel } from "./MetadataSearchPanel";
@@ -26,7 +27,18 @@ export function MetadataSearchBar({
   const t = useSearchTimeI18n();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const filterCount = enableFilters ? countMetadataFilters(value) : 0;
+
+  useShortcutHandler("view.focusSearch", () => {
+    const input = inputRef.current;
+    if (!input) {
+      return false;
+    }
+    input.focus();
+    input.select();
+    return true;
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -53,6 +65,7 @@ export function MetadataSearchBar({
         <Search size={16} className="text-base-content/60" />
         <input
           id="asset-search"
+          ref={inputRef}
           placeholder={placeholder ?? (enableFilters ? t("searchPlaceholder") : undefined)}
           type="text"
           className="grow"

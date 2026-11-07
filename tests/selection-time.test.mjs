@@ -51,6 +51,7 @@ function renderActions(variant) {
     "../../i18n/searchTime": { useSearchTimeI18n: () => t },
     "../../i18n/albumPicker": { useAlbumPickerLabels: () => ({}) },
     "../../api/time": time,
+    "./useSelectionActionShortcuts": { useSelectionActionShortcuts: () => {} },
   });
   const tree = SelectionActions({
     selectedAssetIds: ["first", "second"],

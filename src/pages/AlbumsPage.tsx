@@ -162,6 +162,16 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
   }, []);
 
   useEffect(() => {
+    const showCollection = () => {
+      console.info("[navigation] showing the albums collection from a shortcut or menu action");
+      setSelectedAlbumId(null);
+      setSearchInput("");
+    };
+    window.addEventListener("immich:show-albums", showCollection);
+    return () => window.removeEventListener("immich:show-albums", showCollection);
+  }, []);
+
+  useEffect(() => {
     if (!selectedAlbumId) return;
     void recordRecentAlbum(selectedAlbumId).catch((error) => {
       console.warn("[recent-albums] failed to record opened album", {

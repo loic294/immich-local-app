@@ -31,6 +31,7 @@ import { DeletedPage } from "./pages/DeletedPage";
 import { PeoplePage } from "./pages/PeoplePage";
 import { MapsPage } from "./pages/MapsPage";
 import { MediaWorkflow } from "./components/Media/MediaWorkflow";
+import { ShortcutHost } from "./shortcuts/ShortcutHost";
 import type { MapFocus } from "./types/browsing";
 import { useI18n } from "./i18n";
 
@@ -433,6 +434,7 @@ export function App() {
   return (
     <ConnectionProvider value={{ isOnline, pendingCount }}>
       {pageContent}
+      <ShortcutHost onNavigate={navigate} />
       <MediaWorkflow enabled={!!session && !isRestoringSession} page={activePage} />
       <UpdateNotifier update={appUpdate} />
       <LocalSavedFileChangesModal

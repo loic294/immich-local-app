@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
 import { I18nProvider } from "./i18n";
+import { ShortcutProvider } from "./shortcuts/ShortcutProvider";
 import { setupFileLogging } from "./utils/logger";
 import "./styles.css";
 
@@ -15,7 +16,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
-        <App />
+        <ShortcutProvider>
+          <App />
+        </ShortcutProvider>
       </I18nProvider>
     </QueryClientProvider>
   </React.StrictMode>,

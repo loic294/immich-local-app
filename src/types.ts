@@ -172,6 +172,8 @@ export type Settings = {
   phonePhotosInfoTitle: string;
   /** Empty means "use the localized default". */
   phonePhotosInfoDescription: string;
+  /** Overrides of the default shortcuts by action id; an empty list means the action is unbound. */
+  keyboardShortcuts: Record<string, string[]>;
 };
 
 export type MenuItemPreference = {

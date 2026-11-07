@@ -217,6 +217,8 @@ async function mountPhotos({ count = 65, mode = "archive" } = {}) {
       getAssetAspectRatio: () => 1.5,
     },
     "./usePhotoGridExternalEvents": externalEvents,
+    "./usePhotoGridShortcuts": { usePhotoGridShortcuts: () => {} },
+    "./useSelectionFavorite": { useSelectionFavorite: () => async () => {} },
     "./usePhotoGridSelection": {
       usePhotoGridSelection: ({ displayAssets }) => ({
         selectedAssetIds: new Set(),

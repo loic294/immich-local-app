@@ -20,11 +20,7 @@ type Method = "oauth" | "apiKey" | "password";
  * `useAccounts` registry so the new account stays signed in alongside the
  * others.
  */
-export function AddAccountModal({
-  accounts,
-  onClose,
-  onAdded,
-}: AddAccountModalProps) {
+export function AddAccountModal({ accounts, onClose, onAdded }: AddAccountModalProps) {
   const { t } = useI18n();
   const [step, setStep] = useState<Step>("server");
   const [method, setMethod] = useState<Method>("oauth");
@@ -80,9 +76,7 @@ export function AddAccountModal({
     if (!email.trim() || !password.trim()) {
       return;
     }
-    void runAdd(() =>
-      accounts.addWithPassword(normalizedServer, email.trim(), password),
-    );
+    void runAdd(() => accounts.addWithPassword(normalizedServer, email.trim(), password));
   };
 
   const handleStartOauth = async () => {
@@ -104,16 +98,17 @@ export function AddAccountModal({
     if (!callbackUrl.trim()) {
       return;
     }
-    void runAdd(() =>
-      accounts.completeAddOAuth(normalizedServer, callbackUrl.trim()),
-    );
+    void runAdd(() => accounts.completeAddOAuth(normalizedServer, callbackUrl.trim()));
   };
 
   const methodButtonClass = (value: Method) =>
     `btn join-item flex-1 ${method === value ? "btn-primary" : "btn-outline"}`;
 
   return (
-    <div className="fixed inset-0 z-130 flex items-center justify-center bg-black/45 p-4">
+    <div
+      data-shortcut-modal=""
+      className="fixed inset-0 z-130 flex items-center justify-center bg-black/45 p-4"
+    >
       <div className="w-full max-w-md rounded-box border border-base-300 bg-base-100 p-5 shadow-xl">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="m-0 text-lg font-semibold">{t("account.addTitle")}</h3>
@@ -131,9 +126,7 @@ export function AddAccountModal({
         {step === "server" ? (
           <form onSubmit={handleServerSubmit} className="space-y-4">
             <label className="form-control w-full">
-              <span className="label-text mb-1">
-                {t("account.serverLabel")}
-              </span>
+              <span className="label-text mb-1">{t("account.serverLabel")}</span>
               <input
                 required
                 type="url"
@@ -149,20 +142,14 @@ export function AddAccountModal({
               <button type="button" className="btn btn-ghost" onClick={onClose}>
                 {t("account.cancel")}
               </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={!normalizedServer}
-              >
+              <button type="submit" className="btn btn-primary" disabled={!normalizedServer}>
                 {t("account.continue")}
               </button>
             </div>
           </form>
         ) : (
           <div className="space-y-4">
-            <p className="m-0 truncate text-xs text-base-content/60">
-              {normalizedServer}
-            </p>
+            <p className="m-0 truncate text-xs text-base-content/60">{normalizedServer}</p>
 
             <div className="join w-full">
               <button
@@ -206,9 +193,7 @@ export function AddAccountModal({
             {method === "apiKey" ? (
               <form onSubmit={handleApiKeySubmit} className="space-y-4">
                 <label className="form-control w-full">
-                  <span className="label-text mb-1">
-                    {t("auth.apiKeyLabel")}
-                  </span>
+                  <span className="label-text mb-1">{t("auth.apiKeyLabel")}</span>
                   <input
                     required
                     type="password"
@@ -230,9 +215,7 @@ export function AddAccountModal({
             ) : method === "password" ? (
               <form onSubmit={handlePasswordSubmit} className="space-y-4">
                 <label className="form-control w-full">
-                  <span className="label-text mb-1">
-                    {t("auth.emailLabel")}
-                  </span>
+                  <span className="label-text mb-1">{t("auth.emailLabel")}</span>
                   <input
                     required
                     type="email"
@@ -243,9 +226,7 @@ export function AddAccountModal({
                   />
                 </label>
                 <label className="form-control w-full">
-                  <span className="label-text mb-1">
-                    {t("auth.passwordLabel")}
-                  </span>
+                  <span className="label-text mb-1">{t("auth.passwordLabel")}</span>
                   <input
                     required
                     type="password"
@@ -265,9 +246,7 @@ export function AddAccountModal({
               </form>
             ) : !oauthStarted ? (
               <div className="space-y-3">
-                <p className="m-0 text-sm text-base-content/70">
-                  {t("account.oauthHelp")}
-                </p>
+                <p className="m-0 text-sm text-base-content/70">{t("account.oauthHelp")}</p>
                 <button
                   type="button"
                   className="btn btn-primary w-full"
@@ -282,9 +261,7 @@ export function AddAccountModal({
             ) : (
               <form onSubmit={handleCallbackSubmit} className="space-y-4">
                 <label className="form-control w-full">
-                  <span className="label-text mb-1">
-                    {t("account.callbackLabel")}
-                  </span>
+                  <span className="label-text mb-1">{t("account.callbackLabel")}</span>
                   <input
                     required
                     type="text"
@@ -321,10 +298,7 @@ export function AddAccountModal({
         )}
 
         {error ? (
-          <div
-            role="alert"
-            className="alert alert-error alert-soft mt-3 text-sm"
-          >
+          <div role="alert" className="alert alert-error alert-soft mt-3 text-sm">
             <span>{error}</span>
           </div>
         ) : null}

@@ -30,6 +30,7 @@ import { StorageSettings } from "../components/Settings/StorageSettings";
 import { AccountsBaseDirectorySettings } from "../components/Settings/AccountsBaseDirectorySettings";
 import { PhonePhotosSettings } from "../components/Settings/PhonePhotosSettings";
 import { AlbumCreationSettings } from "../components/Settings/AlbumCreationSettings";
+import { ShortcutSettings } from "../components/Settings/ShortcutSettings";
 import { MediaSettings } from "../components/Media/MediaSettings";
 import { useSyncStatus } from "../hooks/useSyncStatus";
 import { FullSyncProgress } from "../components/Layout/FullSyncProgress";
@@ -52,6 +53,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
     ["my-photos", "settings.sectionMyPhotos"],
     ["phone-photos", "settings.sectionPhonePhotos"],
     ["navigation", "settings.sectionNavigation"],
+    ["shortcuts", "settings.sectionShortcuts"],
     ["sync", "settings.sectionSync"],
     ["storage", "settings.sectionStorage"],
     ["video", "settings.sectionVideo"],
@@ -452,6 +454,15 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             )}
             {section === "phone-photos" && settings && (
               <PhonePhotosSettings
+                settings={settings}
+                onSaved={(updated) => {
+                  setSettings(updated);
+                  void invalidateSettings();
+                }}
+              />
+            )}
+            {section === "shortcuts" && settings && (
+              <ShortcutSettings
                 settings={settings}
                 onSaved={(updated) => {
                   setSettings(updated);

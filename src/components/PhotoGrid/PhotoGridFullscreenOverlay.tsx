@@ -296,6 +296,7 @@ export function PhotoGridFullscreenOverlay({
       role="dialog"
       aria-modal="true"
       aria-label={activeAsset.originalFileName}
+      data-shortcut-viewer=""
     >
       <div aria-hidden="true" data-tauri-drag-region className="absolute inset-x-0 top-0 h-16" />
       <div

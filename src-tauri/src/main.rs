@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_menu;
 mod commands;
 mod db;
 mod services;
@@ -217,7 +218,7 @@ pub fn main() {
     let accounts = Arc::new(AccountManager::new());
     let sync_cancel = Arc::new(AtomicBool::new(false));
 
-    tauri::Builder::default()
+    app_menu::install(tauri::Builder::default())
         .plugin(build_log_plugin())
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
         .plugin(tauri_plugin_deep_link::init())
@@ -382,7 +383,8 @@ pub fn main() {
             scan_saved_local_files,
             get_saved_local_file_changes,
             apply_saved_local_file_changes,
-            dismiss_saved_local_file_changes
+            dismiss_saved_local_file_changes,
+            app_menu::update_app_menu
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

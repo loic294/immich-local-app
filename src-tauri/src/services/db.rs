@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::settings::{MenuItemPreference, MyPhotosRule, Settings};
+use crate::commands::settings::{
+    parse_keyboard_shortcuts, sanitize_keyboard_shortcuts, MenuItemPreference, MyPhotosRule,
+    Settings,
+};
 use crate::services::immich_client::AssetSummary;
 
 #[path = "metadata_search.rs"]
@@ -4355,6 +4358,11 @@ impl Database {
                 row.get::<_, String>(0)
             })
             .unwrap_or_default();
+        let keyboard_shortcuts = stmt
+            .query_row(params!["keyboard_shortcuts"], |row| row.get::<_, String>(0))
+            .ok()
+            .map(|raw| parse_keyboard_shortcuts(&raw))
+            .unwrap_or_default();
 
         Ok(Settings {
             album_creation: stmt
@@ -4379,6 +4387,7 @@ impl Database {
             phone_photos_info_visible,
             phone_photos_info_title,
             phone_photos_info_description,
+            keyboard_shortcuts,
         })
     }
 
@@ -4486,6 +4495,20 @@ impl Database {
             settings.phone_photos_info_visible,
             !phone_photos_info_title.is_empty(),
             !phone_photos_info_description.is_empty()
+        );
+
+        let keyboard_shortcuts = sanitize_keyboard_shortcuts(&settings.keyboard_shortcuts);
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('keyboard_shortcuts', ?1)",
+            params![serde_json::to_string(&keyboard_shortcuts).map_err(|err| err.to_string())?],
+        )
+        .map_err(|err| {
+            log::error!("[shortcuts.settings] save failed: {err}");
+            err.to_string()
+        })?;
+        log::info!(
+            "[shortcuts.settings] saved overrides for {} actions",
+            keyboard_shortcuts.len()
         );
 
         self.get_settings()
@@ -5177,6 +5200,46 @@ mod account_local_navigation_tests {
         let unchanged = db.get_settings().unwrap();
         assert_eq!(unchanged.phone_photos_folder_path, "/mnt/synology/PhoneBackup");
         assert_eq!(unchanged.live_photo_autoplay, saved.live_photo_autoplay);
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn keyboard_shortcut_overrides_round_trip_and_drop_malformed_entries() {
+        let path = test_db_path("keyboard-shortcuts");
+        let db = Database::test_database(path.clone()).unwrap();
+        let defaults = db.get_settings().unwrap();
+        assert!(defaults.keyboard_shortcuts.is_empty());
+
+        let mut next = defaults.clone();
+        next.keyboard_shortcuts.insert(
+            "photo.favorite".into(),
+            vec!["X".into(), " Mod+D ".into(), "X".into()],
+        );
+        next.keyboard_shortcuts.insert("photo.delete".into(), vec![]);
+        next.keyboard_shortcuts
+            .insert("photo.share".into(), vec!["".into(), "Mod + S".into()]);
+        next.keyboard_shortcuts
+            .insert("not a valid id!".into(), vec!["Q".into()]);
+        let saved = db.update_settings(&next).unwrap();
+        assert_eq!(saved.keyboard_shortcuts.len(), 2);
+        assert_eq!(
+            saved.keyboard_shortcuts["photo.favorite"],
+            vec!["X".to_string(), "Mod+D".to_string()]
+        );
+        assert!(saved.keyboard_shortcuts["photo.delete"].is_empty());
+        assert!(!saved.keyboard_shortcuts.contains_key("photo.share"));
+
+        let reloaded = db.get_settings().unwrap();
+        assert_eq!(reloaded.keyboard_shortcuts, saved.keyboard_shortcuts);
+
+        db.open()
+            .unwrap()
+            .execute(
+                "UPDATE settings SET value='not json' WHERE key='keyboard_shortcuts'",
+                [],
+            )
+            .unwrap();
+        assert!(db.get_settings().unwrap().keyboard_shortcuts.is_empty());
         cleanup_db(&path);
     }
 

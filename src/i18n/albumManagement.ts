@@ -21,6 +21,13 @@ const messages = {
     deleteFailed:
       "Could not delete the album. Only the album owner can delete it, and your API key must allow album deletion (album.delete).",
     offline: "Renaming or deleting an album requires a connection to your server.",
+    createTitle: "Create new album",
+    createField: "Album name",
+    createSave: "Create",
+    creating: "Creating…",
+    createFailed:
+      "Could not create the album. Check that your API key allows album creation (album.create).",
+    createOffline: "Creating an album requires a connection to your server.",
   },
   "fr-CA": {
     actionsAria: "Actions de l’album",
@@ -42,6 +49,13 @@ const messages = {
     deleteFailed:
       "Impossible de supprimer l’album. Seul le propriétaire peut le supprimer et votre clé d’API doit autoriser la suppression des albums (album.delete).",
     offline: "Renommer ou supprimer un album nécessite une connexion à votre serveur.",
+    createTitle: "Créer un nouvel album",
+    createField: "Nom de l’album",
+    createSave: "Créer",
+    creating: "Création…",
+    createFailed:
+      "Impossible de créer l’album. Vérifiez que votre clé d’API autorise la création d’albums (album.create).",
+    createOffline: "Créer un album nécessite une connexion à votre serveur.",
   },
 };
 
