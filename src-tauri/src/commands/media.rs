@@ -8,6 +8,9 @@ use std::sync::OnceLock;
 use tauri::Emitter;
 use tauri::Manager;
 
+#[path = "media/edit_owner.rs"]
+mod edit_owner;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportFile {
@@ -526,6 +529,7 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
                 .set_media_upload_state(&job.id, "uploading", None)?;
             log::info!("[media:upload] uploading job={}", job.id);
             let result:Result<(),String>=async {
+            let (job,client)=edit_owner::route_edit_to_owner(state,job.clone(),client.clone(),&session.server_url).await?;
             let id=match job.server_asset_id.clone() {
                 Some(id)=>id,
                 None=>{
@@ -554,7 +558,7 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
                 path.file_name().and_then(|n|n.to_str()).ok_or("Invalid local filename")?,"media_import",
                 None,Some(metadata.len() as i64))?;
             for album in &job.album_ids {
-                client.add_assets_to_album(album,&[id.clone()]).await?;
+                edit_owner::add_edit_to_album(state,&client,&job.account_id,album,&id).await?;
                 state.db.open()?.execute(
                     "INSERT OR IGNORE INTO album_assets(album_id,asset_id,account_id) VALUES(?1,?2,?3)",
                     params![album,id,job.account_id],
@@ -566,7 +570,7 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
             if let Some(original)=&job.original_asset_id {
                 for album in state.db.media_album_ids(original)? {
                     if !job.album_ids.contains(&album) {
-                        client.add_assets_to_album(&album,&[id.clone()]).await?;
+                        edit_owner::add_edit_to_album(state,&client,&job.account_id,&album,&id).await?;
                     }
                     if let Err(error) = state.db.record_recent_album(&album) {
                         log::warn!("[media:upload] could not record recent album={} job={}: {}", album, job.id, error);

@@ -202,6 +202,12 @@ CLI export produces a quality-100 JPEG with metadata, retained beside the
 original as `<name>-edited-YYYYMMDD.jpg`, then queues an upload. The newest
 edit becomes the stack primary in Immich and local browsing, including the
 original's albums; version thumbnails in Info open the other versions.
+Edits are uploaded and stacked in the account that owns the original on the
+server (Immich only stacks one user's assets), even when a shared or partner
+photo is cached under another signed-in account. If that owner is not signed in,
+the upload fails before sending anything and asks you to sign in to it. Retrying
+an edit that an older version uploaded to the wrong library moves that copy to
+Immich trash before re-uploading it to the owner.
 Switching versions replaces the image in its existing timeline slot instead of
 reordering or appending thumbnails. Any edited version can be deleted, including
 the current one; the original is protected. Deleting the active edit restores
