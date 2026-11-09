@@ -340,16 +340,45 @@ pub async fn create_share_link_for_assets(
     asset_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    // Share links are scoped to a single server; route via the first asset's
-    // owning account.
-    let client = match asset_ids.first() {
-        Some(first) => state.account_and_client_for_asset(first).1,
-        None => state.immich.clone(),
-    };
+    create_share_link_for_assets_inner(&asset_ids, &state).await
+}
+
+pub(super) async fn create_share_link_for_assets_inner(
+    asset_ids: &[String],
+    state: &AppState,
+) -> Result<String, String> {
+    let first = asset_ids.first().ok_or("No assets selected")?;
+    let account_id = state
+        .db
+        .get_asset_account_id(first)?
+        .ok_or("Photo has no cached account")?;
+    let account = state
+        .db
+        .get_account(&account_id)?
+        .ok_or("Photo account no longer exists")?;
+    let groups = creation::contributions(state, &account.server_url, asset_ids)?;
+    let groups = creation::resolve_contributors(state, groups).await?;
+    let client = groups
+        .iter()
+        .find(|group| group.asset_ids.contains(first))
+        .ok_or("No account can share the selected photos")?
+        .client
+        .clone();
+    log::info!(
+        "[albums.share-assets] start count={} source_accounts={}",
+        asset_ids.len(),
+        groups.len()
+    );
     client
-        .create_share_link_for_assets(&asset_ids)
+        .create_share_link_for_assets(asset_ids)
         .await
-        .map_err(|err| format!("create share link failed: {err}"))
+        .map_err(|err| {
+            log::warn!(
+                "[albums.share-assets] failed count={}: {err}",
+                asset_ids.len()
+            );
+            format!("create share link failed: {err}")
+        })
 }
 
 #[tauri::command]

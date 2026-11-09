@@ -1,3 +1,5 @@
+pub(super) use crate::commands::asset_owner::account_client;
+use crate::commands::asset_owner::{resolve_asset_account, AssetAccess};
 use crate::services::{
     activity_log::Phases,
     db::Account,
@@ -9,22 +11,6 @@ use std::sync::Arc;
 
 /// Creating an album makes several requests per contributing account; only flag it beyond this.
 const SLOW_ALBUM_CREATE_MS: u64 = 3_000;
-
-pub(super) fn account_client(
-    state: &AppState,
-    account: &Account,
-) -> Result<Arc<ImmichClient>, String> {
-    state
-        .accounts
-        .client(&account.id)
-        .or_else(|| account.is_primary.then(|| state.immich.clone()))
-        .ok_or_else(|| {
-            format!(
-                "Account {} is not signed in. Sign in again before adding photos.",
-                account.id
-            )
-        })
-}
 
 pub(super) struct Contribution {
     pub account: Account,
@@ -93,25 +79,11 @@ pub(super) async fn resolve_contributors(
     let mut resolved = BTreeMap::<String, Contribution>::new();
     for group in groups {
         for id in group.asset_ids {
-            // Album/partner refreshes can attribute a cached photo to its reader,
-            // not its owner. Resolve ownership before any album mutation.
-            let user_id = group.client.get_asset_owner_id(&id).await?;
-            let account = match state
-                .db
-                .find_account_by_user(&group.account.server_url, &user_id)?
-            {
-                Some(account) => account,
-                None => {
-                    // A partner may grant sharing rights without a local login.
-                    // The server still validates AssetShare in the add response.
-                    log::info!("[albums.contributors] photo={id} owner_not_signed_in={user_id} using_access_account={}", group.account.id);
-                    group.account.clone()
-                }
-            };
+            let (account, client) =
+                resolve_asset_account(state, &group.account.id, &id, AssetAccess::Share).await?;
             if let Some(contribution) = resolved.get_mut(&account.id) {
                 contribution.asset_ids.push(id);
             } else {
-                let client = account_client(state, &account)?;
                 resolved.insert(
                     account.id.clone(),
                     Contribution {

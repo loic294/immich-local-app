@@ -5,12 +5,13 @@
 //! last-writer-wins across signed-in accounts (a shared or partner photo can be
 //! cached under a reader), so ownership is resolved from the server instead.
 
+#[cfg(test)]
+use crate::commands::asset_owner::OWNER_NOT_SIGNED_IN;
+use crate::commands::asset_owner::{resolve_asset_account, AssetAccess};
 use crate::services::{immich_client::ImmichClient, media::UploadJob};
 use crate::AppState;
 use rusqlite::params;
 use std::sync::Arc;
-
-pub(super) const OWNER_NOT_SIGNED_IN: &str = "This photo belongs to another Immich user who isn't signed in to Immich Local. Sign in to the photo owner's account, then retry the upload.";
 
 /// Returns the job and client that must upload and stack this edit. Non-edit
 /// jobs and edits already owned by the job account are returned unchanged.
@@ -25,35 +26,17 @@ pub(super) async fn route_edit_to_owner(
     let Some(original) = job.original_asset_id.clone() else {
         return Ok((job, client));
     };
-    let owner_user = client.get_asset_owner_id(&original).await?;
-    let Some(owner) = state.db.find_account_by_user(server_url, &owner_user)? else {
-        log::error!(
-            "[media:upload:owner] owner account missing job={} original={} owner_user={} account={}",
-            job.id, original, owner_user, job.account_id
-        );
-        return Err(OWNER_NOT_SIGNED_IN.into());
-    };
+    let (owner, owner_client) =
+        resolve_asset_account(state, &job.account_id, &original, AssetAccess::Owner).await?;
     if owner.id == job.account_id {
         log::info!(
             "[media:upload:owner] owner matches job={} original={} account={}",
-            job.id, original, job.account_id
+            job.id,
+            original,
+            job.account_id
         );
-        return Ok((job, client));
+        return Ok((job, owner_client));
     }
-    let owner_client = state
-        .accounts
-        .client(&owner.id)
-        .or_else(|| owner.is_primary.then(|| state.immich.clone()));
-    let owner_client = match owner_client {
-        Some(owner_client) if owner_client.session.lock().await.is_some() => owner_client,
-        _ => {
-            log::error!(
-                "[media:upload:owner] owner account not signed in job={} original={} owner_account={}",
-                job.id, original, owner.id
-            );
-            return Err(OWNER_NOT_SIGNED_IN.into());
-        }
-    };
     log::info!(
         "[media:upload:owner] rerouting job={} original={} from={} to={} misplaced={}",
         job.id,
@@ -90,28 +73,48 @@ async fn discard_misplaced_upload(
     server_url: &str,
     asset_id: &str,
 ) -> Result<(), String> {
-    if let Err(error) = client.trash_asset(asset_id).await {
+    let result = async {
+        crate::commands::asset_owner::owner_client(state, &job.account_id, asset_id)
+            .await?
+            .trash_asset(asset_id)
+            .await
+    }
+    .await;
+    if let Err(error) = result {
         if !client.ping(server_url).await {
-            return Err(format!("offline: could not trash misplaced edit {asset_id}: {error}"));
+            return Err(format!(
+                "offline: could not trash misplaced edit {asset_id}: {error}"
+            ));
         }
         log::warn!(
             "[media:upload:owner] could not trash misplaced edit asset={} job={} account={}: {}",
-            asset_id, job.id, job.account_id, error
+            asset_id,
+            job.id,
+            job.account_id,
+            error
         );
         return Ok(());
     }
     log::info!(
         "[media:upload:owner] trashed misplaced edit asset={} job={} account={}",
-        asset_id, job.id, job.account_id
+        asset_id,
+        job.id,
+        job.account_id
     );
     let cleanup = state
         .db
         .delete_assets_and_links_by_ids(&[asset_id.to_string()])
-        .and_then(|_| state.db.delete_local_saved_asset_by_path(asset_id, &job.local_path));
+        .and_then(|_| {
+            state
+                .db
+                .delete_local_saved_asset_by_path(asset_id, &job.local_path)
+        });
     if let Err(error) = cleanup {
         log::warn!(
             "[media:upload:owner] could not drop cached misplaced edit asset={} job={}: {}",
-            asset_id, job.id, error
+            asset_id,
+            job.id,
+            error
         );
     }
     Ok(())

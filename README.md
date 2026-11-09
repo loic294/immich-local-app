@@ -39,6 +39,11 @@ an available display.
   **Force Full Sync** once to recover the previously discarded pairing.
 - Manage multiple Immich accounts and sign in with an API key, password, or
   OAuth.
+- Use one server-verified photo-owner resolver for album contributions, sharing,
+  favorites, visibility, ratings, descriptions, capture times, deletion/restoration,
+  and edited uploads. Owner-only changes require that owner's signed-in account
+  on the same server; only sharing may use partner-granted access without an owner
+  login. Offline replay resolves ownership again, while cached reads remain local.
 - Cache library data locally and browse cached content while offline.
 - Queue supported changes to favorites, visibility, ratings, and descriptions
   while offline, then replay them when the server reconnects.
@@ -46,11 +51,17 @@ an available display.
   Immich trash. This preference applies to every account and to edited versions;
   originals in edit stacks remain protected. Archive restore returns photos to
   the timeline; trash restore uses Immich's trash-restore endpoint. Delete and
-  restore actions also queue offline.
+  restore actions also queue offline. Shared photos are deleted or restored
+  through their owner's signed-in account on the same server, not the account
+  that happened to cache them. Offline replay resolves the owner again before
+  sending changes; a missing owner session or server permission rejection is
+  reported rather than silently using another account.
 - Open Deleted to browse the selected dataset from SQLite first, then refresh
   just archived or trashed items. Offline or unsupported-API failures preserve
   cached results and show a warning; no full-library sync or permanent
-  empty-trash action is triggered.
+  empty-trash action is triggered. Refresh combines the signed-in accounts on
+  each server without changing a shared photo's cache attribution, and a
+  reader's lost access alone does not remove a photo still visible to its owner.
 - Run a full library sync when needed, or use quick and view-specific refreshes
   to check only for new assets or update the current album/month.
   Full sync shows preparation activity for people and albums, including progress

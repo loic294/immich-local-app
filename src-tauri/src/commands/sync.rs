@@ -974,6 +974,13 @@ pub async fn apply_saved_local_file_changes(
     input: ApplySavedLocalFileChangesInput,
     state: tauri::State<'_, AppState>,
 ) -> Result<ApplySavedLocalFileChangesResult, String> {
+    apply_saved_local_file_changes_inner(input, &state).await
+}
+
+pub(super) async fn apply_saved_local_file_changes_inner(
+    input: ApplySavedLocalFileChangesInput,
+    state: &AppState,
+) -> Result<ApplySavedLocalFileChangesResult, String> {
     let mut applied_count = 0u32;
     let mut failed_count = 0u32;
     let mut errors = Vec::new();
@@ -989,75 +996,23 @@ pub async fn apply_saved_local_file_changes(
 
         match change.change_kind.as_str() {
             "deleted" => {
-                let (account_id, client) = state.account_and_client_for_asset(&change.asset_id);
-                // Archive in local cache immediately.
-                if let Err(err) = state
-                    .db
-                    .update_asset_visibility(&change.asset_id, "archive")
+                let payload = super::assets::UpdateAssetVisibilityPayload {
+                    asset_id: change.asset_id.clone(),
+                    visibility: "archive".into(),
+                };
+                if let Err(error) =
+                    super::assets::update_asset_visibility_inner(payload, &state).await
                 {
+                    log::warn!(
+                        "[sync.apply_saved_local_file_changes] archive failed asset={}: {error}",
+                        change.asset_id
+                    );
                     failed_count += 1;
                     errors.push(format!(
-                        "failed to update local visibility for asset {}: {}",
-                        change.asset_id, err
+                        "failed to archive asset {}: {error}",
+                        change.asset_id
                     ));
                     continue;
-                }
-
-                // Try server update; if unreachable enqueue mutation.
-                match client
-                    .update_asset_visibility(&change.asset_id, "archive")
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(err) => {
-                        let server_reachable = if let Ok(Some((server_url, _token, _is_oauth))) =
-                            state.db.get_auth_credentials()
-                        {
-                            client.ping(&server_url).await
-                        } else {
-                            false
-                        };
-
-                        if server_reachable {
-                            log::warn!(
-                                "[sync.apply_saved_local_file_changes] archive rejected while online asset_id={} err={}",
-                                change.asset_id,
-                                err
-                            );
-                            failed_count += 1;
-                            let err_lc = err.to_ascii_lowercase();
-                            let reason = if err_lc.contains("asset.update access") {
-                                "asset update permission denied (shared/read-only asset)"
-                                    .to_string()
-                            } else {
-                                err.clone()
-                            };
-                            errors.push(format!(
-                                "failed to archive asset {} while server is reachable: {}",
-                                change.asset_id, reason
-                            ));
-                            continue;
-                        }
-
-                        let payload_json = json!({ "visibility": "archive" }).to_string();
-                        log::warn!(
-                            "[sync.apply_saved_local_file_changes] offline while archiving asset_id={} queueing mutation",
-                            change.asset_id
-                        );
-                        if let Err(queue_err) = state.db.enqueue_mutation(
-                            &account_id,
-                            &change.asset_id,
-                            "visibility",
-                            &payload_json,
-                        ) {
-                            failed_count += 1;
-                            errors.push(format!(
-                                "failed to archive asset {} offline and queue mutation: {} / {}",
-                                change.asset_id, err, queue_err
-                            ));
-                            continue;
-                        }
-                    }
                 }
 
                 // Remove all tracked local copies for this asset from disk.

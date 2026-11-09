@@ -972,28 +972,49 @@ pub async fn delete_edit_version(
     asset_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
+    delete_edit_version_inner(asset_id, &state).await
+}
+
+pub(super) async fn delete_edit_version_inner(
+    asset_id: String,
+    state: &AppState,
+) -> Result<bool, String> {
     if !state.db.is_deletable_edit_version(&asset_id)? {
         return Err("Only an edited version can be deleted; the original is protected".into());
     }
-    let (account_id, client) = state.account_and_client_for_asset(&asset_id);
-    if account_id.is_empty() {
-        return Err("offline: Cannot identify the account for this version".into());
-    }
+    let account_id = state
+        .db
+        .get_asset_account_id(&asset_id)?
+        .ok_or("Cannot identify the account for this version")?;
     let original = state.db.original_edit_asset(&asset_id)?;
     let behavior = state.db.get_settings()?.delete_behavior;
-    let account = state.db.get_account(&account_id)?.ok_or("Unknown account")?;
-    if client.ping(&account.server_url).await {
-        match client.delete_edit_version_with_behavior(&asset_id, &original, behavior).await {
+    let account = state
+        .db
+        .get_account(&account_id)?
+        .ok_or("Unknown account")?;
+    if state.immich.ping(&account.server_url).await {
+        let result = async {
+            crate::commands::asset_owner::owner_client(state, &account_id, &asset_id)
+                .await?
+                .delete_edit_version_with_behavior(&asset_id, &original, behavior)
+                .await
+        }
+        .await;
+        match result {
             Ok(()) => {
-                state.db.cache_deleted_edit_version(&asset_id, None, behavior)?;
-                log::info!("[media:version-delete] deleted version asset={asset_id} mode={behavior:?}");
+                state
+                    .db
+                    .cache_deleted_edit_version(&asset_id, None, behavior)?;
+                log::info!(
+                    "[media:version-delete] deleted version asset={asset_id} mode={behavior:?}"
+                );
                 return Ok(false);
             }
             Err(error) => {
                 log::warn!(
                     "[media:version-delete] server operation failed asset={asset_id}: {error}"
                 );
-                if client.ping(&account.server_url).await {
+                if state.immich.ping(&account.server_url).await {
                     return Err(error);
                 }
             }

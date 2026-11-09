@@ -361,7 +361,7 @@ pub(crate) fn time_replay_target(payload: &Value) -> Result<String, String> {
         .ok_or_else(|| "queued time mutation missing dateTimeOriginal".to_string())
 }
 
-async fn account_reachable(state: &tauri::State<'_, AppState>, account_id: &str) -> bool {
+async fn account_reachable(state: &AppState, account_id: &str) -> bool {
     let client = state.client_for(Some(account_id));
     match state.db.get_account(account_id) {
         Ok(Some(account)) => client.ping(&account.server_url).await,
@@ -377,6 +377,13 @@ async fn account_reachable(state: &tauri::State<'_, AppState>, account_id: &str)
 pub async fn shift_asset_times(
     payload: ShiftAssetTimesPayload,
     state: tauri::State<'_, AppState>,
+) -> Result<ShiftAssetTimesResult, String> {
+    shift_asset_times_inner(payload, &state).await
+}
+
+pub(super) async fn shift_asset_times_inner(
+    payload: ShiftAssetTimesPayload,
+    state: &AppState,
 ) -> Result<ShiftAssetTimesResult, String> {
     let delta = payload.offset_seconds;
     if delta == 0 {
@@ -403,11 +410,20 @@ pub async fn shift_asset_times(
     let mut offline_accounts: HashMap<String, bool> = HashMap::new();
 
     for asset_id in asset_ids {
-        let (account_id, client) = state.account_and_client_for_asset(&asset_id);
+        let Some(account_id) = state.db.get_asset_account_id(&asset_id)? else {
+            log::warn!("[time.shift] photo has no cached account asset={asset_id}");
+            result.failed.push(ShiftAssetTimeFailure {
+                asset_id,
+                error: "Photo has no cached account".into(),
+            });
+            continue;
+        };
         let known_offline = offline_accounts.get(&account_id).copied().unwrap_or(false);
 
         if !known_offline {
             let online = async {
+                let client =
+                    super::asset_owner::owner_client(state, &account_id, &asset_id).await?;
                 let time = client.get_asset_time(&asset_id).await?;
                 let shifted = shift_time(time, delta)
                     .ok_or_else(|| "shifted time out of range".to_string())?;

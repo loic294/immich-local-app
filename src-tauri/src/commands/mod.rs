@@ -3,6 +3,7 @@ pub mod albums;
 pub mod album_local_status;
 pub mod album_statistics;
 pub mod assets;
+mod asset_owner;
 pub mod deletion;
 mod download_destination;
 pub mod auth;

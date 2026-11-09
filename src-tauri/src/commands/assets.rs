@@ -9,7 +9,7 @@ use crate::AppState;
 /// Probe whether the configured Immich server is currently reachable. Used by
 /// the mutation commands to decide between surfacing a server error (online) and
 /// queuing the change for later replay (offline).
-async fn server_reachable(state: &tauri::State<'_, AppState>) -> bool {
+async fn server_reachable(state: &AppState) -> bool {
     match state.db.get_auth_credentials() {
         Ok(Some((server_url, _token, _is_oauth))) => state.immich.ping(&server_url).await,
         _ => false,
@@ -19,7 +19,7 @@ async fn server_reachable(state: &tauri::State<'_, AppState>) -> bool {
 /// Probe whether a specific account's Immich server is currently reachable,
 /// using that account's own client/session. Falls back to the primary probe
 /// when the account is unknown (e.g. legacy single-account caches).
-async fn account_reachable(state: &tauri::State<'_, AppState>, account_id: &str) -> bool {
+async fn account_reachable(state: &AppState, account_id: &str) -> bool {
     let client = state.client_for(Some(account_id));
     match state.db.get_account(account_id) {
         Ok(Some(account)) => client.ping(&account.server_url).await,
@@ -824,11 +824,25 @@ pub async fn update_asset_description(
     payload: UpdateAssetDescriptionPayload,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let (account_id, client) = state.account_and_client_for_asset(&payload.asset_id);
-    match client
-        .update_asset_description(&payload.asset_id, payload.description.as_deref())
-        .await
-    {
+    update_asset_description_inner(payload, &state).await
+}
+
+pub(super) async fn update_asset_description_inner(
+    payload: UpdateAssetDescriptionPayload,
+    state: &AppState,
+) -> Result<(), String> {
+    let account_id = state
+        .db
+        .get_asset_account_id(&payload.asset_id)?
+        .ok_or("Photo has no cached account")?;
+    let result = async {
+        super::asset_owner::owner_client(state, &account_id, &payload.asset_id)
+            .await?
+            .update_asset_description(&payload.asset_id, payload.description.as_deref())
+            .await
+    }
+    .await;
+    match result {
         Ok(_) => {
             state
                 .db
@@ -887,8 +901,26 @@ pub async fn update_asset_favorite(
     is_favorite: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    let (account_id, client) = state.account_and_client_for_asset(&asset_id);
-    match client.update_asset_favorite(&asset_id, is_favorite).await {
+    update_asset_favorite_inner(asset_id, is_favorite, &state).await
+}
+
+pub(super) async fn update_asset_favorite_inner(
+    asset_id: String,
+    is_favorite: bool,
+    state: &AppState,
+) -> Result<AssetSummary, String> {
+    let account_id = state
+        .db
+        .get_asset_account_id(&asset_id)?
+        .ok_or("Photo has no cached account")?;
+    let result = async {
+        super::asset_owner::owner_client(state, &account_id, &asset_id)
+            .await?
+            .update_asset_favorite(&asset_id, is_favorite)
+            .await
+    }
+    .await;
+    match result {
         Ok(updated_asset) => {
             state
                 .db
@@ -927,11 +959,25 @@ pub async fn update_asset_visibility(
     payload: UpdateAssetVisibilityPayload,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    let (account_id, client) = state.account_and_client_for_asset(&payload.asset_id);
-    match client
-        .update_asset_visibility(&payload.asset_id, &payload.visibility)
-        .await
-    {
+    update_asset_visibility_inner(payload, &state).await
+}
+
+pub(super) async fn update_asset_visibility_inner(
+    payload: UpdateAssetVisibilityPayload,
+    state: &AppState,
+) -> Result<AssetSummary, String> {
+    let account_id = state
+        .db
+        .get_asset_account_id(&payload.asset_id)?
+        .ok_or("Photo has no cached account")?;
+    let result = async {
+        super::asset_owner::owner_client(state, &account_id, &payload.asset_id)
+            .await?
+            .update_asset_visibility(&payload.asset_id, &payload.visibility)
+            .await
+    }
+    .await;
+    match result {
         Ok(updated_asset) => {
             state
                 .db
@@ -976,8 +1022,26 @@ pub async fn update_asset_rating(
     rating: Option<i32>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AssetSummary, String> {
-    let (account_id, client) = state.account_and_client_for_asset(&asset_id);
-    match client.update_asset_rating(&asset_id, rating).await {
+    update_asset_rating_inner(asset_id, rating, &state).await
+}
+
+pub(super) async fn update_asset_rating_inner(
+    asset_id: String,
+    rating: Option<i32>,
+    state: &AppState,
+) -> Result<AssetSummary, String> {
+    let account_id = state
+        .db
+        .get_asset_account_id(&asset_id)?
+        .ok_or("Photo has no cached account")?;
+    let result = async {
+        super::asset_owner::owner_client(state, &account_id, &asset_id)
+            .await?
+            .update_asset_rating(&asset_id, rating)
+            .await
+    }
+    .await;
+    match result {
         Ok(updated_asset) => {
             state
                 .db
@@ -1025,6 +1089,10 @@ pub async fn get_pending_mutation_count(state: tauri::State<'_, AppState>) -> Re
 /// unreachable again. Returns the number of mutations still pending afterwards.
 #[tauri::command]
 pub async fn flush_pending_mutations(state: tauri::State<'_, AppState>) -> Result<i64, String> {
+    flush_pending_mutations_inner(&state).await
+}
+
+pub(super) async fn flush_pending_mutations_inner(state: &AppState) -> Result<i64, String> {
     let pending = state
         .db
         .list_pending_mutations()
@@ -1043,90 +1111,124 @@ pub async fn flush_pending_mutations(state: tauri::State<'_, AppState>) -> Resul
         let payload: serde_json::Value = serde_json::from_str(&mutation.payload_json)
             .map_err(|err| format!("invalid queued payload: {err}"))?;
 
-        // Replay each mutation against the account that originally owned it.
-        let client = state.client_for(Some(&mutation.account_id));
-
-        let result = match mutation.kind.as_str() {
-            "delete_asset" | "restore_deleted" => {
-                match payload.get("mode").cloned().ok_or("Missing queued delete mode")
-                    .and_then(|mode| serde_json::from_value(mode).map_err(|_| "Invalid queued delete mode")) {
-                    Ok(mode) => client.change_deleted_state(&mutation.asset_id, mode, mutation.kind == "restore_deleted").await.map(|_| None),
-                    Err(error) => Err(error.to_string()),
+        if !matches!(
+            mutation.kind.as_str(),
+            "delete_asset"
+                | "restore_deleted"
+                | "delete_version"
+                | "favorite"
+                | "visibility"
+                | "rating"
+                | "description"
+                | "time"
+        ) {
+            log::warn!(
+                "[assets.flush_pending_mutations] dropping unknown mutation kind={}",
+                mutation.kind
+            );
+            state.db.delete_pending_mutation(mutation.id)?;
+            continue;
+        }
+        let result = async {
+            let client =
+                super::asset_owner::owner_client(state, &mutation.account_id, &mutation.asset_id)
+                    .await?;
+            match mutation.kind.as_str() {
+                "delete_asset" | "restore_deleted" => {
+                    match payload
+                        .get("mode")
+                        .cloned()
+                        .ok_or("Missing queued delete mode")
+                        .and_then(|mode| {
+                            serde_json::from_value(mode).map_err(|_| "Invalid queued delete mode")
+                        }) {
+                        Ok(mode) => client
+                            .change_deleted_state(
+                                &mutation.asset_id,
+                                mode,
+                                mutation.kind == "restore_deleted",
+                            )
+                            .await
+                            .map(|_| None),
+                        Err(error) => Err(error.to_string()),
+                    }
                 }
-            }
-            "delete_version" => match payload
-                .get("originalAssetId")
-                .and_then(serde_json::Value::as_str)
-            {
-                Some(original) => client
-                    .delete_edit_version_with_behavior(&mutation.asset_id, original,
-                        payload.get("mode").cloned().and_then(|v| serde_json::from_value(v).ok())
-                            .unwrap_or(crate::commands::settings::DeleteBehavior::Trash))
-                    .await
-                    .map(|_| None),
-                // Older queue entries only permitted deletion of secondary edits.
-                None => client.trash_asset(&mutation.asset_id).await.map(|_| None),
-            },
-            "favorite" => {
-                let is_favorite = payload
-                    .get("isFavorite")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                client
-                    .update_asset_favorite(&mutation.asset_id, is_favorite)
-                    .await
-                    .map(Some)
-            }
-            "visibility" => {
-                let visibility = payload
-                    .get("visibility")
+                "delete_version" => match payload
+                    .get("originalAssetId")
                     .and_then(serde_json::Value::as_str)
-                    .unwrap_or("timeline")
-                    .to_string();
-                client
-                    .update_asset_visibility(&mutation.asset_id, &visibility)
-                    .await
-                    .map(Some)
-            }
-            "rating" => {
-                let rating = payload
-                    .get("rating")
-                    .and_then(|v| v.as_i64().map(|n| n as i32));
-                client
-                    .update_asset_rating(&mutation.asset_id, rating)
-                    .await
-                    .map(Some)
-            }
-            "description" => {
-                let description = payload
-                    .get("description")
-                    .and_then(serde_json::Value::as_str);
-                client
-                    .update_asset_description(&mutation.asset_id, description)
-                    .await
-                    .map(Some)
-            }
-            "time" => {
-                // Absolute target timestamp computed when queued, so replay is
-                // idempotent. Metadata only; the cache was updated optimistically.
-                match crate::commands::time::time_replay_target(&payload) {
-                    Ok(date_time_original) => client
-                        .update_asset_date_time_original(&mutation.asset_id, &date_time_original)
+                {
+                    Some(original) => client
+                        .delete_edit_version_with_behavior(
+                            &mutation.asset_id,
+                            original,
+                            payload
+                                .get("mode")
+                                .cloned()
+                                .and_then(|v| serde_json::from_value(v).ok())
+                                .unwrap_or(crate::commands::settings::DeleteBehavior::Trash),
+                        )
                         .await
                         .map(|_| None),
-                    Err(err) => Err(err),
+                    // Older queue entries only permitted deletion of secondary edits.
+                    None => client.trash_asset(&mutation.asset_id).await.map(|_| None),
+                },
+                "favorite" => {
+                    let is_favorite = payload
+                        .get("isFavorite")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    client
+                        .update_asset_favorite(&mutation.asset_id, is_favorite)
+                        .await
+                        .map(Some)
                 }
+                "visibility" => {
+                    let visibility = payload
+                        .get("visibility")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("timeline")
+                        .to_string();
+                    client
+                        .update_asset_visibility(&mutation.asset_id, &visibility)
+                        .await
+                        .map(Some)
+                }
+                "rating" => {
+                    let rating = payload
+                        .get("rating")
+                        .and_then(|v| v.as_i64().map(|n| n as i32));
+                    client
+                        .update_asset_rating(&mutation.asset_id, rating)
+                        .await
+                        .map(Some)
+                }
+                "description" => {
+                    let description = payload
+                        .get("description")
+                        .and_then(serde_json::Value::as_str);
+                    client
+                        .update_asset_description(&mutation.asset_id, description)
+                        .await
+                        .map(Some)
+                }
+                "time" => {
+                    // Absolute target timestamp computed when queued, so replay is
+                    // idempotent. Metadata only; the cache was updated optimistically.
+                    match crate::commands::time::time_replay_target(&payload) {
+                        Ok(date_time_original) => client
+                            .update_asset_date_time_original(
+                                &mutation.asset_id,
+                                &date_time_original,
+                            )
+                            .await
+                            .map(|_| None),
+                        Err(err) => Err(err),
+                    }
+                }
+                other => Err(format!("Unknown mutation kind={other}")),
             }
-            other => {
-                log::warn!(
-                    "[assets.flush_pending_mutations] dropping unknown mutation kind={}",
-                    other
-                );
-                // Drop unrecognized entries so the queue cannot get stuck.
-                let _ = state.db.delete_pending_mutation(mutation.id);
-                continue;
-            }
-        };
+        }
+        .await;
 
         match result {
             Ok(updated) => {
