@@ -164,6 +164,10 @@ still requires confirmation. Timeline month/year markers remain available for
 date navigation without a separate Go to date dialog.
 
 **Import**, to the left of Settings in the header, scans a chosen folder or suggests newly connected removable media.
+Automatic detection is limited to mounted physical external storage, such as SD
+cards, USB drives, external hard drives/SSDs, and cameras exposed as storage.
+Disk images, virtual drives, network shares, and internal/system volumes do not
+trigger import suggestions. Other folders remain available through the folder picker.
 Choose an album with the shared thumbnail picker and select photos/videos in the
 virtualized grid; previously imported checksums are labelled. Click or Cmd/Ctrl-click
 toggles a tile; Shift-click selects a range. The footer explains the album requirement

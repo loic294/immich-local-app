@@ -13,6 +13,9 @@ use tauri::Manager;
 #[path = "media/edit_owner.rs"]
 mod edit_owner;
 
+#[path = "media/devices.rs"]
+mod devices;
+
 /// An external editor export legitimately takes a few seconds; only flag it beyond this.
 const SLOW_EDIT_RENDER_MS: u64 = 15_000;
 
@@ -142,48 +145,14 @@ pub async fn update_media_preferences(
 
 #[tauri::command]
 pub async fn list_media_devices() -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(|| {
-        #[cfg(target_os="macos")]
-        {
-            fn mounted_paths(value:&plist::Value, paths:&mut Vec<String>) {
-                match value {
-                    plist::Value::Dictionary(values)=>{
-                        if let Some(path)=values.get("MountPoint").and_then(plist::Value::as_string) {
-                            paths.push(path.to_string());
-                        }
-                        for value in values.values(){mounted_paths(value,paths);}
-                    }
-                    plist::Value::Array(values)=>for value in values {mounted_paths(value,paths);},
-                    _=>{},
-                }
-            }
-            let output=std::process::Command::new("/usr/sbin/diskutil").args(["list","-plist","external"])
-                .output().map_err(|error|format!("Cannot inspect external disks: {error}"))?;
-            if !output.status.success(){return Err("macOS external disk detection failed".into());}
-            let value=plist::Value::from_reader_xml(std::io::Cursor::new(output.stdout))
-                .map_err(|error|format!("Invalid macOS disk inventory: {error}"))?;
-            let mut paths=Vec::new();
-            mounted_paths(&value,&mut paths);
-            paths.sort();paths.dedup();
-            Ok(paths)
-        }
-        #[cfg(target_os="windows")]
-        {
-            let mut command = std::process::Command::new("powershell.exe");
-            crate::services::background_process::configure(&mut command);
-            let output=command
-                .args(["-NoProfile","-NonInteractive","-Command",
-                "$ErrorActionPreference='Stop'; $r=@(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2' | ForEach-Object {$_.DeviceID+'\\'}); $r+=@(Get-Disk | Where-Object BusType -eq USB | Get-Partition | Where-Object DriveLetter | ForEach-Object {$_.DriveLetter+':\\'}); ConvertTo-Json -Compress -InputObject @($r | Sort-Object -Unique)"])
-                .output().map_err(|e|format!("Cannot inspect removable media: {e}"))?;
-            if !output.status.success() {
-                log::warn!("[media:devices] Windows removable media detection failed status={} error={}", output.status, String::from_utf8_lossy(&output.stderr));
-                return Err("Windows removable media detection failed".into());
-            }
-            serde_json::from_slice(&output.stdout).map_err(|e|format!("Invalid Windows volume response: {e}"))
-        }
-        #[cfg(not(any(target_os="macos",target_os="windows")))]
-        { Err("Media-device detection supports macOS and Windows only".into()) }
-    }).await.map_err(|e|e.to_string())?
+    let result = tokio::task::spawn_blocking(devices::list)
+        .await
+        .map_err(|error| format!("Media-device inspection failed: {error}"))
+        .and_then(|result| result);
+    if let Err(error) = &result {
+        log::warn!("[media:devices] detection failed: {error}");
+    }
+    result
 }
 
 fn media_kind(path: &Path) -> Option<&'static str> {
