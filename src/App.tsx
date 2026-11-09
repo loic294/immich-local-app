@@ -33,11 +33,15 @@ import { MapsPage } from "./pages/MapsPage";
 import { MediaWorkflow } from "./components/Media/MediaWorkflow";
 import { ShortcutHost } from "./shortcuts/ShortcutHost";
 import type { MapFocus } from "./types/browsing";
-import { useI18n } from "./i18n";
+import { LocalFileApplyProgress } from "./components/Layout/LocalFileApplyProgress";
+import { ToastViewport } from "./components/Toasts/ToastViewport";
+import { useToastBridge } from "./toasts/useToastBridge";
+import { useActivityNavigationLog } from "./hooks/useActivityNavigationLog";
 
 export function App() {
-  const { t } = useI18n();
+  useToastBridge();
   const [activePage, setActivePage] = useState<AppPage>("photos");
+  useActivityNavigationLog(activePage);
   const [mapFocus, setMapFocus] = useState<MapFocus | null>(null);
   useEffect(() => {
     const openMap = (event: Event) => {
@@ -460,20 +464,9 @@ export function App() {
         }}
       />
       {isApplyingLocalFileChanges ? (
-        <div className="fixed bottom-4 right-4 z-50 w-72 rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
-          <p className="text-xs font-medium text-base-content mb-2">
-            {t("localChanges.applyingOverlay")}
-          </p>
-          <progress
-            className="progress progress-primary progress-sm w-full"
-            value={applyProgressDone}
-            max={Math.max(applyProgressTotal, 1)}
-          ></progress>
-          <p className="mt-1 text-[11px] text-base-content/70">
-            {applyProgressDone} / {applyProgressTotal}
-          </p>
-        </div>
+        <LocalFileApplyProgress done={applyProgressDone} total={applyProgressTotal} />
       ) : null}
+      <ToastViewport />
     </ConnectionProvider>
   );
 }

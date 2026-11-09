@@ -1,6 +1,8 @@
 import { useRef, type Dispatch, type SetStateAction } from "react";
 import { updateAssetFavorite } from "../../api/tauri";
+import { toast } from "../../toasts/toast";
 import type { AssetSummary } from "../../types";
+import { favoriteResultToasts } from "../../utils/favoriteToasts";
 
 type AssetOverrides = Record<string, Partial<AssetSummary>>;
 
@@ -81,6 +83,9 @@ export function useSelectionFavorite({
         requested: changing.length,
         failed,
       });
+      for (const request of favoriteResultToasts(makeFavorite, changing.length, failed)) {
+        toast.push(request);
+      }
     }
   };
 }

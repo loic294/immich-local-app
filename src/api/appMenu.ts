@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invoke";
 import type { AppMenuEntry } from "../shortcuts/appMenu";
 
 /** Emitted by the native menu with the id of the clicked item (which is a shortcut action id). */

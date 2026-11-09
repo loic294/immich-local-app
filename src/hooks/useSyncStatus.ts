@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../api/invoke";
+import { toast } from "../toasts/toast";
 
 export type SyncPreparationProgress = {
   stage: "people" | "albums";
@@ -23,6 +24,11 @@ export type SyncStatus = {
   preparation?: SyncPreparationProgress | null;
 };
 
+export type ManualSyncOptions = {
+  /** Report the outcome with a toast. Only user-initiated runs set this; automatic ones stay silent. */
+  announce?: boolean;
+};
+
 export type UseSyncStatusReturn = {
   syncStatus: SyncStatus | null;
   isSyncing: boolean;
@@ -30,9 +36,9 @@ export type UseSyncStatusReturn = {
   progress: number; // 0-100
   error: string | null;
   startSync: () => Promise<void>;
-  forceFullSync: () => Promise<void>;
+  forceFullSync: (options?: ManualSyncOptions) => Promise<void>;
   cancelSync: () => Promise<void>;
-  checkForNewAssets: () => Promise<boolean>; // Quick sync. Returns true if new assets found
+  checkForNewAssets: (options?: ManualSyncOptions) => Promise<boolean>; // Quick sync. Returns true if new assets found
 };
 
 const CHECK_STALE_TIMEOUT = 2 * 60 * 1000; // 2 minutes
@@ -110,27 +116,31 @@ export function useSyncStatus(): UseSyncStatusReturn {
     }
   }, [fetchSyncStatus]);
 
-  const forceFullSync = useCallback(async () => {
-    try {
-      setError(null);
-      console.info("[useSyncStatus] invoking force_full_asset_sync");
-      await invoke<SyncStatus>("force_full_asset_sync");
-      console.info("[useSyncStatus] force_full_asset_sync invoked successfully");
-      await fetchSyncStatus();
-      window.dispatchEvent(new Event(SYNC_STATUS_CHANGED));
-    } catch (err) {
-      let message = "Unknown error forcing full sync";
-      if (err instanceof Error) {
-        message = err.message;
-      } else if (typeof err === "string") {
-        message = err;
-      } else if (typeof err === "object" && err !== null && "message" in err) {
-        message = String((err as any).message);
+  const forceFullSync = useCallback(
+    async (options?: ManualSyncOptions) => {
+      try {
+        setError(null);
+        console.info("[useSyncStatus] invoking force_full_asset_sync");
+        await invoke<SyncStatus>("force_full_asset_sync");
+        console.info("[useSyncStatus] force_full_asset_sync invoked successfully");
+        await fetchSyncStatus();
+        window.dispatchEvent(new Event(SYNC_STATUS_CHANGED));
+        if (options?.announce) toast.info("sync.fullStarted");
+      } catch (err) {
+        let message = "Unknown error forcing full sync";
+        if (err instanceof Error) {
+          message = err.message;
+        } else if (typeof err === "string") {
+          message = err;
+        } else if (typeof err === "object" && err !== null && "message" in err) {
+          message = String((err as any).message);
+        }
+        console.error("Force full sync error:", err);
+        setError(message);
       }
-      console.error("Force full sync error:", err);
-      setError(message);
-    }
-  }, [fetchSyncStatus]);
+    },
+    [fetchSyncStatus],
+  );
 
   // Cancel an in-progress full sync. Progress already persisted is kept so the
   // sync can be resumed later.
@@ -156,45 +166,54 @@ export function useSyncStatus(): UseSyncStatusReturn {
   }, [fetchSyncStatus]);
 
   // Check for new assets
-  const checkForNewAssets = useCallback(async (): Promise<boolean> => {
-    try {
-      setError(null);
-      const previousTotal = syncStatus?.totalAssets ?? 0;
-      console.info("[useSyncStatus] invoking check_for_new_assets", {
-        previousTotal,
-      });
+  const checkForNewAssets = useCallback(
+    async (options?: ManualSyncOptions): Promise<boolean> => {
+      try {
+        setError(null);
+        const previousTotal = syncStatus?.totalAssets ?? 0;
+        console.info("[useSyncStatus] invoking check_for_new_assets", {
+          previousTotal,
+        });
 
-      const result = await invoke<SyncStatus>("check_for_new_assets");
-      console.info("[useSyncStatus] check_for_new_assets resolved", {
-        returnedTotal: result.totalAssets,
-        returnedCheckStatus: result.checkStatus,
-      });
+        const result = await invoke<SyncStatus>("check_for_new_assets");
+        console.info("[useSyncStatus] check_for_new_assets resolved", {
+          returnedTotal: result.totalAssets,
+          returnedCheckStatus: result.checkStatus,
+        });
 
-      // Fetch updated status
-      await fetchSyncStatus();
-      // Return true if new assets were found (total increased)
-      return result.totalAssets > previousTotal;
-    } catch (err) {
-      let message = "Unknown error checking for new assets";
-      if (err instanceof Error) {
-        message = err.message;
-      } else if (typeof err === "string") {
-        message = err;
-      } else if (typeof err === "object" && err !== null && "message" in err) {
-        message = String((err as any).message);
-      }
-      // A transient "offline:" marker just means the server was unreachable for
-      // this quick check. The local cache is intact and the offline UI handles
-      // connectivity, so don't surface it as a hard error in the sync card.
-      if (message.startsWith("offline:")) {
-        console.warn("[useSyncStatus] quick sync skipped (offline)");
+        // Fetch updated status
+        await fetchSyncStatus();
+        // Return true if new assets were found (total increased)
+        const foundNew = result.totalAssets > previousTotal;
+        if (options?.announce) {
+          if (foundNew) toast.success("sync.newPhotos");
+          else toast.info("sync.upToDate");
+        }
+        return foundNew;
+      } catch (err) {
+        let message = "Unknown error checking for new assets";
+        if (err instanceof Error) {
+          message = err.message;
+        } else if (typeof err === "string") {
+          message = err;
+        } else if (typeof err === "object" && err !== null && "message" in err) {
+          message = String((err as any).message);
+        }
+        // A transient "offline:" marker just means the server was unreachable for
+        // this quick check. The local cache is intact and the offline UI handles
+        // connectivity, so don't surface it as a hard error in the sync card.
+        if (message.startsWith("offline:")) {
+          console.warn("[useSyncStatus] quick sync skipped (offline)");
+          if (options?.announce) toast.warning("connection.lost");
+          return false;
+        }
+        console.error("Check error:", err);
+        setError(message);
         return false;
       }
-      console.error("Check error:", err);
-      setError(message);
-      return false;
-    }
-  }, [fetchSyncStatus, syncStatus?.totalAssets]);
+    },
+    [fetchSyncStatus, syncStatus?.totalAssets],
+  );
 
   // Wake every mounted sync display when another view starts or cancels a run.
   useEffect(() => {

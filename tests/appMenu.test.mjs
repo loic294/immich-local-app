@@ -196,3 +196,55 @@ test("the menu event and command names agree across Rust, the bridge, and the co
   assert.match(main, /app_menu::update_app_menu/, "command is not registered");
   assert.match(main, /app_menu::install\(tauri::Builder::default\(\)\)/, "menu is not installed");
 });
+
+test("the Activity Log is a Rust-handled system item in the Help menu, not a bindable action", () => {
+  assert.ok(submenuIds.includes("menu.help"), "menu.help is missing from the frontend contract");
+  assert.ok(systemIds.includes("system.activityLog"), "system.activityLog is not a system item");
+  assert.ok(!actionIds.includes("system.activityLog"), "the log must not be a bindable action");
+
+  const handler = rust.slice(rust.indexOf("fn on_menu_event"));
+  const opensLog = handler.indexOf("activity_window::open_in_background");
+  const forwardsActions = handler.indexOf("!is_action_id(id)");
+  assert.ok(opensLog > 0, "on_menu_event does not open the Activity Log window");
+  assert.ok(forwardsActions > opensLog, "the log must open without involving the main window");
+});
+
+test("every locale labels each native menu submenu and system item", () => {
+  const source = read("../src/i18n/shortcuts.ts");
+  const occurrences = (id) => source.split(`"${id}":`).length - 1;
+  const locales = occurrences("menu.photos");
+  assert.ok(locales >= 2, "expected at least the en-CA and fr-CA menu labels");
+  for (const id of [...submenuIds, ...systemIds]) {
+    assert.equal(occurrences(id), locales, `${id} is not labelled in every locale`);
+  }
+});
+
+test("the Activity Log commands the frontend invokes are registered in main.rs", () => {
+  const main = read("../src-tauri/src/main.rs");
+  const start = main.indexOf("generate_handler![");
+  assert.ok(start > 0, "the invoke handler list is missing from main.rs");
+  const handlers = main.slice(start, main.indexOf("])", start));
+  const registered = new Set(
+    [...handlers.matchAll(/(?:[A-Za-z_]+::)*([a-z_]+)\s*(?:,|$)/g)].map((match) => match[1]),
+  );
+
+  const sources = ["../src/api/activityLog.ts", "../src/utils/activityLogSink.ts"]
+    .map(read)
+    .join("\n");
+  const invoked = new Set(
+    [...sources.matchAll(/\binvoke(?:<[^>]*>)?\(\s*"([a-z_]+)"/g)].map((match) => match[1]),
+  );
+  for (const command of [
+    "get_activity_log_entries",
+    "get_activity_log_history",
+    "get_activity_log_info",
+    "record_frontend_activity",
+    "set_activity_log_verbose",
+    "clear_activity_log",
+  ]) {
+    assert.ok(invoked.has(command), `${command} is no longer invoked by the frontend`);
+  }
+  for (const command of invoked) {
+    assert.ok(registered.has(command), `${command} is not registered in main.rs`);
+  }
+});

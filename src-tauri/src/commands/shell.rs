@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::services::activity_log;
+use crate::services::http_log::SLOW_TRANSFER_MS;
 use crate::services::storage::VideoQuality;
 use crate::AppState;
 use serde::Serialize;
@@ -332,6 +334,8 @@ pub async fn copy_assets_to_local_folder_internal(
         let dest_path = resolve_destination_path(&destination_name, &destination, &mut used_names);
         let progress_app = app.clone();
         let progress_asset_id = details.id.clone();
+        let download_span = activity_log::span("local-copy", format!("download {}", details.id))
+            .slow_after(SLOW_TRANSFER_MS);
         match client
             .download_asset_to_path(
                 &details.id,
@@ -368,6 +372,9 @@ pub async fn copy_assets_to_local_folder_internal(
                     tracked_kind
                 );
                 let (mtime_ms, size_bytes) = get_file_snapshot(&dest_path);
+                download_span.finish_transfer(
+                    size_bytes.and_then(|size| u64::try_from(size).ok()).unwrap_or(0),
+                );
                 if let Err(err) = state.db.upsert_local_saved_asset(
                     &details.id,
                     album_id,
@@ -414,6 +421,7 @@ pub async fn copy_assets_to_local_folder_internal(
                 continue;
             }
             Err(err) => {
+                download_span.fail(&err);
                 // Clean up any partial/empty file left at the destination.
                 let _ = fs::remove_file(&dest_path);
                 used_names.remove(

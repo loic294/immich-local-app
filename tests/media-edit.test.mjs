@@ -185,11 +185,16 @@ test("pending imports retain exact completed job lookup and can retry image-load
 async function workflowHarness(dependencies = {}) {
   const effects = [];
   const stateWrites = [];
+  const toasts = [];
   globalThis.__editHooks = {
     useRef: (current) => ({ current }),
     useState: (initial) => [initial, (value) => stateWrites.push(value)],
     useCallback: (fn) => fn,
     useEffect: (fn) => effects.push(fn),
+  };
+  globalThis.__editToast = {
+    success: (key, params) => toasts.push(["success", key, params]),
+    error: (key, params) => toasts.push(["error", key, params]),
   };
   globalThis.__editApi = {
     ...api,
@@ -221,6 +226,12 @@ async function workflowHarness(dependencies = {}) {
       "const useMediaLabels = () => ({editFailed: 'launch failed'});",
     )
     .replace(/import \{ useSessionReplay \}[^;]+;/, "const useSessionReplay = () => {};")
+    .replace(
+      /import \{ useMediaErrorToast \}[^;]+;/,
+      "const useMediaErrorToast = () => ({report() {}, clear() {}});",
+    )
+    .replace(/import \{ useDockInset \}[^;]+;/, "const useDockInset = () => {};")
+    .replace(/import \{ toast \}[^;]+;/, "const toast = globalThis.__editToast;")
     .replace(/import \{ ImportDialog \}[^;]+;/, "const ImportDialog = () => null;");
   module =
     "const _jsx = (type, props) => ({type, props}), _jsxs = _jsx, _Fragment = 'fragment';\n" +
@@ -230,7 +241,7 @@ async function workflowHarness(dependencies = {}) {
   MediaWorkflow({ enabled: true, page: "photos" });
   const cleanup = effects.map((effect) => effect()).filter((value) => typeof value === "function");
   await settle();
-  return { stateWrites, cleanup: () => cleanup.forEach((fn) => fn()) };
+  return { stateWrites, toasts, cleanup: () => cleanup.forEach((fn) => fn()) };
 }
 
 test("watched sidecar detection ends editing automatically and prepares the import preview", async () => {
@@ -316,6 +327,7 @@ test("import completes after stack and exact image load, without any fullscreen 
   await settle();
   assert.equal(api.getMediaEditState().imports.original, undefined);
   assert.equal(events[0].assetId, "edited");
+  assert.deepEqual(harness.toasts, [["success", "media.editImported", undefined]]);
   harness.cleanup();
   window.removeEventListener("media:open-version", listener);
 });

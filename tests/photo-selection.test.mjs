@@ -6,6 +6,14 @@ import ts from "typescript";
 
 const compiled = new Map();
 const jsx = (type, props) => ({ type, props });
+const noop = () => {};
+// Toasts are covered by tests/toasts.test.mjs; the grid only needs them to be callable here.
+const toastDouble = {
+  toast: { success: noop, info: noop, warning: noop, error: noop, push: noop, dismiss: noop },
+};
+const favoriteToastsDouble = {
+  singleFavoriteToast: () => ({ kind: "success", key: "asset.favorited" }),
+};
 const i18n = {
   useI18n: () => ({
     t: (key, params) => (params?.name ? `${key}:${params.name}` : key),
@@ -109,6 +117,8 @@ function mountGrid() {
     "../../api/deletion": {},
     "../../i18n": i18n,
     "../../hooks/useSettings": { useSettings: () => ({ data: {} }) },
+    "../../toasts/toast": toastDouble,
+    "../../utils/favoriteToasts": favoriteToastsDouble,
     "./photoGridUtils": {
       isVideoAsset: (asset) => asset.type === "VIDEO",
       getAssetAspectRatio: () => 1.5,

@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createAlbumWithAssets } from "../api/tauri";
 import { useAlbumManagementLabels } from "../i18n/albumManagement";
+import { toast } from "../toasts/toast";
 import { useConnectionContext } from "./connectionContext";
 
 interface UseAlbumCreateOptions {
@@ -42,6 +43,7 @@ export function useAlbumCreate({ onCreated }: UseAlbumCreateOptions) {
         console.info("[album-create] success", { albumId: album.id });
         await queryClient.invalidateQueries({ queryKey: ["albums"] });
         setIsOpen(false);
+        toast.success("album.created", { name: album.albumName || albumName });
         onCreated(album.id);
       } catch (failure) {
         console.error("[album-create] failed", { failure });

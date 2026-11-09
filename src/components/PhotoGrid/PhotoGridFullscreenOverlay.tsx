@@ -38,6 +38,7 @@ import { requestFixTime } from "../../api/time";
 import { useSearchTimeI18n } from "../../i18n/searchTime";
 import { useMediaLabels } from "../../i18n/media";
 import { isMacPlatform } from "../../utils/platform";
+import { toast } from "../../toasts/toast";
 
 interface PhotoGridFullscreenOverlayProps {
   activeAsset: AssetSummary;
@@ -237,6 +238,7 @@ export function PhotoGridFullscreenOverlay({
       }
 
       setDownloadProgress(100);
+      toast.success("asset.copiedToFolder", { count: 1 });
 
       setCacheRefreshNonce((value) => value + 1);
       console.info("[asset-status:download] refreshing saved-file status", {
@@ -279,6 +281,7 @@ export function PhotoGridFullscreenOverlay({
         setRemovalConfirmation(null);
         onLocalOriginalRemoved(assetId);
         setCacheRefreshNonce((value) => value + 1);
+        toast.success("asset.localOriginalRemoved");
       }
     } catch (error) {
       console.error("[local-original:remove] failed", { assetId, error });

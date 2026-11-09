@@ -1,3 +1,4 @@
+pub mod activity_log;
 pub mod albums;
 pub mod album_local_status;
 pub mod album_statistics;

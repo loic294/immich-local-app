@@ -9,6 +9,7 @@ import {
   getShareableUsers,
   removeUserFromAlbum,
 } from "../../api/tauri";
+import { toast } from "../../toasts/toast";
 import type { AlbumShareUser, AlbumUserCandidate } from "../../types";
 
 interface AlbumShareModalProps {
@@ -127,6 +128,7 @@ export function AlbumShareModal({ open, albumId, albumName, onClose }: AlbumShar
       setShareLink(link);
       await copyTextToClipboard(link);
       setLinkCopied(true);
+      toast.success("share.linkCopied");
     } catch (createError) {
       const message =
         createError instanceof Error ? createError.message : "Could not create album share link";
@@ -147,6 +149,7 @@ export function AlbumShareModal({ open, albumId, albumName, onClose }: AlbumShar
     try {
       await copyTextToClipboard(shareLink);
       setLinkCopied(true);
+      toast.success("share.linkCopied");
     } catch (copyError) {
       const message = copyError instanceof Error ? copyError.message : "Could not copy link";
       setError(message);
@@ -182,6 +185,7 @@ export function AlbumShareModal({ open, albumId, albumName, onClose }: AlbumShar
       await refreshSharedUsers();
       setSelectedUserId("");
       setUserEmailInput("");
+      toast.success("album.userAdded");
     } catch (addError) {
       const message = addError instanceof Error ? addError.message : "Could not add user";
       setError(message);
@@ -196,6 +200,7 @@ export function AlbumShareModal({ open, albumId, albumName, onClose }: AlbumShar
     try {
       await removeUserFromAlbum(albumId, userId);
       await refreshSharedUsers();
+      toast.success("album.userRemoved");
     } catch (removeError) {
       const message = removeError instanceof Error ? removeError.message : "Could not remove user";
       setError(message);

@@ -156,12 +156,18 @@ test("starting or cancelling sync wakes other mounted displays without starting 
           useEffect: (effect) => effects.push(effect),
         };
       }
-      if (name === "@tauri-apps/api/core") {
+      if (name === "../api/invoke") {
         return {
           invoke: async (command) => {
             calls.push(command);
             return current;
           },
+        };
+      }
+      if (name === "../toasts/toast") {
+        const ignore = () => {};
+        return {
+          toast: { success: ignore, info: ignore, warning: ignore, error: ignore, dismiss: ignore },
         };
       }
       return require(name);

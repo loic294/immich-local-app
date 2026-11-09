@@ -16,9 +16,11 @@ const { outputText } = ts.transpileModule(source, {
   },
 });
 
-function renderActions(props) {
+function renderActions(props, { clipboardError } = {}) {
   const calls = [];
   const updates = [];
+  const toasts = [];
+  const record = (kind) => (key, params) => toasts.push([kind, key, params]);
   const jsx = (type, props) => ({ type, props });
   const t = (key) => key;
   const modules = {
@@ -30,9 +32,22 @@ function renderActions(props) {
     "../../i18n": { useI18n: () => ({ t }) },
     "../../i18n/searchTime": { useSearchTimeI18n: () => t },
     "../../i18n/albumPicker": { useAlbumPickerLabels: () => ({}) },
+    "../../toasts/toast": {
+      toast: {
+        success: record("success"),
+        info: record("info"),
+        warning: record("warning"),
+        error: record("error"),
+        push: ({ kind, key, params }) => record(kind)(key, params),
+        dismiss() {},
+      },
+    },
     "./useSelectionActionShortcuts": { useSelectionActionShortcuts: () => {} },
     "../../api/tauri": {
-      copyAssetsToClipboard: async (ids) => calls.push(["clipboard", ids]),
+      copyAssetsToClipboard: async (ids) => {
+        calls.push(["clipboard", ids]);
+        if (clipboardError) throw clipboardError;
+      },
       getSettings: async () => {
         calls.push(["folder"]);
         return { userLocalFolderPath: "" };
@@ -65,7 +80,7 @@ function renderActions(props) {
     querySelector: () => summary,
   };
   menu.props.ref.current = element;
-  return { menu, buttons, element, calls, updates };
+  return { menu, buttons, element, calls, updates, toasts };
 }
 
 for (const variant of ["topbar", "preview"]) {
@@ -116,4 +131,37 @@ test("share menu retains internal keyboard focus and dismisses on outside focus 
   menu.props.onKeyDown({ key: "Escape", stopPropagation() {} });
   assert.equal(element.open, false);
   assert.deepEqual(calls, [["focus"]]);
+});
+
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+// Params are created inside the vm context, so copy them into this realm before comparing.
+const plain = (toasts) => toasts.map(([kind, key, params]) => [kind, key, params && { ...params }]);
+
+test("copying images to the clipboard announces how many were copied", async () => {
+  const { buttons, calls, toasts } = renderActions({
+    selectedAssetIds: ["a", "b", "c"],
+    selectedCount: 3,
+  });
+  buttons[1].props.onClick();
+  await settle();
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["clipboard"],
+  );
+  assert.deepEqual(plain(toasts), [["success", "asset.copiedToClipboard", { count: 3 }]]);
+});
+
+test("a failed clipboard copy keeps the inline error and adds one error toast", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const { buttons, toasts, updates } = renderActions(
+    {},
+    { clipboardError: new Error("Clipboard unavailable") },
+  );
+  buttons[1].props.onClick();
+  await settle();
+  assert.ok(
+    updates.some((value) => typeof value === "string"),
+    "the existing inline error stays",
+  );
+  assert.deepEqual(plain(toasts), [["error", "asset.copyFailed", undefined]]);
 });

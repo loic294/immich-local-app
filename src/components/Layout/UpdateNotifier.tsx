@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Download, RefreshCw, X } from "lucide-react";
 import type { UseAppUpdateResult } from "../../hooks/useAppUpdate";
 import { useI18n } from "../../i18n";
+import { useDockInset } from "../../toasts/dockInset";
 
 interface UpdateNotifierProps {
   update: UseAppUpdateResult;
@@ -16,6 +17,8 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
   const { t } = useI18n();
   const [dismissed, setDismissed] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useDockInset(containerRef);
 
   const showDownloading = update.status === "downloading";
   const showReady = update.status === "ready" && !dismissed;
@@ -25,7 +28,7 @@ export function UpdateNotifier({ update }: UpdateNotifierProps) {
   }
 
   return (
-    <div className="toast toast-end toast-bottom z-50">
+    <div ref={containerRef} className="toast toast-end toast-bottom z-50">
       {showDownloading ? (
         <div className="alert border border-base-300 bg-base-200 text-base-content shadow-lg">
           <Download size={18} className="shrink-0 text-primary" />

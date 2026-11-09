@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invoke";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { deleteAsset } from "./deletion";
 import { ThumbnailQueue, type ThumbnailRequestOptions } from "./thumbnailQueue";

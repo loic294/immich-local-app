@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "activity-log-capability",
+  "description": "Activity Log window permissions",
+  "windows": ["activity-log"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-set-title",
+    "log:default"
+  ]
+}

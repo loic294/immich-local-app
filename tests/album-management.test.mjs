@@ -97,6 +97,24 @@ const labels = {
 const labelsDouble = { useAlbumManagementLabels: () => labels };
 const album = { id: "album-1", albumName: "Holiday", shared: false };
 
+// Records `[kind, key, params]` for every toast the code under test raises.
+function recordToasts(log) {
+  const record = (kind) => (key, params) => {
+    log.push([kind, key, params]);
+    return 1;
+  };
+  return {
+    toast: {
+      success: record("success"),
+      info: record("info"),
+      warning: record("warning"),
+      error: record("error"),
+      push: ({ kind, key, params }) => record(kind)(key, params),
+      dismiss: () => {},
+    },
+  };
+}
+
 test("rename and delete invoke their native commands and announce the change", async () => {
   const requests = [];
   const events = [];
@@ -104,7 +122,7 @@ test("rename and delete invoke their native commands and announce the change", a
   globalThis.window = { dispatchEvent: (event) => events.push(event) };
   try {
     const api = load("src/api/albumManagement.ts", {
-      "@tauri-apps/api/core": {
+      "./invoke": {
         invoke: async (command, payload) => {
           requests.push({ command, payload });
           return command === "rename_album" ? "Saved name" : undefined;
@@ -132,7 +150,7 @@ test("a rejected rename or delete does not announce a change", async () => {
   globalThis.window = { dispatchEvent: (event) => events.push(event) };
   try {
     const api = load("src/api/albumManagement.ts", {
-      "@tauri-apps/api/core": {
+      "./invoke": {
         invoke: async () => {
           throw new Error("offline: no server");
         },
@@ -165,8 +183,10 @@ function mountHook({ isOnline = true, rename, remove } = {}) {
   const cacheWrites = [];
   const removedQueries = [];
   const deleted = [];
+  const toasts = [];
   const { useAlbumManagement } = load("src/hooks/useAlbumManagement.ts", {
     react: host.hooks,
+    "../toasts/toast": recordToasts(toasts),
     "@tanstack/react-query": {
       useQueryClient: () => ({
         setQueryData: (queryKey, updater) => cacheWrites.push({ queryKey, updater }),
@@ -192,6 +212,7 @@ function mountHook({ isOnline = true, rename, remove } = {}) {
     cacheWrites,
     removedQueries,
     deleted,
+    toasts,
     state: () => host.run(() => useAlbumManagement(album, (albumId) => deleted.push(albumId))),
   };
 }
@@ -214,6 +235,7 @@ test("a confirmed delete drops the album from every cache and closes the dialog"
 
   assert.deepEqual(hook.apiCalls, [{ command: "delete", albumId: "album-1" }]);
   assert.deepEqual(hook.deleted, ["album-1"]);
+  assert.deepEqual(hook.toasts, [["success", "album.deleted", { name: "Holiday" }]]);
   const [write] = hook.cacheWrites;
   assert.deepEqual(write.queryKey, ["albums"]);
   assert.deepEqual(write.updater([{ id: "album-1" }, { id: "album-2" }]), [{ id: "album-2" }]);
@@ -247,6 +269,7 @@ test("a failed delete keeps the dialog open and leaves every cache alone", async
     assert.deepEqual(hook.deleted, []);
     assert.deepEqual(hook.cacheWrites, []);
     assert.deepEqual(hook.removedQueries, []);
+    assert.deepEqual(hook.toasts, [], "the dialog's inline error is the only report");
   }
 });
 
@@ -272,6 +295,7 @@ test("a rename caches the server-confirmed name on that album only", async (t) =
     ],
   );
   assert.equal(hook.state().dialog, null);
+  assert.deepEqual(hook.toasts, [["success", "album.renamed", { name: "Holiday 2024" }]]);
 });
 
 test("a failed rename keeps the modal open with a localized error", async (t) => {
@@ -294,6 +318,7 @@ test("a failed rename keeps the modal open with a localized error", async (t) =>
     const state = hook.state();
     assert.deepEqual([state.dialog, state.busy, state.error], ["rename", false, message]);
     assert.deepEqual(hook.cacheWrites, []);
+    assert.deepEqual(hook.toasts, [], "the modal's inline error is the only report");
   }
 });
 

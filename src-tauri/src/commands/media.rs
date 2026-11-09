@@ -1,3 +1,5 @@
+use crate::services::activity_log;
+use crate::services::http_log::SLOW_TRANSFER_MS;
 use crate::services::media::{file_hash, EditorJob, MediaPreferences, UploadJob};
 use crate::AppState;
 use rusqlite::params;
@@ -10,6 +12,9 @@ use tauri::Manager;
 
 #[path = "media/edit_owner.rs"]
 mod edit_owner;
+
+/// An external editor export legitimately takes a few seconds; only flag it beyond this.
+const SLOW_EDIT_RENDER_MS: u64 = 15_000;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -528,6 +533,8 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
                 .db
                 .set_media_upload_state(&job.id, "uploading", None)?;
             log::info!("[media:upload] uploading job={}", job.id);
+            let upload_span = activity_log::span("media", format!("upload job {}", job.id))
+                .slow_after(SLOW_TRANSFER_MS);
             let result:Result<(),String>=async {
             let (job,client)=edit_owner::route_edit_to_owner(state,job.clone(),client.clone(),&session.server_url).await?;
             let id=match job.server_asset_id.clone() {
@@ -588,6 +595,7 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
                 params![chrono::Utc::now().to_rfc3339(),job.id]).map_err(|e|e.to_string())?;
             Ok(())
         }.await;
+            upload_span.finish_result(&result);
             match result {
                 Ok(()) => {
                     done += 1;
@@ -706,6 +714,8 @@ async fn render_edit_preview(
     log::info!("[media:edit-preview] rendering original={}", job.asset_id);
     let mut command = tokio::process::Command::new(&preferences.editor_executable);
     crate::services::background_process::configure(command.as_std_mut());
+    let render_span = activity_log::span("media", format!("render edit preview {}", job.asset_id))
+        .slow_after(SLOW_EDIT_RENDER_MS);
     let result = async {
         let mut child = command.args(args).kill_on_drop(true).spawn()
             .map_err(|e| format!("Could not execute export command: {e}"))?;
@@ -722,6 +732,7 @@ async fn render_edit_preview(
         }
         Ok(())
     }.await;
+    render_span.finish_result(&result);
     if let Err(error) = result {
         let _ = std::fs::remove_file(&output);
         log::error!("[media:edit-preview] failed original={}: {error}", job.asset_id);

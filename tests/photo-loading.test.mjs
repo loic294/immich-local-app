@@ -21,7 +21,7 @@ function loadApi(invoke) {
     return exports;
   };
   const mockRequire = (name) => {
-    if (name === "@tauri-apps/api/core") return { invoke };
+    if (name === "./invoke") return { invoke };
     if (name === "@tauri-apps/api/webview") return {};
     if (name === "./deletion") return {};
     if (name === "./thumbnailQueue") return load("../src/api/thumbnailQueue.ts");

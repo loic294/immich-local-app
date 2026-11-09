@@ -20,8 +20,11 @@ import {
   type UploadJob,
 } from "../../api/media";
 import { useConnectionContext } from "../../hooks/connectionContext";
+import { useMediaErrorToast } from "../../hooks/useMediaErrorToast";
 import { useMediaLabels } from "../../i18n/media";
 import { useSessionReplay } from "../../hooks/useSessionReplay";
+import { useDockInset } from "../../toasts/dockInset";
+import { toast } from "../../toasts/toast";
 import { ImportDialog } from "./ImportDialog";
 import { getAssetThumbnail } from "../../api/tauri";
 import { preloadImage } from "../PhotoGrid/photoGridUtils";
@@ -39,7 +42,9 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   const [mountedDevice, setMountedDevice] = useState<string | null>(null);
   const [changes, setChanges] = useState<EditorJob[]>([]);
   const [uploads, setUploads] = useState<UploadJob[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const mediaErrors = useMediaErrorToast();
+  const queueButtonsRef = useRef<HTMLDivElement>(null);
+  useDockInset(queueButtonsRef);
   const [busy, setBusy] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const deviceRoots = useRef<Set<string> | null>(null);
@@ -118,6 +123,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
               `[media:edit-import] stack and image ready original=${id} version=${version.id}`,
             );
             updateEditImport(id, null);
+            toast.success("media.editImported");
             imageWaitStarted.current.delete(job.id);
             setUploads((pending) => pending.filter((item) => item.id !== job.id));
           })
@@ -166,13 +172,15 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
     try {
       const count = await flushMediaUploads();
       await refresh(count > 0);
+      mediaErrors.clear("flush");
     } catch (error) {
       console.error("[media:queue] flush failed", error);
-      if (!String(error).startsWith("offline:")) setError(String(error));
+      const message = String(error);
+      if (!message.startsWith("offline:")) mediaErrors.report("flush", message);
     } finally {
       flushing.current = false;
     }
-  }, [refresh]);
+  }, [refresh, mediaErrors]);
   const inspect = useCallback(async () => {
     if (scanning.current) return;
     scanning.current = true;
@@ -218,13 +226,14 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
         setChanges(previews.filter((job) => !getMediaEditState().imports[job.assetId]));
       }
       updateUploads(jobs);
+      mediaErrors.clear("scan");
     } catch (error) {
       console.error("[media:scan] inspection failed", error);
-      setError(String(error));
+      mediaErrors.report("scan", String(error));
     } finally {
       scanning.current = false;
     }
-  }, [updateUploads]);
+  }, [updateUploads, mediaErrors]);
   useEffect(() => {
     if (!enabled) return;
     void inspect();
@@ -279,7 +288,6 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
         return;
       if (getMediaEditState().phase !== "launching" || launchedSession.current) return;
       launchedSession.current = true;
-      setError(null);
       console.info("[media:editor] launching session", detail.assetIds.length);
       void beginMediaEdit(detail.assetIds)
         .then((originalIds) => {
@@ -291,7 +299,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
           console.error("[media:editor] launch failed", error);
           updateMediaEditState({ phase: "idle", assetIds: [] });
           launchedSession.current = false;
-          setError(`${labels.editFailed} ${String(error)}`);
+          toast.error("media.error", { message: `${labels.editFailed} ${String(error)}` });
         });
     };
     const importing = () => setImportRoot(null);
@@ -309,7 +317,6 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
     if (importingEdits.current) return;
     importingEdits.current = true;
     setBusy(true);
-    setError(null);
     const selected = changes;
     for (const job of selected)
       updateEditImport(job.assetId, {
@@ -338,7 +345,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
       await flush();
     } catch (error) {
       console.error("[media:export] failed", error);
-      setError(String(error));
+      toast.error("media.error", { message: String(error) });
       // Partial batch exports may already be queued; never re-export those edits.
       await refresh(false).catch((error) =>
         console.error("[media:export] queue refresh failed", error),
@@ -357,21 +364,11 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
   if (!enabled) return null;
   return (
     <>
-      <div className="fixed bottom-3 right-3 z-[10020] flex gap-2">
-        {uploads.length > 0 && (
+      {uploads.length > 0 && (
+        <div ref={queueButtonsRef} className="fixed bottom-3 right-3 z-[10020] flex gap-2">
           <button className="btn btn-sm btn-warning" onClick={() => setShowQueue(true)}>
             {labels.queue} ({uploads.length})
           </button>
-        )}
-      </div>
-      {error && (
-        <div role="alert" className="toast toast-end z-[10050]">
-          <div className="alert alert-error max-w-xl">
-            <span>{error}</span>
-            <button className="btn btn-sm" onClick={() => setError(null)}>
-              {labels.close}
-            </button>
-          </div>
         </div>
       )}
       {mountedDevice && (
@@ -520,7 +517,7 @@ export function MediaWorkflow({ enabled, page }: MediaWorkflowProps) {
                     .then(flush)
                     .catch((error) => {
                       console.error("[media:queue] retry failed", error);
-                      setError(String(error));
+                      toast.error("media.error", { message: String(error) });
                     })
                     .finally(() => setBusy(false));
                 }}

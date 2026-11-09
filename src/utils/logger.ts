@@ -1,21 +1,10 @@
 import { debug, error, info, trace, warn } from "@tauri-apps/plugin-log";
+import { stringifyArg } from "./stringifyArg";
+
+export { stringifyArg };
 
 type ConsoleMethod = "log" | "debug" | "info" | "warn" | "error";
 type PluginLogger = (message: string) => Promise<void>;
-
-function stringifyArg(arg: unknown): string {
-  if (typeof arg === "string") {
-    return arg;
-  }
-  if (arg instanceof Error) {
-    return `${arg.name}: ${arg.message}${arg.stack ? `\n${arg.stack}` : ""}`;
-  }
-  try {
-    return JSON.stringify(arg);
-  } catch {
-    return String(arg);
-  }
-}
 
 function forwardConsole(method: ConsoleMethod, logger: PluginLogger): void {
   const original = console[method].bind(console);
@@ -52,14 +41,11 @@ export function setupFileLogging(): void {
 
   // Capture otherwise-unhandled frontend failures in the log file too.
   window.addEventListener("error", (event) => {
-    const detail =
-      event.error instanceof Error ? stringifyArg(event.error) : event.message;
+    const detail = event.error instanceof Error ? stringifyArg(event.error) : event.message;
     void error(`[window.onerror] ${detail}`).catch(() => {});
   });
   window.addEventListener("unhandledrejection", (event) => {
-    void error(`[unhandledrejection] ${stringifyArg(event.reason)}`).catch(
-      () => {},
-    );
+    void error(`[unhandledrejection] ${stringifyArg(event.reason)}`).catch(() => {});
   });
 
   void trace("[logging] frontend console logging attached to file targets");

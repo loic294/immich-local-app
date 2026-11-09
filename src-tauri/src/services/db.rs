@@ -2244,7 +2244,9 @@ impl Database {
     }
 
     pub(crate) fn open(&self) -> Result<Connection, String> {
-        Connection::open(&self.db_path).map_err(|err| err.to_string())
+        let mut conn = Connection::open(&self.db_path).map_err(|err| err.to_string())?;
+        super::db_profile::install(&mut conn);
+        Ok(conn)
     }
 
     pub fn upsert_assets(&self, account_id: &str, assets: &[AssetSummary]) -> Result<(), String> {

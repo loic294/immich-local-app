@@ -31,7 +31,7 @@ export function SyncStatusCard() {
   const handleAction = async () => {
     // Quick sync only: check for and pull in recent new assets. A full library
     // re-scan is available from Settings ("Force Full Sync").
-    await checkForNewAssets();
+    await checkForNewAssets({ announce: true });
   };
 
   return (

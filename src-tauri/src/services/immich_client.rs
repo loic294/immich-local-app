@@ -12,6 +12,9 @@ use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
+use super::activity_log;
+use super::http_log::{LoggedClient, SLOW_TRANSFER_MS};
+
 const IMMICH_API_KEY_HEADER: &str = "x-api-key";
 
 /// Byte-level progress for a single video playback download, emitted as the
@@ -227,7 +230,8 @@ pub struct AuthSession {
 }
 
 pub struct ImmichClient {
-    pub(crate) client: reqwest::Client,
+    /// Every request through this client is recorded in the activity log.
+    pub(crate) client: LoggedClient,
     cookie_jar: Arc<reqwest::cookie::Jar>,
     pub(crate) session: Mutex<Option<AuthSession>>,
     playback_downloads: Arc<Mutex<HashSet<String>>>,
@@ -251,7 +255,7 @@ impl ImmichClient {
             .expect("failed to initialize HTTP client");
 
         Self {
-            client,
+            client: LoggedClient::new(client),
             cookie_jar,
             session: Mutex::new(None),
             playback_downloads: Arc::new(Mutex::new(HashSet::new())),
@@ -2662,6 +2666,8 @@ impl ImmichClient {
         // underneath it, so serving a partially-written file makes playback stall
         // on the buffered frames. Awaiting the full download guarantees the path
         // we return points at a complete, playable file.
+        let download_span = activity_log::span("video", format!("download video {asset_id}"))
+            .slow_after(SLOW_TRANSFER_MS);
         let result = self
             .download_playback_to_cache(
                 &session.access_token,
@@ -2673,6 +2679,11 @@ impl ImmichClient {
                 quality,
             )
             .await;
+        match &result {
+            Ok(path) => download_span
+                .finish_transfer(fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)),
+            Err(err) => download_span.fail(err),
+        }
 
         {
             let mut downloads = self.playback_downloads.lock().await;

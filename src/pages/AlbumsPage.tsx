@@ -30,6 +30,7 @@ import { useConnectionContext } from "../hooks/connectionContext";
 import type { Session } from "../hooks/useSession";
 import { criteriaWithQuery, type AlbumSummary, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
+import { toast } from "../toasts/toast";
 import { deleteAssets } from "../api/deletion";
 import {
   addAssetsToAlbum,
@@ -339,6 +340,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
         "folderPath=",
         result.folderPath,
       );
+      toast.success("album.savedLocally", { name: selectedAlbum.albumName });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setSaveAlbumError(errorMessage);
@@ -465,6 +467,7 @@ export function AlbumsPage({ session, onNavigate, onLogout }: AlbumsPageProps) {
           ) ?? current,
       );
       console.log("[album-delete-local] success", "albumId=", selectedAlbum.id);
+      toast.success("album.localCopyDeleted", { name: selectedAlbum.albumName });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : t("albums.deleteLocalFailed");
       setSaveAlbumError(errorMessage);

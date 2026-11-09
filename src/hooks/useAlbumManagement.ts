@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { deleteAlbum, renameAlbum } from "../api/albumManagement";
 import { useAlbumManagementLabels } from "../i18n/albumManagement";
+import { toast } from "../toasts/toast";
 import type { AlbumSummary } from "../types";
 import { failureMessage } from "../utils/albumFailure";
 import { useConnectionContext } from "./connectionContext";
@@ -48,6 +49,7 @@ export function useAlbumManagement(album: AlbumSummary, onDeleted: (albumId: str
         );
         console.info("[album-management] rename success", { albumId: album.id });
         setDialog(null);
+        toast.success("album.renamed", { name: savedName });
       } catch (failure) {
         console.error("[album-management] rename failed", { albumId: album.id, failure });
         setError(failureMessage(failure, labels.renameFailed, labels.offline));
@@ -73,6 +75,7 @@ export function useAlbumManagement(album: AlbumSummary, onDeleted: (albumId: str
       queryClient.removeQueries({ queryKey: ["album-assets-paged", album.id] });
       queryClient.removeQueries({ queryKey: ["album-local-status", album.id] });
       setDialog(null);
+      toast.success("album.deleted", { name: album.albumName });
     } catch (failure) {
       console.error("[album-management] delete failed", { albumId: album.id, failure });
       setError(failureMessage(failure, labels.deleteFailed, labels.offline));

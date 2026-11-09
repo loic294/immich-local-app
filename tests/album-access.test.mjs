@@ -143,6 +143,24 @@ const labelsDouble = { useAlbumAccessLabels: () => labels };
 const accessUtils = load("src/utils/albumAccess.ts");
 const failureUtils = load("src/utils/albumFailure.ts");
 
+// Records `[kind, key, params]` for every toast the code under test raises.
+function recordToasts(log) {
+  const record = (kind) => (key, params) => {
+    log.push([kind, key, params]);
+    return 1;
+  };
+  return {
+    toast: {
+      success: record("success"),
+      info: record("info"),
+      warning: record("warning"),
+      error: record("error"),
+      push: ({ kind, key, params }) => record(kind)(key, params),
+      dismiss: () => {},
+    },
+  };
+}
+
 const person = (id, name, email) => ({ id, name, email });
 const member = (id, name, email, role) => ({ id, name, email, role });
 const owner = person("owner-1", "Olivia Owner", "olivia@example.com");
@@ -236,7 +254,7 @@ test("album access labels exist for every locale with identical keys", () => {
 test("the access wrappers invoke native commands that the app registers", async () => {
   const requests = [];
   const api = load("src/api/tauri.ts", {
-    "@tauri-apps/api/core": {
+    "./invoke": {
       invoke: async (command, payload) => {
         requests.push([command, payload]);
       },
@@ -409,6 +427,7 @@ function mountAccess({ isOnline = true, members = [], candidates = everyone, beh
   const connection = { isOnline };
   const calls = [];
   const cacheWrites = [];
+  const toasts = [];
   const queryClient = {
     setQueryData: (queryKey, updater) => cacheWrites.push({ queryKey, updater }),
   };
@@ -421,6 +440,7 @@ function mountAccess({ isOnline = true, members = [], candidates = everyone, beh
   const { useAlbumAccess } = load("src/hooks/useAlbumAccess.ts", {
     react: host.hooks,
     "@tanstack/react-query": { useQueryClient: () => queryClient },
+    "../toasts/toast": recordToasts(toasts),
     "../api/tauri": {
       getAlbumShareUsers: api("getAlbumShareUsers", () => members),
       getAlbumShareableUsers: api("getAlbumShareableUsers", () => candidates),
@@ -443,6 +463,7 @@ function mountAccess({ isOnline = true, members = [], candidates = everyone, beh
     // The two loads every successful open makes; later calls come after them.
     calls,
     cacheWrites,
+    toasts,
     unmount: host.unmount,
     state,
     async ready() {
@@ -613,6 +634,7 @@ test("changing a permission updates only that person once the server confirms it
   );
   assert.deepEqual([state.workingUserId, state.busy, state.error], [null, false, null]);
   assert.deepEqual(hook.calls.slice(2), [["updateAlbumUserRole", "album-1", "user-1", "viewer"]]);
+  assert.deepEqual(hook.toasts, [["success", "album.roleChanged", undefined]]);
 });
 
 test("a failed permission change keeps the previous permission and says why", async (t) => {
@@ -635,6 +657,7 @@ test("a failed permission change keeps the previous permission and says why", as
     const state = hook.state();
     assert.equal(state.members[0].role, "editor");
     assert.deepEqual([state.error, state.busy, state.workingUserId], [message, false, null]);
+    assert.deepEqual(hook.toasts, [], "the modal's inline error is the only report");
   }
 });
 
@@ -698,6 +721,7 @@ test("adding a person grants the chosen permission, lists them and flags the alb
   assert.deepEqual(write.updater([{ id: "album-1", shared: false }]), [
     { id: "album-1", shared: true },
   ]);
+  assert.deepEqual(hook.toasts, [["success", "album.userAdded", undefined]]);
 });
 
 test("a failed add changes nothing and says why", async (t) => {
@@ -723,6 +747,7 @@ test("a failed add changes nothing and says why", async (t) => {
     );
     assert.equal(state.addable.length, 3);
     assert.deepEqual(hook.cacheWrites, []);
+    assert.deepEqual(hook.toasts, [], "the modal's inline error is the only report");
   }
 });
 
@@ -760,6 +785,11 @@ test("removing a person closes the confirmation only once the server confirms it
   assert.deepEqual(
     hook.calls.slice(2).map(([name]) => name),
     ["removeUserFromAlbum", "removeUserFromAlbum"],
+  );
+  assert.deepEqual(
+    hook.toasts,
+    [["success", "album.userRemoved", undefined]],
+    "only the confirmed removal is announced",
   );
 });
 

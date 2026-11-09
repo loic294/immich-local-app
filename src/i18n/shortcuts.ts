@@ -91,6 +91,7 @@ const messages: Record<AppLocale, ShortcutLabels> = {
         "menu.edit": "Edit",
         "menu.view": "View",
         "menu.window": "Window",
+        "menu.help": "Help",
       },
       items: {
         "photo.favorite": "Favorite",
@@ -121,6 +122,7 @@ const messages: Record<AppLocale, ShortcutLabels> = {
         "system.minimize": "Minimize",
         "system.zoom": "Zoom",
         "system.closeWindow": "Close Window",
+        "system.activityLog": "Activity Log",
       },
     },
     settings: {
@@ -205,6 +207,7 @@ const messages: Record<AppLocale, ShortcutLabels> = {
         "menu.edit": "Édition",
         "menu.view": "Affichage",
         "menu.window": "Fenêtre",
+        "menu.help": "Aide",
       },
       items: {
         "photo.favorite": "Favori",
@@ -235,6 +238,7 @@ const messages: Record<AppLocale, ShortcutLabels> = {
         "system.minimize": "Réduire",
         "system.zoom": "Agrandir",
         "system.closeWindow": "Fermer la fenêtre",
+        "system.activityLog": "Journal d’activité",
       },
     },
     settings: {

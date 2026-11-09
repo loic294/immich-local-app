@@ -8,6 +8,8 @@ import {
   updateAlbumUserRole,
 } from "../api/tauri";
 import { useAlbumAccessLabels } from "../i18n/albumAccess";
+import type { ToastKey } from "../i18n/toasts";
+import { toast } from "../toasts/toast";
 import type { AlbumShareUser, AlbumSummary, AlbumUserCandidate, AlbumUserRole } from "../types";
 import { addableUsers, markAlbumShared } from "../utils/albumAccess";
 import { failureMessage } from "../utils/albumFailure";
@@ -41,6 +43,7 @@ interface AccessChange {
   action: "role" | "add" | "remove";
   userId: string;
   failureText: string;
+  successToast: ToastKey;
   run: () => Promise<void>;
 }
 
@@ -108,7 +111,7 @@ export function useAlbumAccess(albumId: string, ownerId: string): AlbumAccessSta
   }, [load, online]);
 
   const applyChange = useCallback(
-    async ({ action, userId, failureText, run }: AccessChange): Promise<boolean> => {
+    async ({ action, userId, failureText, successToast, run }: AccessChange): Promise<boolean> => {
       if (changingRef.current) return false;
       changingRef.current = true;
       setError(null);
@@ -118,6 +121,7 @@ export function useAlbumAccess(albumId: string, ownerId: string): AlbumAccessSta
       try {
         await run();
         console.info(`[album-access] ${action} complete`, { albumId, userId });
+        toast.success(successToast);
         return true;
       } catch (failure) {
         console.error(`[album-access] ${action} failed`, { albumId, userId, failure });
@@ -138,6 +142,7 @@ export function useAlbumAccess(albumId: string, ownerId: string): AlbumAccessSta
         action: "role",
         userId,
         failureText: labels.updateFailed,
+        successToast: "album.roleChanged",
         run: async () => {
           await updateAlbumUserRole(albumId, userId, role);
           setMembers((current) =>
@@ -155,6 +160,7 @@ export function useAlbumAccess(albumId: string, ownerId: string): AlbumAccessSta
         action: "add",
         userId,
         failureText: labels.addFailed,
+        successToast: "album.userAdded",
         run: async () => {
           await addUserToAlbum(albumId, userId, role);
           const person = candidates.find((candidate) => candidate.id === userId);
@@ -174,6 +180,7 @@ export function useAlbumAccess(albumId: string, ownerId: string): AlbumAccessSta
         action: "remove",
         userId,
         failureText: labels.removeFailed,
+        successToast: "album.userRemoved",
         run: async () => {
           await removeUserFromAlbum(albumId, userId);
           setMembers((current) => current.filter((member) => member.id !== userId));

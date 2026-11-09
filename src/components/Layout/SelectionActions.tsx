@@ -19,6 +19,8 @@ import { useSearchTimeI18n } from "../../i18n/searchTime";
 import { AlbumPickerModal } from "../Albums/AlbumPickerModal";
 import type { AlbumChoice } from "../Albums/AlbumPicker";
 import { useAlbumPickerLabels } from "../../i18n/albumPicker";
+import { toast } from "../../toasts/toast";
+import { albumChoiceToast } from "../../utils/albumChoiceToast";
 import { useSelectionActionShortcuts } from "./useSelectionActionShortcuts";
 
 type SelectionActionsProps = {
@@ -163,6 +165,8 @@ export function SelectionActions({
     } else if (choice.newAlbumName) {
       await createAlbumWithAssets(choice.newAlbumName, selectedAssetIds);
     }
+    const saved = albumChoiceToast(choice, selectedAssetIds.length, availableAlbums);
+    if (saved) toast.push(saved);
     onSelectionActionCompleted?.();
   };
 
@@ -184,6 +188,7 @@ export function SelectionActions({
 
       await copyTextToClipboard(link);
       setLinkCopyStatus("success");
+      toast.success("share.linkCopied");
       window.setTimeout(() => {
         setLinkCopyStatus("idle");
       }, 1600);
@@ -209,9 +214,12 @@ export function SelectionActions({
     setIsCopyingImages(true);
     try {
       await copyAssetsToClipboard(selectedAssetIds);
+      toast.success("asset.copiedToClipboard", { count: selectedAssetIds.length });
     } catch (error) {
+      console.error("[SelectionActions] clipboard copy failed", error);
       const message = error instanceof Error ? error.message : "Failed to copy images";
       setSelectionError(message);
+      toast.error("asset.copyFailed");
     } finally {
       setIsCopyingImages(false);
     }
@@ -376,6 +384,7 @@ export function SelectionActions({
 
       if (!hasIssues) {
         setLocalCopyStatusMessage(t("selectionActions.statusCompleted"));
+        if (totalCopied > 0) toast.success("asset.copiedToFolder", { count: totalCopied });
         window.setTimeout(() => {
           setLocalCopyStatusMessage(null);
         }, 1800);

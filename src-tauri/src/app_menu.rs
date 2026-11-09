@@ -4,7 +4,8 @@
 //! *content*. It pushes localized labels, accelerators and enabled state by item id through
 //! `update_app_menu`, and receives clicks as `app-menu-action` events that carry the item id.
 //! Standard system items (clipboard, window and app commands) keep their native behavior; only
-//! their text is localized.
+//! their text is localized. The same goes for Help > Activity Log, which Rust handles itself by
+//! opening the Activity Log window.
 //!
 //! The menu is attached with `Builder::menu` instead of `App::set_menu` from `setup`: on Windows
 //! a menu bar added after the window exists shrinks its client area, and `window_state` persists
@@ -100,10 +101,14 @@ mod native {
         "menu.edit",
         "menu.view",
         "menu.window",
+        "menu.help",
     ];
 
-    /// Standard system items whose text is localized. Must match `MENU_SYSTEM_IDS` in
-    /// `src/shortcuts/appMenu.ts`.
+    /// The Help item that opens the Activity Log window. It is listed in `SYSTEM_IDS`.
+    const ACTIVITY_LOG_ID: &str = "system.activityLog";
+
+    /// Items with localized text only: the standard system items, plus the Activity Log item.
+    /// Must match `MENU_SYSTEM_IDS` in `src/shortcuts/appMenu.ts`.
     const SYSTEM_IDS: &[&str] = &[
         "system.about",
         "system.services",
@@ -121,6 +126,7 @@ mod native {
         "system.minimize",
         "system.zoom",
         "system.closeWindow",
+        "system.activityLog",
     ];
 
     const ACCELERATOR_MODIFIERS: &[&str] = &["cmdorctrl", "ctrl", "alt", "shift", "cmd", "super"];
@@ -150,6 +156,13 @@ mod native {
 
     fn is_known_id(id: &str) -> bool {
         is_action_id(id) || SUBMENU_IDS.contains(&id) || SYSTEM_IDS.contains(&id)
+    }
+
+    /// Whether a click on this item should reach the main window as a shortcut action. The menu
+    /// bar is shared by every window on macOS, so while the Activity Log window is active its
+    /// keystrokes must not act on the photos selected in the main window.
+    fn forwards_to_main_window(id: &str, activity_log_focused: bool) -> bool {
+        is_action_id(id) && !activity_log_focused
     }
 
     fn is_function_key(key: &str) -> bool {
@@ -342,6 +355,19 @@ mod native {
             Ok(item)
         }
 
+        /// An item that Rust handles itself. It is always enabled and has no accelerator, so the
+        /// frontend only supplies its text.
+        fn command(
+            &mut self,
+            app: &AppHandle,
+            id: &'static str,
+            label: &str,
+        ) -> tauri::Result<MenuItem<Wry>> {
+            let item = MenuItem::with_id(app, id, label, true, None::<&str>)?;
+            self.track(id, MenuHandle::Item(item.clone()), label, true);
+            Ok(item)
+        }
+
         /// A native system item, created with the same text it is tracked under.
         #[cfg(target_os = "macos")]
         fn system(
@@ -417,11 +443,19 @@ mod native {
         Ok([photos, albums, share])
     }
 
-    /// Windows shows exactly the requested menus: Photos, Albums and Share.
+    /// The Help menu, shared by both platforms. Its only item opens the Activity Log window, so
+    /// it works whatever the main window is showing.
+    fn help_submenu(app: &AppHandle, registry: &mut Registry) -> tauri::Result<Submenu<Wry>> {
+        let activity_log = registry.command(app, ACTIVITY_LOG_ID, "Activity Log")?;
+        registry.submenu(app, "menu.help", "Help", &[&activity_log])
+    }
+
+    /// Windows shows Photos, Albums and Share, then Help.
     #[cfg(target_os = "windows")]
     fn build_menu(app: &AppHandle, registry: &mut Registry) -> tauri::Result<Menu<Wry>> {
         let [photos, albums, share] = content_submenus(app, registry)?;
-        Menu::with_items(app, &[&photos, &albums, &share])
+        let help = help_submenu(app, registry)?;
+        Menu::with_items(app, &[&photos, &albums, &share, &help])
     }
 
     /// macOS needs the application menu first, and the Edit menu so the clipboard and undo keys
@@ -545,9 +579,14 @@ mod native {
         )?;
         window.set_as_windows_menu_for_nsapp()?;
 
+        let help = help_submenu(app, registry)?;
+        help.set_as_help_menu_for_nsapp()?;
+
         Menu::with_items(
             app,
-            &[&app_menu, &photos, &albums, &share, &edit, &view, &window],
+            &[
+                &app_menu, &photos, &albums, &share, &edit, &view, &window, &help,
+            ],
         )
     }
 
@@ -558,11 +597,21 @@ mod native {
         Ok(menu)
     }
 
-    /// Only action items reach the frontend; system items keep their native behavior. Never
-    /// takes the menu state lock: a menu event can arrive while an update holds it.
+    /// Action items reach the frontend and the Activity Log item opens its window; the other
+    /// system items keep their native behavior. Never takes the menu state lock: a menu event can
+    /// arrive while an update holds it.
     fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         let id: &str = event.id().as_ref();
+        if id == ACTIVITY_LOG_ID {
+            log::info!("[menu] item activated id={id}");
+            crate::activity_window::open_in_background(app);
+            return;
+        }
         if !is_action_id(id) {
+            return;
+        }
+        if !forwards_to_main_window(id, crate::activity_window::is_focused()) {
+            log::info!("[menu] ignored id={id}: the Activity Log window is active");
             return;
         }
         log::info!("[menu] item activated id={id}");
@@ -709,6 +758,48 @@ mod native {
             assert!(is_known_id("menu.photos"));
             assert!(is_known_id("system.copy"));
             assert!(!is_known_id("photo.unknown"));
+        }
+
+        #[test]
+        fn the_activity_log_item_is_a_text_only_item_in_the_help_menu() {
+            assert!(SYSTEM_IDS.contains(&ACTIVITY_LOG_ID));
+            assert!(SUBMENU_IDS.contains(&"menu.help"));
+            assert!(is_known_id(ACTIVITY_LOG_ID));
+            assert!(!is_action_id(ACTIVITY_LOG_ID));
+
+            let applied = HashMap::from([(ACTIVITY_LOG_ID, state("Activity Log", None, true))]);
+            let plan = plan_update(
+                &applied,
+                &[entry(
+                    ACTIVITY_LOG_ID,
+                    "Journal d’activité",
+                    Some("CmdOrCtrl+L"),
+                    Some(false),
+                )],
+            );
+            assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+            assert_eq!(
+                plan.changes,
+                vec![(
+                    ACTIVITY_LOG_ID,
+                    ItemChange {
+                        label: Some("Journal d’activité".to_owned()),
+                        ..ItemChange::default()
+                    }
+                )],
+                "only the text changes: it stays enabled and takes no accelerator"
+            );
+        }
+
+        #[test]
+        fn shortcuts_stay_with_the_main_window_while_the_activity_log_is_active() {
+            for id in ACTION_IDS {
+                assert!(forwards_to_main_window(id, false), "{id}");
+                assert!(!forwards_to_main_window(id, true), "{id}");
+            }
+            for id in ["system.copy", ACTIVITY_LOG_ID, "menu.help", "photo.unknown"] {
+                assert!(!forwards_to_main_window(id, false), "{id}");
+            }
         }
 
         #[test]

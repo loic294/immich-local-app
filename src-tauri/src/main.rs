@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity_window;
 mod app_menu;
 mod commands;
 mod db;
@@ -76,7 +77,20 @@ fn cache_logs_dir() -> Option<PathBuf> {
 /// the user's Cache Location (`<cache>/logs`). In debug builds we keep the
 /// developer-friendly Stdout + default app log dir targets instead.
 fn build_log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    let builder = tauri_plugin_log::Builder::new().level(log::LevelFilter::Info);
+    // The formatter sees every record once, before it is written anywhere, so it doubles as the
+    // feed for the Activity Log window. The text it produces matches the plugin's default format.
+    let builder = tauri_plugin_log::Builder::new()
+        .level(log::LevelFilter::Info)
+        .format(|out, message, record| {
+            services::activity_log::ingest_log_record(record);
+            out.finish(format_args!(
+                "{}[{}][{}] {}",
+                chrono::Utc::now().format("[%Y-%m-%d][%H:%M:%S]"),
+                record.target(),
+                record.level(),
+                message
+            ))
+        });
 
     #[cfg(debug_assertions)]
     let builder = builder
@@ -214,6 +228,9 @@ impl AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn main() {
+    let context = tauri::generate_context!();
+    // First thing: the panic hook and the on-disk activity log must exist before anything can fail.
+    services::activity_log::init(&context.package_info().version.to_string());
     let db = Arc::new(Database::new().expect("failed to initialize sqlite"));
     let immich = Arc::new(ImmichClient::new());
     let accounts = Arc::new(AccountManager::new());
@@ -227,7 +244,10 @@ pub fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard::init())
         .plugin(tauri_plugin_dialog::init())
-        .on_window_event(window_state::on_window_event)
+        .on_window_event(|window, event| {
+            window_state::on_window_event(window, event);
+            activity_window::on_window_event(window, event);
+        })
         .setup(|app| {
             window_state::initialize(app)?;
             // Editor watchers belong only to this app launch, including after a crash.
@@ -388,9 +408,16 @@ pub fn main() {
             get_saved_local_file_changes,
             apply_saved_local_file_changes,
             dismiss_saved_local_file_changes,
-            app_menu::update_app_menu
+            app_menu::update_app_menu,
+            activity_window::open_activity_log_window,
+            commands::activity_log::get_activity_log_entries,
+            commands::activity_log::get_activity_log_history,
+            commands::activity_log::get_activity_log_info,
+            commands::activity_log::record_frontend_activity,
+            commands::activity_log::set_activity_log_verbose,
+            commands::activity_log::clear_activity_log
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
@@ -400,6 +427,7 @@ pub fn main() {
                 if let Err(error) = app.state::<AppState>().db.clear_editor_jobs() {
                     log::error!("[media:editor] failed to clear watchers on exit: {error}");
                 }
+                services::activity_log::shutdown();
             }
         });
 }

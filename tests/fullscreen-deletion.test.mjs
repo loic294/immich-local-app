@@ -6,6 +6,14 @@ import ts from "typescript";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const compiled = new Map();
+const noop = () => {};
+// Toasts are covered by tests/toasts.test.mjs; the grid only needs them to be callable here.
+const toastDouble = {
+  toast: { success: noop, info: noop, warning: noop, error: noop, push: noop, dismiss: noop },
+};
+const favoriteToastsDouble = {
+  singleFavoriteToast: () => ({ kind: "success", key: "asset.favorited" }),
+};
 
 function load(path, modules, globals) {
   if (!compiled.has(path)) {
@@ -172,7 +180,7 @@ async function mountPhotos({ count = 65, mode = "archive" } = {}) {
   const deletion = load(
     "../src/api/deletion.ts",
     {
-      "@tauri-apps/api/core": {
+      "./invoke": {
         async invoke(command, { assetId }) {
           assert.equal(command, "delete_asset");
           const asset = {
@@ -212,6 +220,8 @@ async function mountPhotos({ count = 65, mode = "archive" } = {}) {
     "../../api/deletion": deletion,
     "../../i18n": { useI18n: () => ({ t: (key) => key }) },
     "../../hooks/useSettings": { useSettings: () => ({ data: { deleteBehavior: mode } }) },
+    "../../toasts/toast": toastDouble,
+    "../../utils/favoriteToasts": favoriteToastsDouble,
     "./photoGridUtils": {
       isVideoAsset: (asset) => asset.type === "VIDEO",
       getAssetAspectRatio: () => 1.5,

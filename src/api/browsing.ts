@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invoke";
 import type { AssetSummary, GridLayoutResponse } from "../types";
 import type { BrowsingPerson, MapBounds, MapMarker } from "../types/browsing";
 

@@ -4,6 +4,8 @@ import {
   flushPendingMutations,
   getPendingMutationCount,
 } from "../api/tauri";
+import { toast } from "../toasts/toast";
+import { connectionChangeToast } from "../utils/connectionToasts";
 
 const POLL_INTERVAL_MS = 20_000;
 
@@ -35,9 +37,7 @@ export function useConnection({
   initialOnline,
   onReconnect,
 }: UseConnectionOptions): UseConnectionReturn {
-  const [isOnline, setIsOnline] = useState<boolean | null>(
-    initialOnline ?? null,
-  );
+  const [isOnline, setIsOnline] = useState<boolean | null>(initialOnline ?? null);
   const [pendingCount, setPendingCount] = useState(0);
   const wasOnlineRef = useRef<boolean | null>(initialOnline ?? null);
   const onReconnectRef = useRef(onReconnect);
@@ -68,12 +68,17 @@ export function useConnection({
     if (online && wasOnline === false) {
       // Transitioned offline -> online: replay queued mutations, then notify.
       console.info("[connection] server reachable again — flushing queue");
+      let flushed = 0;
       try {
+        const queued = await getPendingMutationCount().catch(() => 0);
         const remaining = await flushPendingMutations();
         setPendingCount(remaining);
+        flushed = Math.max(0, queued - remaining);
       } catch (err) {
         console.warn("[connection] failed to flush pending mutations", err);
       }
+      const restored = connectionChangeToast(wasOnline, online, flushed);
+      if (restored) toast.push(restored);
       onReconnectRef.current?.();
     } else {
       void refreshPendingCount();
@@ -81,6 +86,8 @@ export function useConnection({
 
     if (!online && wasOnline !== false) {
       console.warn("[connection] server unreachable — entering offline mode");
+      const lost = connectionChangeToast(wasOnline, online);
+      if (lost) toast.push(lost);
     }
 
     return online;

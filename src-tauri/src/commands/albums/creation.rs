@@ -1,10 +1,14 @@
 use crate::services::{
+    activity_log::Phases,
     db::Account,
     immich_client::{AlbumShareUser, AlbumSummary, ImmichClient},
 };
 use crate::AppState;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
+
+/// Creating an album makes several requests per contributing account; only flag it beyond this.
+const SLOW_ALBUM_CREATE_MS: u64 = 3_000;
 
 pub(super) fn account_client(
     state: &AppState,
@@ -213,6 +217,7 @@ async fn create(
     if album_name.is_empty() {
         return Err("Enter an album name.".into());
     }
+    let mut phases = Phases::start().slow_after(SLOW_ALBUM_CREATE_MS);
     let (owner, editors) = configuration(state)?;
     let owner = owner
         .ok_or("Album owner account no longer exists. Choose an owner in Settings > Albums.")?;
@@ -223,6 +228,7 @@ async fn create(
     }
     let groups = resolve_contributors(state, groups).await?;
     validate_contributor_access(&owner.user_id, &[], &editors, &groups)?;
+    phases.mark("resolve owners");
     log::info!(
         "[albums.create] start owner_account_id={} editor_count={} contributing_accounts={}",
         owner.id,
@@ -232,6 +238,7 @@ async fn create(
     // Immich silently filters inaccessible assetIds during creation. Share first,
     // then let each signed-in source account contribute its own assets.
     let mut album = client.create_album_with_assets(album_name, &[]).await?;
+    phases.mark("create");
     let mut added = Vec::new();
     let mut submitted_photos = false;
     let outcome: Result<(), String> = async {
@@ -260,6 +267,7 @@ async fn create(
         Ok(())
     }
     .await;
+    phases.mark("share and add");
     let mut count_known = true;
     if outcome.is_err() && submitted_photos {
         // A bulk request can partially succeed, even when its HTTP status is 200.
@@ -307,5 +315,6 @@ async fn create(
         album.id,
         added.len()
     );
+    phases.finish("albums", "create album", &format!("{} assets", added.len()));
     Ok(album)
 }

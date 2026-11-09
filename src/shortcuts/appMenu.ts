@@ -2,7 +2,7 @@ import type { ShortcutActionId, ShortcutBindings } from "./catalog";
 import { getNativeAccelerator } from "./combo";
 
 /**
- * Submenu titles of the native menu bar. Windows has Photos, Albums and Share; `menu.edit`,
+ * Submenu titles of the native menu bar. Windows has Photos, Albums, Share and Help; `menu.edit`,
  * `menu.view` and `menu.window` exist on macOS only.
  */
 export const MENU_SUBMENU_IDS = [
@@ -12,6 +12,7 @@ export const MENU_SUBMENU_IDS = [
   "menu.edit",
   "menu.view",
   "menu.window",
+  "menu.help",
 ] as const;
 export type MenuSubmenuId = (typeof MENU_SUBMENU_IDS)[number];
 
@@ -30,7 +31,11 @@ export const MENU_ACTION_IDS = [
 ] as const satisfies readonly ShortcutActionId[];
 export type MenuActionId = (typeof MENU_ACTION_IDS)[number];
 
-/** Standard system items. They keep their native behavior; only their text is localized. */
+/**
+ * Items whose text is localized but that are not shortcut actions. The standard system items
+ * keep their native behavior; `system.activityLog` (Help) is handled by Rust, which opens the
+ * Activity Log window.
+ */
 export const MENU_SYSTEM_IDS = [
   "system.about",
   "system.services",
@@ -48,6 +53,7 @@ export const MENU_SYSTEM_IDS = [
   "system.minimize",
   "system.zoom",
   "system.closeWindow",
+  "system.activityLog",
 ] as const;
 export type MenuSystemId = (typeof MENU_SYSTEM_IDS)[number];
 

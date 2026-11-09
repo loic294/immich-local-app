@@ -40,6 +40,12 @@ interface LastRun {
   at: number;
 }
 
+/** Reported to `onAction` observers each time an action's handler ran. */
+export interface ShortcutActionEvent {
+  actionId: ShortcutActionId;
+  source: ShortcutSource;
+}
+
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return !!value && typeof (value as PromiseLike<unknown>).then === "function";
 }
@@ -63,6 +69,7 @@ export function createShortcutRegistry(env: ShortcutEnvironment) {
   const registrations: Registration[] = [];
   const availabilityListeners = new Set<() => void>();
   const captureListeners = new Set<() => void>();
+  const actionListeners = new Set<(event: ShortcutActionEvent) => void>();
   const indexCache = new WeakMap<object, Map<string, ShortcutActionId[]>>();
   const now = () => (env.now ? env.now() : Date.now());
   let captureDepth = 0;
@@ -128,6 +135,20 @@ export function createShortcutRegistry(env: ShortcutEnvironment) {
     );
   }
 
+  function notifyAction(actionId: ShortcutActionId, source: ShortcutSource) {
+    // Repeatable actions (previous/next) fire on every key repeat; observers would be flooded.
+    if (actionListeners.size === 0 || getShortcutAction(actionId)?.repeatable) {
+      return;
+    }
+    for (const listener of [...actionListeners]) {
+      try {
+        listener({ actionId, source });
+      } catch {
+        // An observer must never break shortcut handling.
+      }
+    }
+  }
+
   function run(candidates: readonly Registration[], source: ShortcutSource): boolean {
     for (const registration of candidates) {
       const { actionId } = registration;
@@ -137,6 +158,7 @@ export function createShortcutRegistry(env: ShortcutEnvironment) {
       } catch (error) {
         console.error(`[shortcuts] ${actionId} handler failed (${source})`, error);
         lastRun = { actionId, source, at: now() };
+        notifyAction(actionId, source);
         return true;
       }
       if (result === false) {
@@ -151,6 +173,7 @@ export function createShortcutRegistry(env: ShortcutEnvironment) {
         console.debug(`[shortcuts] ${actionId} triggered (${source}, ${registration.scope})`);
       }
       lastRun = { actionId, source, at: now() };
+      notifyAction(actionId, source);
       return true;
     }
     return false;
@@ -288,6 +311,14 @@ export function createShortcutRegistry(env: ShortcutEnvironment) {
     };
   }
 
+  /** Observes every action that ran, whether it came from the keyboard or the native menu. */
+  function onAction(listener: (event: ShortcutActionEvent) => void): () => void {
+    actionListeners.add(listener);
+    return () => {
+      actionListeners.delete(listener);
+    };
+  }
+
   return {
     register,
     handleKeyDown,
@@ -297,6 +328,7 @@ export function createShortcutRegistry(env: ShortcutEnvironment) {
     beginCapture,
     isCaptureActive: () => captureDepth > 0,
     subscribeCapture,
+    onAction,
   };
 }
 

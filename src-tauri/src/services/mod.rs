@@ -1,8 +1,11 @@
 pub mod account_manager;
+pub mod activity_log;
 pub mod background_process;
 pub mod browsing;
 pub mod db;
+pub mod db_profile;
 pub mod deletion;
+pub mod http_log;
 pub mod immich_client;
 pub mod import_preview;
 pub mod media;

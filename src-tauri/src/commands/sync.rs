@@ -1,3 +1,4 @@
+use crate::services::activity_log::{self, Phases};
 use crate::services::db::Database;
 use crate::services::db::SyncState;
 use crate::services::immich_client::ImmichClient;
@@ -19,6 +20,10 @@ mod progress;
 mod progress_tests;
 use progress::{PreparationSender, PreparationStage, SyncPreparationProgress};
 pub use progress::SyncProgress;
+
+/// A page of 100 assets needs about 100 detail requests, so several seconds is normal; only a
+/// page or album slower than this is flagged in the activity log.
+const SLOW_SYNC_STEP_MS: u64 = 10_000;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -275,17 +280,28 @@ async fn start_asset_sync_internal(
     tauri::async_runtime::spawn(async move {
         let _run = run;
         log::warn!("Starting background sync task from page {}", start_page);
-        if let Err(e) = sync_all_assets_background(
+        // A full sync is long by nature, so it is never flagged slow.
+        let span = activity_log::begin(
+            "sync",
+            if start_page > 0 { "full sync (resumed)" } else { "full sync" },
+        )
+        .slow_after(u64::MAX);
+        let result = sync_all_assets_background(
             reachable,
             db,
             start_page,
             sync_state.processed_assets,
             single_account,
-            cancel,
+            cancel.clone(),
             preparation,
         )
-        .await
-        {
+        .await;
+        match &result {
+            Ok(()) if cancel.load(Ordering::SeqCst) => span.cancel(),
+            Ok(()) => span.finish_with(&format!("{total_assets} assets on the server")),
+            Err(err) => span.fail(err),
+        }
+        if let Err(e) = result {
             log::warn!("Background sync task failed: {}", e);
         }
     });
@@ -329,6 +345,7 @@ async fn sync_all_assets_background(
                 accounts.len(),
             )));
             log::info!("[sync.prepare] account={} refreshing people", account_id);
+            let people_span = activity_log::span("sync", "refresh people");
             match immich.get_all_people().await {
                 Ok(people) => {
                     if let Err(err) = db.replace_people(account_id, &people) {
@@ -338,27 +355,35 @@ async fn sync_all_assets_background(
                             err
                         );
                     }
+                    people_span.finish_with(&format!("{} people", people.len()));
                 }
-                Err(err) => log::warn!(
-                    "[sync] failed to fetch people for account {}: {}",
-                    account_id,
-                    err
-                ),
+                Err(err) => {
+                    log::warn!(
+                        "[sync] failed to fetch people for account {}: {}",
+                        account_id,
+                        err
+                    );
+                    people_span.fail(&err);
+                }
             }
 
             if cancel.load(Ordering::SeqCst) {
                 db.cancel_sync()?;
                 return Ok(());
             }
-            if let Err(err) = refresh_album_cache(
-                account_id,
-                immich.clone(),
-                db.clone(),
-                &preparation,
-                &cancel,
+            let album_cache = activity_log::track(
+                "sync",
+                "refresh album cache",
+                refresh_album_cache(
+                    account_id,
+                    immich.clone(),
+                    db.clone(),
+                    &preparation,
+                    &cancel,
+                ),
             )
-            .await
-            {
+            .await;
+            if let Err(err) = album_cache {
                 log::warn!(
                     "[sync] failed to refresh album cache for account {}: {}",
                     account_id,
@@ -370,6 +395,11 @@ async fn sync_all_assets_background(
         preparation.send_replace(None);
         log::info!("[sync.prepare] account={} starting asset scan", account_id);
         let mut page = account_start_page;
+        let scan_label = if accounts.len() > 1 {
+            format!("full sync account {}/{}", account_index + 1, accounts.len())
+        } else {
+            "full sync".to_string()
+        };
 
         loop {
             // Cooperative cancellation: stop at the page boundary so the last
@@ -393,6 +423,7 @@ async fn sync_all_assets_background(
                 page
             );
 
+            let mut phases = Phases::start().slow_after(SLOW_SYNC_STEP_MS);
             let result = immich
                 .get_all_assets_paginated(page, page_size)
                 .await
@@ -404,6 +435,7 @@ async fn sync_all_assets_background(
                     );
                     format!("Failed to fetch assets: {}", err)
                 })?;
+            phases.mark("fetch");
 
             if result.items.is_empty() {
                 log::warn!("[sync] account {} no more assets to fetch", account_id);
@@ -420,6 +452,7 @@ async fn sync_all_assets_background(
             // Hydrate each asset with full metadata from asset detail endpoint.
             let enriched_assets =
                 enrich_assets_with_full_metadata(immich.clone(), result.items, |_, _| {}).await;
+            phases.mark("enrich");
             let extended_assets: Vec<crate::services::db::AssetSummaryExtended> = enriched_assets
                 .iter()
                 .map(|value| value.asset.clone())
@@ -439,6 +472,7 @@ async fn sync_all_assets_background(
                     );
                     format!("Failed to save assets: {}", err)
                 })?;
+            phases.mark("save");
 
             db.replace_asset_people(account_id, &asset_people_links)
                 .map_err(|err| {
@@ -449,6 +483,7 @@ async fn sync_all_assets_background(
                     );
                     format!("Failed to save asset-people links: {}", err)
                 })?;
+            phases.mark("people");
 
             processed_count += extended_assets.len() as i32;
             log::warn!("[sync] processed {} total assets", processed_count);
@@ -458,6 +493,15 @@ async fn sync_all_assets_background(
                 log::warn!("Failed to update sync progress: {}", err);
                 format!("Failed to update sync progress: {}", err)
             })?;
+            phases.finish(
+                "sync",
+                &format!("{scan_label} page {page}"),
+                &format!(
+                    "{} assets, {} processed",
+                    extended_assets.len(),
+                    processed_count
+                ),
+            );
 
             if !result.has_next_page {
                 log::warn!("[sync] account {} no more pages to fetch", account_id);
@@ -572,10 +616,16 @@ async fn refresh_single_album(
     album_id: &str,
     preparation: Option<&PreparationSender>,
 ) -> Result<(), String> {
+    let mut phases = Phases::start().slow_after(SLOW_SYNC_STEP_MS);
+    if preparation.is_some() {
+        // The full sync refreshes every album; only the slow ones are worth a line.
+        phases = phases.only_when_slow();
+    }
     let assets = immich
         .get_album_assets(album_id)
         .await
         .map_err(|err| format!("fetch album assets failed: {}", err))?;
+    phases.mark("fetch");
 
     log::warn!(
         "[refresh_single_album] album_id={} fetched {} assets",
@@ -600,6 +650,7 @@ async fn refresh_single_album(
         },
     )
     .await;
+    phases.mark("enrich");
     log::warn!(
         "[refresh_single_album] album_id={} enriched_count={} duration_ms={}",
         album_id,
@@ -642,6 +693,13 @@ async fn refresh_single_album(
             err
         );
     }
+
+    phases.mark("save");
+    phases.finish(
+        "sync",
+        &format!("refresh album {album_id}"),
+        &format!("{} assets", extended_assets.len()),
+    );
 
     log::warn!(
         "[refresh_single_album] album_id={} completed successfully",

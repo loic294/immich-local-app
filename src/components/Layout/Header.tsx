@@ -1,7 +1,7 @@
 import { WindowHeader } from "./WindowHeader";
 import { Funnel, LogOut, Plus, Settings, Star, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../api/invoke";
 import { getProfileImage } from "../../api/tauri";
 import { SortButton } from "../Filters/SortButton";
 import { MetadataSearchBar } from "../Search/MetadataSearchBar";

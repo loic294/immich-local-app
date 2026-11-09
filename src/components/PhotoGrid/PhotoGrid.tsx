@@ -29,6 +29,8 @@ import {
 import { useI18n } from "../../i18n";
 import { ASSET_DELETION_CHANGED_EVENT, deleteAsset, restoreDeletedAsset } from "../../api/deletion";
 import { useSettings } from "../../hooks/useSettings";
+import { toast } from "../../toasts/toast";
+import { singleFavoriteToast } from "../../utils/favoriteToasts";
 import type {
   JumpMetrics,
   PhotoGridProps,
@@ -1345,9 +1347,11 @@ export function PhotoGrid({
 
     try {
       await updateAssetFavorite(activeAsset.id, nextValue);
+      toast.push(singleFavoriteToast(nextValue, true));
     } catch (error) {
       updateActiveAssetOverride({ isFavorite: activeAsset.isFavorite });
       console.error("Failed to update asset favorite status:", error);
+      toast.push(singleFavoriteToast(nextValue, false));
     } finally {
       setFavoriteUpdateId((current) => (current === activeAsset.id ? null : current));
     }
@@ -1386,6 +1390,7 @@ export function PhotoGrid({
         visibility: activeAsset.visibility,
       });
       console.error("Failed to update asset archive status:", error);
+      toast.error(restore ? "asset.restoreFailed" : "asset.deleteFailed");
     } finally {
       setArchiveUpdateId((current) => (current === activeAsset.id ? null : current));
     }
@@ -1414,6 +1419,7 @@ export function PhotoGrid({
     } catch (error) {
       updateActiveAssetOverride({ rating: activeAsset.rating });
       console.error("Failed to update asset rating:", error);
+      toast.error("asset.ratingFailed");
     } finally {
       setRatingUpdateId((current) => (current === activeAsset.id ? null : current));
     }
@@ -1442,6 +1448,7 @@ export function PhotoGrid({
       await updateAssetDescription(activeAsset.id, nextDescription);
     } catch (error) {
       console.error("Failed to update asset description:", error);
+      toast.error("asset.descriptionFailed");
       setCachedAssetDetails((current) =>
         current && current.id === activeAsset.id
           ? { ...current, description: previousDescription }

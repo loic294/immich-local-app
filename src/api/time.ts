@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invoke";
 import type { AssetFilter, AssetFilterCriteria, AssetPage, ViewScope } from "../types";
 import type {
   AssetsTimeShiftedDetail,

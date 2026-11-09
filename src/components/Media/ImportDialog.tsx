@@ -11,6 +11,7 @@ import {
   listMediaDevices,
 } from "../../api/media";
 import { useMediaLabels } from "../../i18n/media";
+import { toast } from "../../toasts/toast";
 import { ImportTile } from "./ImportTile";
 import { AlbumPickerModal } from "../Albums/AlbumPickerModal";
 import { useAlbumPickerLabels } from "../../i18n/albumPicker";
@@ -173,6 +174,7 @@ export function ImportDialog({ initialRoot, onClose, onImported }: ImportDialogP
               if (choice?.newAlbumName) {
                 const album = await createAlbumWithAssets(choice.newAlbumName, []);
                 setAlbumId(album.id);
+                toast.success("album.created", { name: album.albumName || choice.newAlbumName });
                 await albums.refetch();
               } else {
                 setAlbumId(choice?.albumId ?? "");

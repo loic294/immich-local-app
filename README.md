@@ -252,6 +252,33 @@ set a per-account Folders base directory using an absolute path from the cached
 library, or leave it blank to return to the root. This works offline, accepts
 Windows path separators, and preserves the saved directory if validation fails.
 
+**Notifications:** important actions show a stack of toasts in the bottom-right
+corner, above any docked overlay: creating, renaming, or deleting an album,
+adding or removing people, favoriting, archiving, trashing, or restoring photos,
+copying files or share links, saving or removing local copies, connection
+changes, and syncs you start yourself. Each toast closes after a few seconds
+(a little longer for errors), pauses while hovered or focused, and has a close
+button. Repeated events merge into one toast with a count, and at most five show
+at once. Automatic background syncs and silent successes, such as ratings and
+descriptions, do not produce toasts; failures do.
+
+**Activity Log:** choose **Help → Activity Log** in the menu bar (macOS and
+Windows) to open a separate window with a timestamped record of what the app is
+doing: Immich API requests, commands the interface sends to the app, sync
+stages, slow functions and SQLite statements, console output, and every network
+or application error. Entries that cross a slow threshold (API requests over 1 s,
+commands over 0.5 s, functions over 0.25 s, database statements over 0.1 s) are
+flagged. Filter by level, category, text, time range, or slow-only; turn on
+**Verbose** to include routine reads. **Copy** puts the filtered view on the
+clipboard as plain text with an app and OS header, ready to paste into an issue
+or chat. **Clear** empties the log after a confirmation, and **Open log folder**
+reveals the files. Entries are saved continuously and rotated in the `logs`
+folder of `~/.config/immich-local-app`, so earlier sessions stay available, and
+they never leave your computer unless you copy them. API request URLs are logged
+without query strings, and API keys, passwords, tokens, cookies, long
+secret-looking strings, and your home folder path are removed before an entry is
+stored.
+
 **Privacy:** allowlisted generic page and feature events are sent to the
 project's Umami analytics endpoint by default. Photo names, paths, account
 details, server URLs, and credentials are never included. Disable analytics

@@ -31,7 +31,7 @@ test("Delete and restore dispatch the distinct native commands and mutation even
   globalThis.window = { dispatchEvent: (event) => events.push(event) };
   try {
     const api = load("../src/api/deletion.ts", {
-      "@tauri-apps/api/core": {
+      "./invoke": {
         invoke: async (command, payload) => {
           requests.push({ command, payload });
           return { id: payload.assetId };
@@ -111,7 +111,7 @@ test("selected Delete preserves action order and completes partial batches befor
   globalThis.window = { dispatchEvent() {} };
   try {
     const api = load("../src/api/deletion.ts", {
-      "@tauri-apps/api/core": {
+      "./invoke": {
         invoke: async (_, { assetId }) => {
           order.push(`start:${assetId}`);
           await Promise.resolve();
@@ -135,7 +135,7 @@ test("normal Delete of an edited version publishes the protected original fallba
   globalThis.window = { dispatchEvent: (event) => events.push(event) };
   try {
     const api = load("../src/api/deletion.ts", {
-      "@tauri-apps/api/core": {
+      "./invoke": {
         invoke: async (command) =>
           command === "delete_asset"
             ? { id: "edit", stackOriginalId: "original", isArchived: true }

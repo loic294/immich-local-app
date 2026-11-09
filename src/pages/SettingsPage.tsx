@@ -320,7 +320,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const handleForceFullSync = async () => {
     try {
       setIsForcingFullSync(true);
-      await forceFullSync();
+      await forceFullSync({ announce: true });
     } catch (error) {
       console.error("Failed to force full sync:", error);
     } finally {
@@ -342,7 +342,7 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
   const handleQuickSync = async () => {
     try {
       setIsQuickSyncing(true);
-      await checkForNewAssets();
+      await checkForNewAssets({ announce: true });
     } catch (error) {
       console.error("Failed to run quick sync:", error);
     } finally {
