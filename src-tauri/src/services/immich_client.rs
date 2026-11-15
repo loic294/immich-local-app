@@ -5027,6 +5027,37 @@ fn normalize_asset_summary(mut asset: AssetSummary) -> AssetSummary {
 
 #[cfg(test)]
 #[test]
+fn asset_description_parser_reads_immich_exif_descriptions() {
+    let metadata = parse_asset_metadata_from_value(&serde_json::json!({
+        "exifInfo": { "description": "Caption from Mylio\nSecond line" }
+    }));
+    assert_eq!(
+        metadata.description.as_deref(),
+        Some("Caption from Mylio\nSecond line")
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn asset_description_parser_preserves_top_level_values_and_explicit_clears() {
+    for description in ["Legacy caption", ""] {
+        let metadata = parse_asset_metadata_from_value(&serde_json::json!({
+            "description": description,
+            "exifInfo": { "description": "Embedded caption" }
+        }));
+        assert_eq!(metadata.description.as_deref(), Some(description));
+    }
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({ "exifInfo": null }),
+        serde_json::json!({ "exifInfo": { "description": null } }),
+    ] {
+        assert!(parse_asset_metadata_from_value(&value).description.is_none());
+    }
+}
+
+#[cfg(test)]
+#[test]
 fn live_photo_detail_parser_preserves_pairing_and_accepts_unlinked_assets() {
     let paired = parse_asset_metadata_from_value(&serde_json::json!({"livePhotoVideoId":"motion"}));
     assert_eq!(paired.live_photo_video_id.as_deref(), Some("motion"));
@@ -5066,6 +5097,11 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
         description: value
             .get("description")
             .and_then(Value::as_str)
+            .or_else(|| {
+                exif_info
+                    .and_then(|exif| exif.get("description"))
+                    .and_then(Value::as_str)
+            })
             .map(str::to_string),
         original_path,
         rating: exif_info

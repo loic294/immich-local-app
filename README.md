@@ -204,6 +204,8 @@ missing-preview errors; remaining sidecars are left untouched.
 Editor watchers are cleared when Immich Local exits and at the next startup;
 only launching a new edit starts watching again. Timestamp/size-only changes
 refresh tracking silently and never update descriptions or create metadata notices.
+Descriptions returned in Immich's EXIF metadata (including Mylio captions) are
+preserved when photo metadata is refreshed into the local cache.
 Editing is available per photo; the album-wide
 retouch action has been removed. The Edit button stays busy until a watched
 sidecar changes; no Finish editing action is required. Sidecar changes trigger
