@@ -234,6 +234,83 @@ Re-editing always uses the original. Editor executable, export arguments,
 and watched sidecars are configurable in Settings. Immich accepts XMP metadata
 sidecars, not RapidRAW `.rrdata`/`.xml` projects; those remain locally retained.
 
+### Mylio conversion script (review exports only)
+
+`scripts/convert-mylio-rapidraw.py` converts candidates from a reviewed
+`mylio-audit.json` manifest using Python 3.9+ (standard library only) and the
+RapidRAW headless CLI. It supports macOS and Windows; other platforms return an
+explicit error. Mappings target RapidRAW **1.6.7**; other versions are unverified.
+
+Start with a dry run, which does not launch RapidRAW or write any files:
+
+```sh
+python3 scripts/convert-mylio-rapidraw.py \
+  --manifest /path/to/mylio-audit.json \
+  --output "$HOME/Pictures/Mylio review" \
+  --experimental
+```
+
+Inspect the JSON report and stderr diagnostics, then append `--apply` to export.
+Add `--asset-id <UUID>` (repeatable) to process only selected audit candidates.
+On Windows, use `python` and specify the installed executable when not on `PATH`:
+
+```powershell
+python .\scripts\convert-mylio-rapidraw.py --manifest "C:\path\mylio-audit.json" --output "$HOME\Pictures\Mylio review" --rapidraw "C:\Program Files\RapidRAW\RapidRAW.exe" --experimental --apply
+```
+
+The manifest has a `records` array. Each record requires `xmp` (the source XMP
+path), `edits` (Mylio field names and string values), and `candidate_ids` (audited
+Immich UUIDs); `lightroom_fields_present` can additionally mark mixed sidecars.
+The script re-reads the XMP and rejects changed audit values. It **does not
+discover or match additional images**.
+
+Originals must already be saved through Immich Local's normal full-resolution
+download/Edit flow. The script opens the app's SQLite database read-only
+(`~/.config/immich-local-app/db.sqlite`, overridable with `--db`), reuses tracked
+originals on disk, and rejects cached/transcoded copies. It does not download,
+upload, change the database, or activate editor watchers. Originals and existing
+sidecars remain untouched, including when a source is missing.
+
+Each successful export gets a separate `<output>/<asset UUID>/` directory with a
+RapidRAW `.rrdata` project, `adjustments.json`, a quality-100 JPEG, `export.log`,
+and `result.json`. The CLI receives `--adjustments` explicitly, so it does not
+depend on a possibly different RapidRAW project beside the original. **These
+are review files, not automatic imports.** Do not install the staged projects
+beside watched originals until the results have been approved.
+
+Crop coordinates are converted to oriented-image pixels; fine-rotation angles
+have their sign reversed. Non-mirrored EXIF quarter turns are supported.
+Exposure assumes Mylio EV and uses `RapidRAW slider = EV * 0.8`; RAW baseline
+exposure compensation is disabled. These are still cross-renderer approximations,
+not a guarantee of matching Mylio pixels.
+
+Color/tone conversions require `--experimental`. Their assumptions are
+**uncalibrated**, and every result needs visual review:
+
+| Mylio field                  | Experimental RapidRAW mapping                                                     |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `highlights`, `shadows`      | Value multiplied by 100                                                           |
+| `saturation`, `vibrance`     | Value multiplied by 100                                                           |
+| `localContrast`              | `clarity`, value multiplied by 100                                                |
+| `contrast`                   | `(value - 1) * 100`                                                               |
+| `whites`                     | `(value - 0.5) * 200`                                                             |
+| `blacks`, `wbTemp`, `wbTint` | Copied as relative blacks/temperature/tint sliders, not Kelvin                    |
+| `sharpening`                 | Assumed 0-6 range mapped to 0-100                                                 |
+| Enabled RGB/luma levels      | Sampled input black/white clipping curves; luma midpoint assumed normalized gamma |
+
+Unknown controls, brush edits, grain filters, changed mirrored orientations,
+invalid/out-of-range values, mixed Adobe Camera Raw sidecars, ambiguous matches,
+and duplicate mappings are blocked rather than silently omitted. Export failures,
+including RapidRAW logging a panic despite returning exit code zero, are reported
+as blocked. Logs and partial output are retained for diagnosis.
+
+Re-running the same command skips completed exports only when source, XMP,
+mapping, and output fingerprints still match. Existing incomplete/different
+output is never overwritten; inspect it and choose a new output directory.
+`--apply` saves a timestamped batch report. Exit codes: `0` all selected candidates
+planned/exported/already exported, `2` some candidates blocked, `1` setup/input
+failure (argument errors also use `2`). A partial run is not reported as complete.
+
 **Settings** groups preferences into subpages. Storage & cache shows real disk
 usage and enforces a disposable-cache limit without deleting retained originals
 or pending uploads. A currently playing video is protected and any resulting
