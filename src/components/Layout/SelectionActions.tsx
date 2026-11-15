@@ -22,6 +22,7 @@ import { useAlbumPickerLabels } from "../../i18n/albumPicker";
 import { toast } from "../../toasts/toast";
 import { albumChoiceToast } from "../../utils/albumChoiceToast";
 import { useSelectionActionShortcuts } from "./useSelectionActionShortcuts";
+import { useIsmAssetActions } from "../Ism/IsmAssetActions";
 
 type SelectionActionsProps = {
   selectedAssetIds: string[];
@@ -86,6 +87,15 @@ export function SelectionActions({
   const albumLabels = useAlbumPickerLabels();
   const moreMenuRef = useRef<HTMLDetailsElement>(null);
   const shareMenuRef = useRef<HTMLDetailsElement>(null);
+  const ismActions = useIsmAssetActions({
+    selectedAssetIds,
+    modalZIndexClass,
+    stopPropagation,
+    closeMenu: () => {
+      if (moreMenuRef.current) moreMenuRef.current.open = false;
+    },
+    onCompleted: onSelectionActionCompleted,
+  });
 
   const getLocalCopyProgress = (
     currentStep: number,
@@ -309,6 +319,7 @@ export function SelectionActions({
       let copiedCachedCount = initial.copiedCachedCount;
       let skippedCount = initial.skippedCount;
       let failedCount = initial.failedCount;
+      const errors = [...(initial.errors ?? [])];
 
       if (
         initial.hasFallbackCandidates &&
@@ -335,6 +346,7 @@ export function SelectionActions({
           copiedCachedCount += fallback.copiedCachedCount;
           skippedCount += fallback.skippedCount;
           failedCount += fallback.failedCount;
+          errors.push(...(fallback.errors ?? []));
         } else {
           setLocalCopyStatusMessage(t("selectionActions.statusSkippedCached"));
           skippedCount += initial.cacheFallbackAvailableCount;
@@ -365,6 +377,7 @@ export function SelectionActions({
           t("selectionActions.cachedCopied", { count: copiedCachedCount }),
           t("selectionActions.skippedCount", { count: skippedCount }),
           t("selectionActions.failedCount", { count: failedCount }),
+          ...errors.map((error) => `${error.assetId}: ${error.message}`),
         ];
 
         if (initial.originalUnavailableCount > 0) {
@@ -570,7 +583,7 @@ export function SelectionActions({
         </ul>
       </details>
 
-      {showTimeButton || onDeleteSelected ? (
+      {showTimeButton || onDeleteSelected || ismActions.available ? (
         <details
           ref={moreMenuRef}
           className="dropdown dropdown-end ml-auto"
@@ -634,9 +647,11 @@ export function SelectionActions({
                 </button>
               </li>
             )}
+            {ismActions.menuItems}
           </ul>
         </details>
       ) : null}
+      {ismActions.dialog}
 
       {showAlbumModal ? (
         <AlbumPickerModal

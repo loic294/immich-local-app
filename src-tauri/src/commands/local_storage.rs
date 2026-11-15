@@ -362,7 +362,7 @@ fn remove_plan(
             [copy.path.to_string_lossy().as_ref()],
         )
         .map_err(|e| e.to_string())?;
-        conn.execute("UPDATE local_saved_asset_changes SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE local_path = ?1 AND resolved_at IS NULL",
+        conn.execute("UPDATE local_saved_asset_changes SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE local_path = ?1 AND resolved_at IS NULL AND NOT EXISTS (SELECT 1 FROM ism_local_deletion_requests r WHERE r.change_id = local_saved_asset_changes.id)",
             [copy.path.to_string_lossy().as_ref()]).map_err(|e| e.to_string())?;
         if copy.path
             == root

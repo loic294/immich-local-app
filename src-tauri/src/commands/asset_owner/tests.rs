@@ -27,12 +27,26 @@ struct Server {
     rating: Option<i64>,
     description: Option<String>,
     capture_time: Option<String>,
+    ism_cancel_response: Option<Value>,
 }
 
 impl Server {
     fn respond(&mut self, line: &str, user: &str, body: Value) -> (u16, Value) {
         self.requests
             .push((line.to_string(), user.to_string(), body.clone()));
+        if self.ism_cancel_response.is_some() && line.starts_with("GET /api/v1/client/info ") {
+            return (
+                200,
+                json!({
+                    "instance_id": "ism-test", "instance_name": "Test", "version": "0.1.0",
+                    "api_version": 1, "token_kind": "ila", "actions": ["trash"], "roots": [],
+                    "capabilities": ["trash_if_asset_matches", "cancel_operation_by_key", "instance_scoped_operations"]
+                }),
+            );
+        }
+        if line.starts_with("POST /api/v1/instances/ism-test/operations/cancel-by-key ") {
+            return (200, self.ism_cancel_response.clone().unwrap_or(Value::Null));
+        }
         if line.starts_with("GET /api/server/ping ") {
             return (200, json!({"res": "pong"}));
         }
@@ -854,6 +868,277 @@ async fn sharing_fallback_is_not_allowed_for_owner_only_mutations() {
         .unwrap();
     assert_eq!(error, OWNER_NOT_SIGNED_IN);
     assert!(fixture.server.lock().unwrap().writes().is_empty());
+}
+
+#[tokio::test]
+async fn ism_local_deletion_does_not_archive_or_remove_other_copies() {
+    use crate::commands::sync::*;
+    use crate::services::ism::Provider;
+    for provenance_only in [false, true] {
+        let fixture = Fixture::new(true).await;
+        if provenance_only {
+            fixture.state.db.open().unwrap().execute(
+                "INSERT INTO ism_local_files (asset_id, server_url, group_id, role, local_path, root_id, remote_path, folder, revision, size_bytes, sha256) VALUES ('photo', ?1, 'group', 'original', ?2, 'root', 'photo.jpg', '', 'revision', 1, 'hash')",
+                rusqlite::params![fixture.reader.server_url, fixture.folder.join("missing.jpg").to_string_lossy()],
+            ).unwrap();
+        } else {
+            fixture
+                .state
+                .db
+                .save_ism_provider(
+                    &fixture.reader.server_url,
+                    &Provider {
+                        base_url: "https://sync.example".into(),
+                        client_token: "fixture".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let other = fixture.folder.join("other.jpg");
+        std::fs::write(&other, b"preserve").unwrap();
+        fixture
+            .state
+            .db
+            .upsert_local_saved_asset(
+                "photo",
+                None,
+                other.to_str().unwrap(),
+                "other.jpg",
+                "original",
+                None,
+                None,
+            )
+            .unwrap();
+        fixture
+            .state
+            .db
+            .upsert_unresolved_local_saved_asset_change(
+                "photo",
+                fixture.folder.join("missing.jpg").to_str().unwrap(),
+                "missing.jpg",
+                "deleted",
+                "{}",
+            )
+            .unwrap();
+        let change = fixture
+            .state
+            .db
+            .list_unresolved_local_saved_asset_changes()
+            .unwrap()
+            .remove(0);
+        let result = apply_saved_local_file_changes_inner(
+            ApplySavedLocalFileChangesInput {
+                change_ids: vec![change.id],
+            },
+            &fixture.state,
+        )
+        .await
+        .unwrap();
+        assert_eq!((result.applied_count, result.failed_count), (0, 1));
+        assert!(result.errors[0].contains("ISM-managed asset"));
+        assert_eq!(std::fs::read(other).unwrap(), b"preserve");
+        assert_eq!(
+            fixture
+                .state
+                .db
+                .list_unresolved_local_saved_asset_changes()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(fixture.server.lock().unwrap().writes().is_empty());
+        fixture.assert_unchanged();
+    }
+}
+
+#[tokio::test]
+async fn reappeared_ism_file_is_not_removed_or_submitted() {
+    use crate::commands::sync::*;
+    let fixture = Fixture::new(true).await;
+    let path = fixture.folder.join("restored.jpg");
+    std::fs::write(&path, b"restored content").unwrap();
+    fixture
+        .state
+        .db
+        .upsert_unresolved_local_saved_asset_change(
+            "photo",
+            path.to_str().unwrap(),
+            "restored.jpg",
+            "deleted",
+            "{}",
+        )
+        .unwrap();
+    let change = fixture
+        .state
+        .db
+        .list_unresolved_local_saved_asset_changes()
+        .unwrap()
+        .remove(0);
+    fixture
+        .state
+        .db
+        .record_ism_deletion_request(
+            change.id,
+            "photo",
+            &fixture.reader.server_url,
+            &crate::services::ism::Location {
+                root_id: "root".to_string(),
+                path: "restored.jpg".to_string(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let result = apply_saved_local_file_changes_inner(
+        ApplySavedLocalFileChangesInput {
+            change_ids: vec![change.id],
+        },
+        &fixture.state,
+    )
+    .await
+    .unwrap();
+    assert_eq!((result.applied_count, result.failed_count), (0, 1));
+    assert!(result.errors[0].contains("reappeared"));
+    assert_eq!(std::fs::read(path).unwrap(), b"restored content");
+    assert!(fixture.server.lock().unwrap().writes().is_empty());
+    assert_eq!(
+        fixture
+            .state
+            .db
+            .list_unresolved_local_saved_asset_changes()
+            .unwrap()[0]
+            .id,
+        change.id
+    );
+}
+
+#[tokio::test]
+async fn skipping_uncertain_ism_deletion_cancels_and_preserves_restored_copy() {
+    use crate::commands::sync::*;
+    use crate::services::ism::{ClientInfo, IsmClient, Provider};
+    let fixture = Fixture::new(true).await;
+    let provider = Provider {
+        base_url: fixture.reader.server_url.clone(),
+        client_token: "fixture-token".into(),
+    };
+    fixture
+        .state
+        .db
+        .save_ism_provider(&fixture.reader.server_url, &provider)
+        .unwrap();
+    fixture.server.lock().unwrap().ism_cancel_response = Some(json!({
+        "status": "operation",
+        "operation": { "status": "running", "items": [{ "kind": "trash_if_asset_matches", "status": "running" }] }
+    }));
+    let path = fixture.folder.join("restored.jpg");
+    std::fs::write(&path, b"restored content").unwrap();
+    fixture
+        .state
+        .db
+        .upsert_local_saved_asset(
+            "photo",
+            None,
+            path.to_str().unwrap(),
+            "restored.jpg",
+            "download",
+            None,
+            None,
+        )
+        .unwrap();
+    fixture
+        .state
+        .db
+        .upsert_unresolved_local_saved_asset_change(
+            "photo",
+            path.to_str().unwrap(),
+            "restored.jpg",
+            "deleted",
+            "{}",
+        )
+        .unwrap();
+    let change = fixture
+        .state
+        .db
+        .list_unresolved_local_saved_asset_changes()
+        .unwrap()
+        .remove(0);
+    let client = IsmClient::new(&provider.base_url, &provider.client_token).unwrap();
+    let info: ClientInfo = serde_json::from_value(json!({
+        "instance_id": "ism-test", "instance_name": "Test", "version": "0.1.0",
+        "api_version": 1, "token_kind": "ila", "actions": ["trash"], "roots": [],
+        "capabilities": ["trash_if_asset_matches", "cancel_operation_by_key", "instance_scoped_operations"]
+    })).unwrap();
+    let binding = client.deletion_binding(&info).unwrap();
+    fixture
+        .state
+        .db
+        .record_ism_deletion_request(
+            change.id,
+            "photo",
+            &fixture.reader.server_url,
+            &crate::services::ism::Location {
+                root_id: "root".to_string(),
+                path: "restored.jpg".to_string(),
+            },
+            Some(&binding),
+            None,
+        )
+        .unwrap();
+
+    let error = dismiss_saved_local_file_changes_inner(
+        ApplySavedLocalFileChangesInput {
+            change_ids: vec![change.id],
+        },
+        &fixture.state,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("running"));
+    assert!(fixture
+        .state
+        .db
+        .ism_deletion_request_for_change(change.id)
+        .unwrap()
+        .is_some());
+    assert_eq!(std::fs::read(&path).unwrap(), b"restored content");
+    fixture.server.lock().unwrap().ism_cancel_response =
+        Some(json!({"status":"cancelled_before_submission"}));
+    let count = dismiss_saved_local_file_changes_inner(
+        ApplySavedLocalFileChangesInput {
+            change_ids: vec![change.id],
+        },
+        &fixture.state,
+    )
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(std::fs::read(&path).unwrap(), b"restored content");
+    assert_eq!(
+        fixture
+            .state
+            .db
+            .list_local_saved_asset_paths_for_asset("photo")
+            .unwrap(),
+        vec![path.to_string_lossy().to_string()]
+    );
+    assert!(fixture
+        .state
+        .db
+        .list_unresolved_local_saved_asset_changes()
+        .unwrap()
+        .is_empty());
+    assert!(fixture
+        .state
+        .db
+        .ism_deletion_request_for_change(change.id)
+        .unwrap()
+        .is_none());
+    let writes = fixture.server.lock().unwrap().writes();
+    assert_eq!(writes.len(), 2);
+    assert_eq!(
+        writes[0].2["expected_request"]["actions"][0]["expected_asset_id"],
+        "photo"
+    );
 }
 
 #[tokio::test]

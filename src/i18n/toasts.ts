@@ -66,6 +66,11 @@ const en = {
   "sync.newPhotos": () => "New photos synced",
   "sync.upToDate": () => "Your library is up to date",
   "sync.fullStarted": () => "Full sync started",
+  "ism.renamed": ({ name }) => `File renamed to “${text(name)}”`,
+  "ism.moved": ({ count }) => `${enPhotos(count)} moved`,
+  "ism.trashed": ({ count }) => `${enPhotos(count)} moved to the ISM trash`,
+  "ism.folderChanged": () => "Folder updated",
+  "ism.pending": () => "Change sent to ISM; it will finish in the background",
 } satisfies Record<string, ToastMessage>;
 
 export type ToastKey = keyof typeof en;
@@ -122,6 +127,12 @@ const fr: Record<ToastKey, ToastMessage> = {
   "sync.newPhotos": () => "Nouvelles photos synchronisées",
   "sync.upToDate": () => "Votre bibliothèque est à jour",
   "sync.fullStarted": () => "Synchronisation complète lancée",
+  "ism.renamed": ({ name }) => `Fichier renommé en « ${text(name)} »`,
+  "ism.moved": ({ count }) => `${frPhotos(count)} ${frAgree(count, "déplacée", "déplacées")}`,
+  "ism.trashed": ({ count }) =>
+    `${frPhotos(count)} ${frAgree(count, "déplacée", "déplacées")} vers la corbeille ISM`,
+  "ism.folderChanged": () => "Dossier mis à jour",
+  "ism.pending": () => "Modification envoyée à ISM; elle se terminera en arrière-plan",
 };
 
 const messages: Record<AppLocale, Record<ToastKey, ToastMessage>> = {

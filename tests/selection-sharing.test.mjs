@@ -43,6 +43,9 @@ function renderActions(props, { clipboardError } = {}) {
       },
     },
     "./useSelectionActionShortcuts": { useSelectionActionShortcuts: () => {} },
+    "../Ism/IsmAssetActions": {
+      useIsmAssetActions: () => ({ available: false, menuItems: null, dialog: null }),
+    },
     "../../api/tauri": {
       copyAssetsToClipboard: async (ids) => {
         calls.push(["clipboard", ids]);

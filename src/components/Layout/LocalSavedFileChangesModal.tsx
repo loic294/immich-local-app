@@ -10,7 +10,8 @@ type LocalSavedFileChangesModalProps = {
   applyErrors: string[];
   onApplyAll: () => Promise<void>;
   onApplySelected: (changeIds: number[]) => Promise<void>;
-  onCancel: () => void;
+  onSkip: () => Promise<void>;
+  onClose: () => void;
 };
 
 function formatDetectedChanges(
@@ -67,7 +68,8 @@ export function LocalSavedFileChangesModal({
   applyErrors,
   onApplyAll,
   onApplySelected,
-  onCancel,
+  onSkip,
+  onClose,
 }: LocalSavedFileChangesModalProps) {
   const { t } = useI18n();
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -221,7 +223,15 @@ export function LocalSavedFileChangesModal({
         </div>
 
         <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
-          <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={isApplying}>
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={isApplying}>
+            {t("localChanges.closeForNow")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void onSkip()}
+            disabled={isApplying}
+          >
             {t("localChanges.skip")}
           </button>
           <button
@@ -248,7 +258,11 @@ export function LocalSavedFileChangesModal({
           </button>
         </div>
       </div>
-      <button className="modal-backdrop" onClick={onCancel} aria-label={t("localChanges.close")} />
+      <button
+        className="modal-backdrop"
+        onClick={isApplying ? undefined : onClose}
+        aria-label={t("localChanges.close")}
+      />
     </div>
   );
 }

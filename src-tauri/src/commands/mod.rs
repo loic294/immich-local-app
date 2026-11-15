@@ -9,6 +9,7 @@ mod download_destination;
 pub mod auth;
 pub mod browsing;
 pub mod folders;
+pub mod ism;
 pub mod local_original;
 pub mod local_storage;
 pub mod media;

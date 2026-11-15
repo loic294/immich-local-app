@@ -27,6 +27,7 @@ import type { AppPage } from "../components/Layout/Sidebar";
 import { MENU_ITEMS, type MenuItemKey } from "../components/Layout/Sidebar";
 import { DaisyCalendarPicker } from "../components/Settings/DaisyCalendarPicker";
 import { StorageSettings } from "../components/Settings/StorageSettings";
+import { OfflineDownloadsSettings } from "../components/Settings/OfflineDownloadsSettings";
 import { AccountsBaseDirectorySettings } from "../components/Settings/AccountsBaseDirectorySettings";
 import { PhonePhotosSettings } from "../components/Settings/PhonePhotosSettings";
 import { AlbumCreationSettings } from "../components/Settings/AlbumCreationSettings";
@@ -432,7 +433,12 @@ export function SettingsPage({ onNavigate, onLogout }: SettingsPageProps) {
             aria-label={t("settings.title")}
             tabIndex={0}
           >
-            {section === "storage" && <StorageSettings section="storage" />}
+            {section === "storage" && (
+              <>
+                <OfflineDownloadsSettings accounts={accounts.accounts} />
+                <StorageSettings section="storage" />
+              </>
+            )}
             {section === "video" && <StorageSettings section="video" />}
             {section === "editing" && <MediaSettings section="editing" />}
             {section === "privacy" && <MediaSettings section="privacy" />}

@@ -454,12 +454,15 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
     state.db.recover_media_uploads()?;
     let mut done = 0;
     let mut deferred = HashSet::new();
+    let mut waiting = HashSet::new();
     loop {
         let jobs: Vec<_> = state
             .db
             .media_uploads()?
             .into_iter()
-            .filter(|job| job.state == "queued" && !deferred.contains(&job.id))
+            .filter(|job| {
+                job.state == "queued" && !deferred.contains(&job.id) && !waiting.contains(&job.id)
+            })
             .collect();
         if jobs.is_empty() {
             break;
@@ -489,6 +492,22 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
                 )?;
                 continue;
             };
+            let ism = match job.server_asset_id {
+                Some(_) => None,
+                None => state.db.ism_provider(&session.server_url)?,
+            };
+            if ism.is_some()
+                && job.original_asset_id.is_none()
+                && !state.db.ism_upload_exists(&job.id)?
+                && state.db.ism_import_folder(&session.server_url)?.is_none()
+            {
+                state.db.set_media_upload_state(
+                    &job.id,
+                    "failed",
+                    Some(ISM_IMPORT_FOLDER_REQUIRED),
+                )?;
+                continue;
+            }
             if !client.ping(&session.server_url).await {
                 log::warn!(
                     "[media:upload] offline; retaining queued job={} account={}",
@@ -504,10 +523,22 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
             log::info!("[media:upload] uploading job={}", job.id);
             let upload_span = activity_log::span("media", format!("upload job {}", job.id))
                 .slow_after(SLOW_TRANSFER_MS);
-            let result:Result<(),String>=async {
+            let result:Result<bool,String>=async {
             let (job,client)=edit_owner::route_edit_to_owner(state,job.clone(),client.clone(),&session.server_url).await?;
             let id=match job.server_asset_id.clone() {
                 Some(id)=>id,
+                None if ism.is_some()=>{
+                    let provider=ism.as_ref().ok_or("ISM provider missing")?;
+                    let original_path=match job.original_asset_id.as_deref() {
+                        Some(id)=>state.db.editor_jobs()?.into_iter().find(|j|j.asset_id==id).map(|j|j.local_path),
+                        None=>None,
+                    };
+                    let Some(id)=advance_ism_media_upload(state,&job,&session.server_url,provider,original_path.as_deref()).await? else {
+                        return Ok(false);
+                    };
+                    state.db.open()?.execute("UPDATE media_uploads SET server_asset_id=?1 WHERE id=?2",params![id,job.id]).map_err(|e|e.to_string())?;
+                    id
+                },
                 None=>{
                     let original=job.original_asset_id.as_deref().map(|id|state.db.get_asset_details(id)).transpose()?.flatten();
                     let captured_at=original.as_ref().and_then(|asset|asset.file_created_at.as_deref());
@@ -562,13 +593,18 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
             }
             state.db.open()?.execute("UPDATE media_uploads SET state='complete',error=NULL,completed_at=?1 WHERE id=?2",
                 params![chrono::Utc::now().to_rfc3339(),job.id]).map_err(|e|e.to_string())?;
-            Ok(())
+            state.db.forget_ism_media_upload(&job.id)?;
+            Ok(true)
         }.await;
             upload_span.finish_result(&result);
             match result {
-                Ok(()) => {
+                Ok(true) => {
                     done += 1;
                     log::info!("[media:upload] completed job={}", job.id);
+                }
+                Ok(false) => {
+                    state.db.set_media_upload_state(&job.id, "queued", None)?;
+                    waiting.insert(job.id.clone());
                 }
                 Err(error) => {
                     if !client.ping(&session.server_url).await {
@@ -591,13 +627,108 @@ async fn process_media_uploads(state: &AppState) -> Result<u32, String> {
         }
     }
     log::info!(
-        "[media:upload] flush finished completed={done} deferred={}",
-        deferred.len()
+        "[media:upload] flush finished completed={done} deferred={} waiting_for_ism={}",
+        deferred.len(),
+        waiting.len()
     );
     if done == 0 && !deferred.is_empty() {
         return Err("offline: uploads retained locally for retry".into());
     }
     Ok(done)
+}
+
+const ISM_IMPORT_FOLDER_REQUIRED: &str =
+    "Choose an ISM import folder in Settings → Offline downloads; the file remains local.";
+
+/// Uploads a queued file through ISM into the original's folder (edits) or the configured
+/// import folder, keeping its sidecar. Returns `None` while ISM publishes or Immich imports.
+async fn advance_ism_media_upload(
+    state: &AppState,
+    job: &UploadJob,
+    server_url: &str,
+    provider: &crate::services::ism::Provider,
+    original_path: Option<&str>,
+) -> Result<Option<String>, String> {
+    use crate::services::ism::{
+        advance_upload, Advance, FileRole, IsmClient, Location, NewUpload, UploadFileSource,
+    };
+    let client = IsmClient::new(&provider.base_url, &provider.client_token)?;
+    if !state.db.ism_upload_exists(&job.id)? {
+        let path = Path::new(&job.local_path);
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("Invalid local filename")?
+            .to_string();
+        let source = |local_path: PathBuf, name: String, role, track| UploadFileSource {
+            local_path,
+            name,
+            role,
+            expected_revision: None,
+            expected_sha256: None,
+            track,
+        };
+        let mut files = vec![source(path.into(), name.clone(), FileRole::Original, true)];
+        let (target, provenance) = match job.original_asset_id.as_deref() {
+            Some(original) => {
+                let original = client
+                    .original_location(&state.db, server_url, original)
+                    .await?;
+                if let Some(sidecar) = original_path
+                    .map(|path| Path::new(path).with_extension("xmp"))
+                    .filter(|sidecar| sidecar.is_file())
+                {
+                    files.push(source(
+                        sidecar,
+                        format!("{name}.xmp"),
+                        FileRole::Sidecar,
+                        false,
+                    ));
+                }
+                let target = Location {
+                    root_id: original.location.root_id.clone(),
+                    path: original.folder.clone(),
+                };
+                (target, Some((original.location, Some(original.revision))))
+            }
+            None => {
+                let full = PathBuf::from(format!("{}.xmp", job.local_path));
+                let stem = path.with_extension("xmp");
+                if full.is_file() {
+                    files.push(source(full, format!("{name}.xmp"), FileRole::Sidecar, true));
+                } else if stem != path && stem.is_file() {
+                    let stem_name = stem
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or("Invalid sidecar filename")?
+                        .to_string();
+                    files.push(source(stem, stem_name, FileRole::Sidecar, true));
+                }
+                let target = state
+                    .db
+                    .ism_import_folder(server_url)?
+                    .ok_or(ISM_IMPORT_FOLDER_REQUIRED)?;
+                (target, None)
+            }
+        };
+        state.db.create_ism_upload(NewUpload {
+            job_id: job.id.clone(),
+            kind: "media",
+            server_url: server_url.to_string(),
+            asset_id: None,
+            target,
+            provenance_original: provenance,
+            files,
+            on_conflict: "rename",
+        })?;
+    }
+    match advance_upload(&state.db, &client, &job.id).await? {
+        Advance::Ready { asset_id } => Ok(Some(asset_id)),
+        Advance::Waiting(reason) => {
+            log::info!("[media:upload] ism waiting job={} reason={reason}", job.id);
+            Ok(None)
+        }
+    }
 }
 
 fn editor_source_present(
@@ -1188,10 +1319,16 @@ mod tests {
     }
     #[tokio::test]
     async fn queue_rechecks_late_jobs_and_recovers_offline_uploads() {
-        use std::sync::{Arc, atomic::AtomicBool};
+        use crate::services::{
+            account_manager::AccountManager,
+            db::Database,
+            immich_client::{AuthSession, ImmichClient},
+        };
+        use std::sync::{atomic::AtomicBool, Arc};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use crate::services::{db::Database, account_manager::AccountManager, immich_client::{ImmichClient, AuthSession}};
-        let folder = std::env::current_dir().unwrap().join(format!("media-queue-test-{}", uuid::Uuid::new_v4()));
+        let folder = std::env::current_dir()
+            .unwrap()
+            .join(format!("media-queue-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&folder).unwrap();
         let db = Arc::new(Database::test_database(folder.join("db.sqlite")).unwrap());
         let job = |id: &str, account: &str| UploadJob {
@@ -1233,7 +1370,82 @@ mod tests {
         db.set_media_upload_state("offline", "uploading", None).unwrap();
         assert!(process_media_uploads(&state).await.unwrap_err().starts_with("offline:"));
         assert_eq!(db.media_uploads().unwrap()[2].state, "queued");
-        drop(state); drop(db);
+        drop(state);
+        drop(db);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ism_upload_without_import_folder_fails_without_contacting_immich() {
+        use crate::services::{
+            account_manager::AccountManager,
+            db::Database,
+            immich_client::{AuthSession, ImmichClient},
+            ism::Provider,
+        };
+        use std::sync::{atomic::AtomicBool, Arc};
+
+        let folder =
+            std::env::temp_dir().join(format!("ism-upload-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let db = Arc::new(Database::test_database(folder.join("db.sqlite")).unwrap());
+        let file = folder.join("example.jpg");
+        std::fs::write(&file, b"local original").unwrap();
+        db.queue_media(&UploadJob {
+            id: "job".into(),
+            account_id: "account".into(),
+            local_path: file.to_string_lossy().into_owned(),
+            checksum: "fixture".into(),
+            album_ids: vec![],
+            original_asset_id: None,
+            server_asset_id: None,
+            state: "queued".into(),
+            error: None,
+        })
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        db.save_ism_provider(
+            &url,
+            &Provider {
+                base_url: "https://sync.example/".into(),
+                client_token: "fixture".into(),
+            },
+        )
+        .unwrap();
+        let client = Arc::new(ImmichClient::new());
+        *client.session.lock().await = Some(AuthSession {
+            server_url: url,
+            access_token: "fixture".into(),
+            refresh_token: None,
+            user_id: "fixture".into(),
+            user_name: None,
+        });
+        let accounts = Arc::new(AccountManager::new());
+        accounts.insert("account".into(), client.clone());
+        let state = AppState {
+            db: db.clone(),
+            immich: client,
+            accounts,
+            sync_cancel: Arc::new(AtomicBool::new(false)),
+            sync_progress: Default::default(),
+        };
+        assert_eq!(process_media_uploads(&state).await.unwrap(), 0);
+        let jobs = db.media_uploads().unwrap();
+        assert_eq!(jobs[0].state, "failed");
+        assert!(jobs[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("ISM import folder"));
+        assert_eq!(std::fs::read(&file).unwrap(), b"local original");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+        drop(state);
+        drop(db);
         std::fs::remove_dir_all(folder).unwrap();
     }
 
@@ -1332,5 +1544,136 @@ mod tests {
         drop(db);
         std::fs::remove_file(folder.join("db.sqlite")).unwrap();
         std::fs::remove_dir(folder).unwrap();
+    }
+    #[tokio::test]
+    async fn ism_refusal_fails_the_job_without_falling_back_to_immich_upload() {
+        use crate::services::{
+            account_manager::AccountManager,
+            db::Database,
+            immich_client::{AuthSession, ImmichClient},
+            ism::{Location, Provider},
+        };
+        use std::sync::{atomic::AtomicBool, Arc};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn respond(
+            listener: tokio::net::TcpListener,
+            body: &'static str,
+            status: &'static str,
+        ) -> Vec<String> {
+            let mut requests = Vec::new();
+            while let Ok(Ok((mut socket, _))) =
+                tokio::time::timeout(std::time::Duration::from_millis(500), listener.accept()).await
+            {
+                let mut request = Vec::new();
+                let mut buf = [0; 4096];
+                loop {
+                    let count = socket.read(&mut buf).await.unwrap();
+                    request.extend_from_slice(&buf[..count]);
+                    let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let length = text[..end]
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if count == 0 || request.len() >= end + 4 + length {
+                            break;
+                        }
+                    } else if count == 0 {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request).into_owned();
+                requests.push(request.lines().next().unwrap_or_default().to_string());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        }
+
+        let folder =
+            std::env::temp_dir().join(format!("ism-upload-refusal-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let db = Arc::new(Database::test_database(folder.join("db.sqlite")).unwrap());
+        let file = folder.join("example.jpg");
+        std::fs::write(&file, b"local original").unwrap();
+        std::fs::write(folder.join("example.jpg.xmp"), b"<xmp/>").unwrap();
+        db.queue_media(&UploadJob {
+            id: "job".into(),
+            account_id: "account".into(),
+            local_path: file.to_string_lossy().into_owned(),
+            checksum: "fixture".into(),
+            album_ids: vec![],
+            original_asset_id: None,
+            server_asset_id: None,
+            state: "queued".into(),
+            error: None,
+        })
+        .unwrap();
+        let immich = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let immich_url = format!("http://{}", immich.local_addr().unwrap());
+        let ism = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ism_url = format!("http://{}", ism.local_addr().unwrap());
+        db.save_ism_provider(
+            &immich_url,
+            &Provider {
+                base_url: ism_url,
+                client_token: "fixture".into(),
+            },
+        )
+        .unwrap();
+        db.set_ism_import_folder(
+            &immich_url,
+            Some(&Location {
+                root_id: "photos".into(),
+                path: "Imports".into(),
+            }),
+        )
+        .unwrap();
+        let client = Arc::new(ImmichClient::new());
+        *client.session.lock().await = Some(AuthSession {
+            server_url: immich_url,
+            access_token: "fixture".into(),
+            refresh_token: None,
+            user_id: "fixture".into(),
+            user_name: None,
+        });
+        let accounts = Arc::new(AccountManager::new());
+        accounts.insert("account".into(), client.clone());
+        let state = AppState {
+            db: db.clone(),
+            immich: client,
+            accounts,
+            sync_cancel: Arc::new(AtomicBool::new(false)),
+            sync_progress: Default::default(),
+        };
+        let immich_requests = tokio::spawn(respond(immich, "{}", "200 OK"));
+        let ism_requests = tokio::spawn(respond(
+            ism,
+            r#"{"error":{"code":"direct_writes_unavailable","message":"gate not passed"}}"#,
+            "409 Conflict",
+        ));
+        assert_eq!(process_media_uploads(&state).await.unwrap(), 0);
+        let jobs = db.media_uploads().unwrap();
+        assert_eq!(jobs[0].state, "failed");
+        assert!(jobs[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("direct_writes_unavailable"));
+        let ism_requests = ism_requests.await.unwrap();
+        assert_eq!(ism_requests, ["POST /api/v1/uploads HTTP/1.1"]);
+        let immich_requests = immich_requests.await.unwrap();
+        assert!(immich_requests
+            .iter()
+            .all(|request| request.starts_with("GET /api/server/ping ")));
+        assert_eq!(std::fs::read(&file).unwrap(), b"local original");
+        drop(state);
+        drop(db);
+        std::fs::remove_dir_all(folder).unwrap();
     }
 }

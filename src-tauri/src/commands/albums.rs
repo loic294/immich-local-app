@@ -602,7 +602,7 @@ pub async fn save_album_locally(
         asset_ids,
         destination.to_string_lossy().to_string(),
         false,
-        state.clone(),
+        &state,
         Some(app.clone()),
         "album_save",
         Some(&album_id),
@@ -631,6 +631,9 @@ pub async fn save_album_locally(
         .update_album_saved_local_folder_path(&album_id, Some(&result))
         .map_err(|err| format!("[album-save-locally] failed to persist saved folder path: {}", err))?;
     if copy_result.failed_count + copy_result.original_unavailable_count > 0 {
+        if let Some(error) = copy_result.errors.first() {
+            return Err(format!("Album download incomplete: {}", error.message));
+        }
         let error = format!("Album download incomplete: {} files could not be downloaded",
             copy_result.failed_count + copy_result.original_unavailable_count);
         log::error!("[album-save-locally] album_id={album_id} {error}");

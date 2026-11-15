@@ -231,7 +231,7 @@ export function PhotoGridFullscreenOverlay({
           true,
         );
         if (result.copiedOriginalCount === 0) {
-          throw new Error("The original could not be downloaded");
+          throw new Error(result.errors?.[0]?.message ?? "The original could not be downloaded");
         }
       } finally {
         unlisten();

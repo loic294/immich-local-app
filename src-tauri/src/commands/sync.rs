@@ -843,6 +843,15 @@ pub async fn refresh_album_list(state: tauri::State<'_, AppState>) -> Result<u32
 
 #[tauri::command]
 pub async fn scan_saved_local_files(state: tauri::State<'_, AppState>) -> Result<u32, String> {
+    // ISM-tracked renames update local tracking first, so they are not reported as deletions.
+    match crate::services::ism::detect_ism_local_changes(&state.db) {
+        Ok(0) => {}
+        Ok(queued) => log::info!("[saved-local-files] queued ISM changes count={queued}"),
+        Err(error) => log::warn!("[saved-local-files] ISM change detection failed: {error}"),
+    }
+    tauri::async_runtime::spawn(crate::services::ism::process_ism_background_work(
+        state.db.clone(),
+    ));
     let tracked = state.db.list_local_saved_assets()?;
     let mut created_changes = 0u32;
 
@@ -969,6 +978,16 @@ fn apply_modified_local_snapshot(
     Ok(())
 }
 
+fn ensure_ism_deleted_file_is_missing(path: &str) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(format!(
+            "Local file {path} has reappeared. An earlier ISM deletion may still be running; verify its outcome before proceeding."
+        )),
+        Err(err) => Err(format!("Cannot verify whether local file {path} exists: {err}")),
+    }
+}
+
 #[tauri::command]
 pub async fn apply_saved_local_file_changes(
     input: ApplySavedLocalFileChangesInput,
@@ -996,23 +1015,45 @@ pub(super) async fn apply_saved_local_file_changes_inner(
 
         match change.change_kind.as_str() {
             "deleted" => {
-                let payload = super::assets::UpdateAssetVisibilityPayload {
-                    asset_id: change.asset_id.clone(),
-                    visibility: "archive".into(),
-                };
-                if let Err(error) =
-                    super::assets::update_asset_visibility_inner(payload, &state).await
-                {
-                    log::warn!(
-                        "[sync.apply_saved_local_file_changes] archive failed asset={}: {error}",
-                        change.asset_id
-                    );
-                    failed_count += 1;
-                    errors.push(format!(
-                        "failed to archive asset {}: {error}",
-                        change.asset_id
-                    ));
-                    continue;
+                let ism_managed = state.db.ism_guards_local_changes(&change.asset_id)?;
+                if ism_managed {
+                    if let Err(error) = ensure_ism_deleted_file_is_missing(&change.local_path) {
+                        failed_count += 1;
+                        errors.push(error);
+                        continue;
+                    }
+                    if let Err(error) = apply_ism_local_deletion(state, &change).await {
+                        failed_count += 1;
+                        errors.push(format!(
+                            "failed to delete ISM-managed asset {}: {error}",
+                            change.asset_id
+                        ));
+                        continue;
+                    }
+                    if let Err(error) = ensure_ism_deleted_file_is_missing(&change.local_path) {
+                        failed_count += 1;
+                        errors.push(error);
+                        continue;
+                    }
+                } else {
+                    let payload = super::assets::UpdateAssetVisibilityPayload {
+                        asset_id: change.asset_id.clone(),
+                        visibility: "archive".into(),
+                    };
+                    if let Err(error) =
+                        super::assets::update_asset_visibility_inner(payload, &state).await
+                    {
+                        log::warn!(
+                            "[sync.apply_saved_local_file_changes] archive failed asset={}: {error}",
+                            change.asset_id
+                        );
+                        failed_count += 1;
+                        errors.push(format!(
+                            "failed to archive asset {}: {error}",
+                            change.asset_id
+                        ));
+                        continue;
+                    }
                 }
 
                 // Remove all tracked local copies for this asset from disk.
@@ -1022,6 +1063,9 @@ pub(super) async fn apply_saved_local_file_changes_inner(
                 {
                     Ok(paths) => {
                         for path in paths {
+                            if ism_managed && path == change.local_path {
+                                continue;
+                            }
                             if let Err(err) = fs::remove_file(&path) {
                                 if Path::new(&path).exists() {
                                     log::warn!(
@@ -1042,6 +1086,14 @@ pub(super) async fn apply_saved_local_file_changes_inner(
                     }
                 }
 
+                if ism_managed {
+                    if let Err(error) = ensure_ism_deleted_file_is_missing(&change.local_path) {
+                        failed_count += 1;
+                        errors.push(error);
+                        continue;
+                    }
+                }
+
                 if let Err(err) = state
                     .db
                     .delete_local_saved_assets_for_asset(&change.asset_id)
@@ -1054,10 +1106,14 @@ pub(super) async fn apply_saved_local_file_changes_inner(
                     continue;
                 }
 
-                if let Err(err) = state
-                    .db
-                    .resolve_local_saved_asset_changes_by_ids(&[change.id])
-                {
+                let resolved = if ism_managed {
+                    state.db.resolve_ism_deletion(change.id)
+                } else {
+                    state
+                        .db
+                        .resolve_local_saved_asset_changes_by_ids(&[change.id])
+                };
+                if let Err(err) = resolved {
                     failed_count += 1;
                     errors.push(format!("failed to resolve change {}: {}", change.id, err));
                     continue;
@@ -1099,6 +1155,74 @@ pub(super) async fn apply_saved_local_file_changes_inner(
     })
 }
 
+async fn apply_ism_local_deletion(
+    state: &AppState,
+    change: &crate::services::db::LocalSavedAssetChange,
+) -> Result<(), String> {
+    let account_id = state
+        .db
+        .get_asset_account_id(&change.asset_id)?
+        .ok_or_else(|| {
+            format!(
+                "No Immich account is recorded for asset {}",
+                change.asset_id
+            )
+        })?;
+    let account = state
+        .db
+        .get_account(&account_id)?
+        .ok_or_else(|| format!("Immich account {account_id} is not available"))?;
+    let provider = state
+        .db
+        .ism_provider(&account.server_url)?
+        .ok_or("ISM provider configuration is missing")?;
+    let client = crate::services::ism::IsmClient::new(&provider.base_url, &provider.client_token)?;
+    let (location, binding) = match state.db.ism_deletion_request(
+        change.id,
+        &change.asset_id,
+        &account.server_url,
+    )? {
+        Some(location) => {
+            let binding = state.db.ism_deletion_binding(change.id)?.ok_or(
+                    "This older ISM deletion request has no verified server identity; inspect it in ISM before proceeding"
+                )?;
+            (location, binding)
+        }
+        None => {
+            let binding = client.deletion_binding(&client.info().await?)?;
+            let (location, current) = client.asset_original(&change.asset_id).await?;
+            // Trash only the version this device last synced; a newer server copy is kept.
+            let revision = state
+                .db
+                .ism_tracked_original(&account.server_url, &change.asset_id)?
+                .map_or(current, |tracked| tracked.revision);
+            let saved = state.db.record_ism_deletion_request(
+                change.id,
+                &change.asset_id,
+                &account.server_url,
+                &location,
+                Some(&binding),
+                Some(revision.as_str()).filter(|revision| !revision.is_empty()),
+            )?;
+            let saved_binding = state
+                .db
+                .ism_deletion_binding(change.id)?
+                .ok_or("ISM deletion identity is unavailable; the notice was retained")?;
+            (saved, saved_binding)
+        }
+    };
+    client
+        .trash_asset_at(
+            &location.0,
+            &location.1,
+            &change.asset_id,
+            binding.request_key(),
+            Some(&binding),
+            state.db.ism_deletion_revision(change.id)?.as_deref(),
+        )
+        .await
+}
+
 /// Dismiss (skip) tracked local file changes WITHOUT applying them to the
 /// server or local cache. This updates the tracking information in the database
 /// so the same change is not re-detected on the next scan (which is what caused
@@ -1111,6 +1235,13 @@ pub(super) async fn apply_saved_local_file_changes_inner(
 pub async fn dismiss_saved_local_file_changes(
     input: ApplySavedLocalFileChangesInput,
     state: tauri::State<'_, AppState>,
+) -> Result<u32, String> {
+    dismiss_saved_local_file_changes_inner(input, &state).await
+}
+
+pub(super) async fn dismiss_saved_local_file_changes_inner(
+    input: ApplySavedLocalFileChangesInput,
+    state: &AppState,
 ) -> Result<u32, String> {
     let mut dismissed_count = 0u32;
 
@@ -1144,27 +1275,55 @@ pub async fn dismiss_saved_local_file_changes(
                 }
             }
             "deleted" => {
-                // Stop tracking the now-missing local copy so it is not reported
-                // again on the next scan.
-                if let Err(err) = state
-                    .db
-                    .delete_local_saved_asset_by_path(&change.asset_id, &change.local_path)
+                if let Some((asset_id, server_url, root_id, path)) =
+                    state.db.ism_deletion_request_for_change(change.id)?
                 {
-                    log::warn!(
-                        "[sync.dismiss_saved_local_file_changes] failed to untrack path asset_id={} path={} err={}",
-                        change.asset_id,
-                        change.local_path,
-                        err
-                    );
+                    if asset_id != change.asset_id {
+                        return Err("ISM deletion identity does not match the notice".into());
+                    }
+                    let binding = state.db.ism_deletion_binding(change.id)?.ok_or(
+                        "This older ISM deletion request has no verified server identity; inspect it in ISM before skipping"
+                    )?;
+                    let provider = state
+                        .db
+                        .ism_provider(&server_url)?
+                        .ok_or("ISM provider configuration is missing; the notice was retained")?;
+                    let client = crate::services::ism::IsmClient::new(
+                        &provider.base_url,
+                        &provider.client_token,
+                    )?;
+                    let revision = state.db.ism_deletion_revision(change.id)?;
+                    client
+                        .cancel_deletion(&binding, &root_id, &path, &asset_id, revision.as_deref())
+                        .await?;
+                    let keep_local_copy = match fs::symlink_metadata(&change.local_path) {
+                        Ok(_) => true,
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+                        Err(err) => {
+                            return Err(format!(
+                                "Cannot verify local file {}: {err}",
+                                change.local_path
+                            ))
+                        }
+                    };
+                    state.db.dismiss_cancelled_ism_deletion(
+                        change.id,
+                        &binding,
+                        keep_local_copy,
+                    )?;
+                    dismissed_count += 1;
+                } else if state.db.dismiss_local_saved_deletion(change.id)? {
+                    dismissed_count += 1;
                 }
+                continue;
             }
             _ => {}
         }
 
-        if let Err(err) = state
+        let resolved = state
             .db
-            .resolve_local_saved_asset_changes_by_ids(&[change.id])
-        {
+            .resolve_local_saved_asset_changes_by_ids(&[change.id]);
+        if let Err(err) = resolved {
             log::warn!(
                 "[sync.dismiss_saved_local_file_changes] failed to resolve change id={} err={}",
                 change.id,
@@ -1708,6 +1867,19 @@ fn parse_asset_created_at_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
 mod local_snapshot_tests {
     use super::*;
     use crate::services::{db::Database, immich_client::AssetSummary};
+
+    #[cfg(unix)]
+    #[test]
+    fn ism_deletion_treats_a_dangling_symlink_as_a_restored_file() {
+        let folder = std::env::temp_dir().join(format!("ism-link-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&folder).unwrap();
+        let path = folder.join("photo.jpg");
+        std::os::unix::fs::symlink(folder.join("missing.jpg"), &path).unwrap();
+        assert!(ensure_ism_deleted_file_is_missing(path.to_str().unwrap()).is_err());
+        std::fs::remove_file(&path).unwrap();
+        assert!(ensure_ism_deleted_file_is_missing(path.to_str().unwrap()).is_ok());
+        std::fs::remove_dir(&folder).unwrap();
+    }
 
     #[test]
     fn live_photo_enrichment_retains_detail_and_summary_pairing() {

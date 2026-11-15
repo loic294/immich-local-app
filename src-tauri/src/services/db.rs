@@ -1078,6 +1078,11 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS ism_providers (
+                server_url TEXT PRIMARY KEY,
+                base_url TEXT NOT NULL,
+                client_token TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS account_preferences (
                 account_id TEXT PRIMARY KEY,
                 folders_base_directory TEXT NOT NULL DEFAULT ''
@@ -1116,6 +1121,64 @@ impl Database {
                 ON local_saved_assets(asset_id);
             CREATE INDEX IF NOT EXISTS idx_local_saved_assets_local_path
                 ON local_saved_assets(local_path);
+            CREATE TABLE IF NOT EXISTS ism_local_files (
+                asset_id TEXT NOT NULL,
+                server_url TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                local_path TEXT NOT NULL UNIQUE,
+                root_id TEXT NOT NULL,
+                remote_path TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                revision TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ism_local_deletion_requests (
+                change_id INTEGER PRIMARY KEY,
+                asset_id TEXT NOT NULL,
+                server_url TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                remote_path TEXT NOT NULL,
+                expected_revision TEXT
+            );
+            CREATE TABLE IF NOT EXISTS ism_local_deletion_bindings (
+                change_id INTEGER PRIMARY KEY,
+                instance_id TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                credential_hash TEXT NOT NULL,
+                request_key TEXT
+            );
+            CREATE TABLE IF NOT EXISTS ism_upload_jobs (
+                job_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                server_url TEXT NOT NULL,
+                asset_id TEXT,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                request_json TEXT NOT NULL,
+                local_paths_json TEXT NOT NULL,
+                upload_id TEXT,
+                operation_id TEXT,
+                final_root_id TEXT,
+                final_path TEXT,
+                state TEXT NOT NULL DEFAULT 'active',
+                error TEXT,
+                next_check_at INTEGER NOT NULL DEFAULT 0,
+                waiting_since INTEGER,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );
+            CREATE TABLE IF NOT EXISTS ism_operations (
+                idempotency_key TEXT PRIMARY KEY,
+                server_url TEXT NOT NULL,
+                label TEXT NOT NULL,
+                dedupe_key TEXT UNIQUE,
+                asset_id TEXT,
+                request_json TEXT NOT NULL,
+                operation_id TEXT,
+                status TEXT NOT NULL DEFAULT 'submitting',
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );
             CREATE TABLE IF NOT EXISTS local_saved_asset_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 asset_id TEXT NOT NULL,
@@ -1130,9 +1193,65 @@ impl Database {
                 ON local_saved_asset_changes(asset_id);
             CREATE INDEX IF NOT EXISTS idx_local_saved_asset_changes_unresolved
                 ON local_saved_asset_changes(resolved_at, detected_at DESC);
+            UPDATE local_saved_asset_changes SET resolved_at = NULL
+            WHERE resolved_at IS NOT NULL
+              AND EXISTS (SELECT 1 FROM ism_local_deletion_requests r
+                          WHERE r.change_id = local_saved_asset_changes.id);
             ",
         )
         .map_err(|err| err.to_string())?;
+
+        let conn = self.open()?;
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(ism_local_deletion_bindings)")
+            .map_err(|err| err.to_string())?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        drop(stmt);
+        if !columns.iter().any(|column| column == "request_key") {
+            conn.execute(
+                "ALTER TABLE ism_local_deletion_bindings ADD COLUMN request_key TEXT",
+                [],
+            )
+            .map_err(|err| format!("Cannot migrate ISM deletion identity: {err}"))?;
+        }
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(ism_local_deletion_requests)")
+            .map_err(|err| err.to_string())?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        drop(stmt);
+        if !columns.iter().any(|column| column == "expected_revision") {
+            conn.execute(
+                "ALTER TABLE ism_local_deletion_requests ADD COLUMN expected_revision TEXT",
+                [],
+            )
+            .map_err(|err| format!("Cannot migrate ISM deletion retry state: {err}"))?;
+        }
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(ism_providers)")
+            .map_err(|err| err.to_string())?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        drop(stmt);
+        for column in ["import_root_id", "import_path"] {
+            if !columns.iter().any(|existing| existing == column) {
+                conn.execute(
+                    &format!("ALTER TABLE ism_providers ADD COLUMN {column} TEXT"),
+                    [],
+                )
+                .map_err(|err| format!("Cannot migrate ISM import folder: {err}"))?;
+            }
+        }
 
         // Add missing columns to sync_state if they don't exist (migration)
         let conn = self.open()?;
@@ -2049,6 +2168,8 @@ impl Database {
             "
             DELETE FROM local_saved_asset_changes
             WHERE resolved_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM ism_local_deletion_requests r
+                              WHERE r.change_id = local_saved_asset_changes.id)
               AND EXISTS (
                 SELECT 1
                 FROM local_saved_assets lsa
@@ -2073,29 +2194,33 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.open()?;
         let tx = conn.transaction().map_err(|err| err.to_string())?;
-        tx.execute(
-            "
-            DELETE FROM local_saved_asset_changes
+        let updated = tx
+            .execute(
+                "
+            UPDATE local_saved_asset_changes
+            SET file_name = ?4, details_json = ?5
             WHERE asset_id = ?1
               AND local_path = ?2
               AND change_kind = ?3
               AND resolved_at IS NULL
             ",
-            params![asset_id, local_path, change_kind],
-        )
-        .map_err(|err| err.to_string())?;
-        tx.execute(
-            "
-            INSERT INTO local_saved_asset_changes (
-                asset_id, local_path, file_name, change_kind, details_json, detected_at, resolved_at
+                params![asset_id, local_path, change_kind, file_name, details_json],
             )
-            VALUES (
-                ?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL
+            .map_err(|err| err.to_string())?;
+        if updated == 0 {
+            tx.execute(
+                "
+                INSERT INTO local_saved_asset_changes (
+                    asset_id, local_path, file_name, change_kind, details_json, detected_at, resolved_at
+                )
+                VALUES (
+                    ?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL
+                )
+                ",
+                params![asset_id, local_path, file_name, change_kind, details_json],
             )
-            ",
-            params![asset_id, local_path, file_name, change_kind, details_json],
-        )
-        .map_err(|err| err.to_string())?;
+            .map_err(|err| err.to_string())?;
+        }
         tx.commit().map_err(|err| err.to_string())
     }
 
@@ -2114,6 +2239,8 @@ impl Database {
               AND local_path = ?2
               AND change_kind = ?3
               AND resolved_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM ism_local_deletion_requests r
+                              WHERE r.change_id = local_saved_asset_changes.id)
             ",
             params![asset_id, local_path, change_kind],
         )
@@ -2205,6 +2332,8 @@ impl Database {
             UPDATE local_saved_asset_changes
             SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
             WHERE id IN ({}) AND resolved_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM ism_local_deletion_requests r
+                              WHERE r.change_id = local_saved_asset_changes.id)
             ",
             placeholders
         );
@@ -2212,6 +2341,44 @@ impl Database {
             .map_err(|err| err.to_string())?;
 
         Ok(())
+    }
+
+    pub fn dismiss_local_saved_deletion(&self, change_id: i64) -> Result<bool, String> {
+        let mut conn = self.open()?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|err| err.to_string())?;
+        let pending: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM ism_local_deletion_requests WHERE change_id = ?1)",
+                [change_id],
+                |row| row.get(0),
+            )
+            .map_err(|err| err.to_string())?;
+        if pending {
+            return Err("Cannot skip this change: an ISM deletion may already be running. Its outcome must be verified before the notice can be cleared.".into());
+        }
+        tx.execute(
+            "DELETE FROM local_saved_assets
+             WHERE EXISTS (
+               SELECT 1 FROM local_saved_asset_changes c
+               WHERE c.id = ?1 AND c.resolved_at IS NULL AND c.change_kind = 'deleted'
+                 AND c.asset_id = local_saved_assets.asset_id
+                 AND c.local_path = local_saved_assets.local_path
+             )",
+            [change_id],
+        )
+        .map_err(|err| err.to_string())?;
+        let resolved = tx
+            .execute(
+                "UPDATE local_saved_asset_changes
+                 SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                 WHERE id = ?1 AND resolved_at IS NULL AND change_kind = 'deleted'",
+                [change_id],
+            )
+            .map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())?;
+        Ok(resolved > 0)
     }
 
     pub fn update_local_saved_asset_snapshot(

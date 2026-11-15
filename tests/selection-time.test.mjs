@@ -52,6 +52,9 @@ function renderActions(variant) {
     "../../i18n/albumPicker": { useAlbumPickerLabels: () => ({}) },
     "../../api/time": time,
     "./useSelectionActionShortcuts": { useSelectionActionShortcuts: () => {} },
+    "../Ism/IsmAssetActions": {
+      useIsmAssetActions: () => ({ available: false, menuItems: null, dialog: null }),
+    },
   });
   const tree = SelectionActions({
     selectedAssetIds: ["first", "second"],

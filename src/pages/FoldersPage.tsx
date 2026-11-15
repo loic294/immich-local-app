@@ -22,6 +22,7 @@ import type { Session } from "../hooks/useSession";
 import { criteriaWithQuery, type ViewScope } from "../types";
 import { useI18n } from "../i18n";
 import { deleteAssets } from "../api/deletion";
+import { IsmFolderActions } from "../components/Ism/IsmFolderActions";
 
 interface FoldersPageProps {
   session: Session;
@@ -335,6 +336,21 @@ export function FoldersPage({ session, onNavigate, onLogout }: FoldersPageProps)
                 }
               />
               <h1 className="m-0 text-2xl font-bold text-base-content">{t("folders.title")}</h1>
+              {accounts.primaryAccount && baseDirectoryLoaded ? (
+                <IsmFolderActions
+                  accountId={accounts.primaryAccount.id}
+                  path={currentPath}
+                  onChanged={() => void folderPathsQuery.refetch()}
+                  onLeft={() => {
+                    setCurrentPath(
+                      currentPath === baseDirectory
+                        ? baseDirectory
+                        : getParentPath(currentPath, baseDirectory),
+                    );
+                    void folderPathsQuery.refetch();
+                  }}
+                />
+              ) : null}
             </div>
 
             <div className="flex items-center gap-1 text-xs text-base-content/70">

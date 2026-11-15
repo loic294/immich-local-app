@@ -71,7 +71,6 @@ export function App() {
   const hasSyncedAlbumListOnBoot = useRef(false);
   const hasScannedLocalFilesOnBoot = useRef(false);
   const lastLocalFileScanAtRef = useRef(0);
-  const localFileChangesDismissedRef = useRef(false);
   const {
     session,
     error,
@@ -130,9 +129,7 @@ export function App() {
       await scanSavedLocalFiles();
       const unresolved = await getSavedLocalFileChanges();
       setLocalFileChanges(unresolved);
-      if (!localFileChangesDismissedRef.current) {
-        setShowLocalFileChangesModal(unresolved.length > 0);
-      }
+      setShowLocalFileChangesModal(unresolved.length > 0);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!message.startsWith("offline:")) {
@@ -229,7 +226,6 @@ export function App() {
       hasScannedLocalFilesOnBoot.current = false;
       hasAutoStartedSync.current = false;
       lastLocalFileScanAtRef.current = 0;
-      localFileChangesDismissedRef.current = false;
       setLocalFileChanges([]);
       setLocalFileApplyErrors([]);
       setShowLocalFileChangesModal(false);
@@ -450,17 +446,28 @@ export function App() {
           await applySelectedLocalFileChanges(localFileChanges.map((item) => item.id));
         }}
         onApplySelected={applySelectedLocalFileChanges}
-        onCancel={() => {
-          localFileChangesDismissedRef.current = true;
+        onClose={() => {
           setShowLocalFileChangesModal(false);
-          // Persist the skip: update the tracked snapshot / stop tracking removed
-          // paths so the same changes are not re-detected on the next scan.
-          const idsToDismiss = localFileChanges.map((item) => item.id);
-          setLocalFileChanges([]);
-          void dismissSavedLocalFileChanges(idsToDismiss).catch((err) => {
+        }}
+        onSkip={async () => {
+          setIsApplyingLocalFileChanges(true);
+          setLocalFileApplyErrors([]);
+          try {
+            await dismissSavedLocalFileChanges(localFileChanges.map((item) => item.id));
+            const unresolved = await getSavedLocalFileChanges();
+            setLocalFileChanges(unresolved);
+            setShowLocalFileChangesModal(unresolved.length > 0);
+          } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            console.warn("[app] failed to dismiss local file changes", message);
-          });
+            setLocalFileApplyErrors([message]);
+            try {
+              setLocalFileChanges(await getSavedLocalFileChanges());
+            } catch (refreshError) {
+              console.warn("[app] failed to refresh local file changes", refreshError);
+            }
+          } finally {
+            setIsApplyingLocalFileChanges(false);
+          }
         }}
       />
       {isApplyingLocalFileChanges ? (

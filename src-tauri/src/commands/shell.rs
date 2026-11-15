@@ -23,6 +23,14 @@ pub struct LocalCopyResult {
     pub failed_count: u32,
     pub has_fallback_candidates: bool,
     pub fallback_candidate_asset_ids: Vec<String>,
+    pub errors: Vec<LocalCopyError>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCopyError {
+    pub asset_id: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +123,7 @@ pub async fn copy_assets_to_local_folder(
                 (destination_folder, None)
             };
             let result = copy_assets_to_local_folder_internal(
-                asset_ids, destination.clone(), allow_cached_fallback, state.clone(),
+                asset_ids, destination.clone(), allow_cached_fallback, &state,
                 Some(app), "explorer_copy", album_id.as_deref(),
             ).await?;
             if result.copied_original_count + result.copied_cached_count > 0 {
@@ -134,7 +142,7 @@ pub async fn copy_assets_to_local_folder(
         asset_ids,
         destination_folder,
         allow_cached_fallback,
-        state,
+        &state,
         Some(app),
         "explorer_copy",
         None,
@@ -146,7 +154,7 @@ pub async fn copy_assets_to_local_folder_internal(
     asset_ids: Vec<String>,
     destination_folder: String,
     allow_cached_fallback: bool,
-    state: tauri::State<'_, AppState>,
+    state: &AppState,
     app: Option<tauri::AppHandle>,
     source_kind: &str,
     album_id: Option<&str>,
@@ -177,6 +185,7 @@ pub async fn copy_assets_to_local_folder_internal(
     let mut cache_fallback_available_count = 0u32;
     let mut skipped_count = 0u32;
     let mut failed_count = 0u32;
+    let mut errors = Vec::new();
     let mut pending_fallback: Vec<PendingFallback> = Vec::new();
 
     let total_assets = asset_ids.len() as u32;
@@ -284,11 +293,18 @@ pub async fn copy_assets_to_local_folder_internal(
             );
             if album_id.is_some() {
                 let (mtime_ms, size_bytes) = get_file_snapshot(Path::new(&saved_path));
-                let name = Path::new(&saved_path).file_name()
+                let name = Path::new(&saved_path)
+                    .file_name()
                     .and_then(|name| name.to_str())
                     .ok_or_else(|| "Saved file has no valid filename".to_string())?;
                 state.db.upsert_local_saved_asset(
-                    &details.id, album_id, &saved_path, name, &tracked_kind, mtime_ms, size_bytes,
+                    &details.id,
+                    album_id,
+                    &saved_path,
+                    name,
+                    &tracked_kind,
+                    mtime_ms,
+                    size_bytes,
                 )?;
             }
             // Reserve the name so a different asset in this batch doesn't collide.
@@ -325,7 +341,105 @@ pub async fn copy_assets_to_local_folder_internal(
             is_video,
             video_quality
         );
-        let (_account_id, client) = state.account_and_client_for_asset(&details.id);
+        let account_id = match state.db.get_asset_account_id(&details.id)? {
+            Some(id) => id,
+            None => state
+                .db
+                .get_primary_account()?
+                .map(|account| account.id)
+                .unwrap_or_default(),
+        };
+        let client = state.client_for(Some(&account_id));
+        let ism = if !wants_transcoded && !account_id.is_empty() {
+            let account = state
+                .db
+                .get_account(&account_id)?
+                .ok_or("Asset account not found")?;
+            state
+                .db
+                .ism_provider(&account.server_url)?
+                .map(|provider| (account.server_url, provider))
+        } else {
+            None
+        };
+        if let Some((server_url, provider)) = ism {
+            let progress_app = app.clone();
+            let progress_asset_id = details.id.clone();
+            let result = async {
+                let client = crate::services::ism::IsmClient::new(
+                    &provider.base_url,
+                    &provider.client_token,
+                )?;
+                let group = client
+                    .download_group(&details.id, &destination, |downloaded, total| {
+                        if let Some(ref app) = progress_app {
+                            let percent = if total == 0 {
+                                None
+                            } else {
+                                Some((downloaded.min(total).saturating_mul(100) / total) as u32)
+                            };
+                            let _ = app.emit(
+                                "asset_download_progress",
+                                AssetDownloadProgress {
+                                    asset_id: progress_asset_id.clone(),
+                                    downloaded_bytes: downloaded,
+                                    total_bytes: Some(total),
+                                    percent,
+                                },
+                            );
+                        }
+                    })
+                    .await?;
+                state
+                    .db
+                    .record_ism_download(&details.id, &server_url, &group, album_id, &tracked_kind)
+                    .map_err(|error| {
+                        let paths = group
+                            .files
+                            .iter()
+                            .map(|file| file.local_path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "Files were downloaded but tracking failed: {error}; files: {paths}"
+                        )
+                    })?;
+                for file in &group.files {
+                    if let Some(name) = file.local_path.file_name().and_then(|name| name.to_str()) {
+                        used_names.insert(name.to_string());
+                    }
+                }
+                state
+                    .db
+                    .mark_asset_local_versions(&details.id, false, false, true)?;
+                Ok::<(), String>(())
+            }
+            .await;
+            match result {
+                Ok(()) => copied_original_count += 1,
+                Err(message) => {
+                    log::warn!("[ism:download] asset={} failed: {message}", details.id);
+                    failed_count += 1;
+                    errors.push(LocalCopyError {
+                        asset_id: details.id.clone(),
+                        message,
+                    });
+                }
+            }
+            if let Some(ref app) = app {
+                let copied = copied_original_count + copied_cached_count;
+                let _ = app.emit(
+                    "album_save_progress",
+                    crate::commands::albums::AlbumSaveProgress {
+                        total_assets,
+                        copied_count: copied,
+                        current_file: Some(details.original_file_name.clone()),
+                        status: format!("Copying... ({}/{})", copied, total_assets),
+                    },
+                );
+            }
+            continue;
+        }
         let destination_name = if wants_transcoded {
             transcoded_file_name(&details.original_file_name)
         } else {
@@ -373,7 +487,9 @@ pub async fn copy_assets_to_local_folder_internal(
                 );
                 let (mtime_ms, size_bytes) = get_file_snapshot(&dest_path);
                 download_span.finish_transfer(
-                    size_bytes.and_then(|size| u64::try_from(size).ok()).unwrap_or(0),
+                    size_bytes
+                        .and_then(|size| u64::try_from(size).ok())
+                        .unwrap_or(0),
                 );
                 if let Err(err) = state.db.upsert_local_saved_asset(
                     &details.id,
@@ -440,7 +556,7 @@ pub async fn copy_assets_to_local_folder_internal(
 
         original_unavailable_count += 1;
         let cached_candidate = match resolve_cached_fallback_candidate(
-            &state,
+            state,
             &details.id,
             details.r#type.as_deref(),
             details.duration.as_deref(),
@@ -544,6 +660,7 @@ pub async fn copy_assets_to_local_folder_internal(
         failed_count,
         has_fallback_candidates,
         fallback_candidate_asset_ids,
+        errors,
     })
 }
 
@@ -780,7 +897,7 @@ fn get_file_snapshot(path: &Path) -> (Option<i64>, Option<i64>) {
 }
 
 async fn cached_path_if_exists(
-    state: &tauri::State<'_, AppState>,
+    state: &AppState,
     asset_id: &str,
     cache_kind: CacheKind,
 ) -> Result<Option<String>, String> {
@@ -797,7 +914,7 @@ async fn cached_path_if_exists(
 }
 
 async fn resolve_cached_fallback_candidate(
-    state: &tauri::State<'_, AppState>,
+    state: &AppState,
     asset_id: &str,
     asset_type: Option<&str>,
     duration: Option<&str>,
@@ -913,7 +1030,6 @@ fn make_unique_name(base_name: &str, used_names: &mut HashSet<String>) -> String
                 Some(ext) => format!("{}.{}", stem, ext),
                 None => stem.to_string(),
             }
-
         } else {
             match extension {
                 Some(ext) => format!("{}-{}.{}", stem, counter, ext),
@@ -934,20 +1050,268 @@ mod download_tests {
 
     #[test]
     fn album_download_does_not_overwrite_existing_files_and_preserves_extensions() {
-        let folder = std::env::temp_dir().join(format!(
-            "immich-album-download-{}", uuid::Uuid::new_v4()
-        ));
+        let folder =
+            std::env::temp_dir().join(format!("immich-album-download-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&folder).unwrap();
         for name in ["photo.jpg", "video.mp4"] {
             fs::write(folder.join(name), b"existing original").unwrap();
         }
         let mut names = HashSet::new();
-        assert_eq!(resolve_destination_path("photo.jpg", &folder, &mut names), folder.join("photo-1.jpg"));
-        assert_eq!(resolve_destination_path("photo.jpg", &folder, &mut names), folder.join("photo-2.jpg"));
-        assert_eq!(resolve_destination_path("video.mp4", &folder, &mut names), folder.join("video-1.mp4"));
-        assert_eq!(fs::read(folder.join("photo.jpg")).unwrap(), b"existing original");
+        assert_eq!(
+            resolve_destination_path("photo.jpg", &folder, &mut names),
+            folder.join("photo-1.jpg")
+        );
+        assert_eq!(
+            resolve_destination_path("photo.jpg", &folder, &mut names),
+            folder.join("photo-2.jpg")
+        );
+        assert_eq!(
+            resolve_destination_path("video.mp4", &folder, &mut names),
+            folder.join("video-1.mp4")
+        );
+        assert_eq!(
+            fs::read(folder.join("photo.jpg")).unwrap(),
+            b"existing original"
+        );
         fs::remove_file(folder.join("photo.jpg")).unwrap();
         fs::remove_file(folder.join("video.mp4")).unwrap();
         fs::remove_dir(folder).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ism_download_failure_never_falls_back_to_immich_or_cache() {
+        use crate::services::{
+            account_manager::AccountManager,
+            db::Database,
+            immich_client::{AuthSession, ImmichClient},
+            ism::Provider,
+        };
+        use std::sync::{atomic::AtomicBool, Arc};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let folder = std::env::temp_dir().join(format!("ism-copy-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&folder).unwrap();
+        let db = Arc::new(Database::test_database(folder.join("db.sqlite")).unwrap());
+        let immich_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let immich_url = format!("http://{}", immich_listener.local_addr().unwrap());
+        let account = db
+            .upsert_account(&immich_url, "user", None, None, "api_key", "fixture")
+            .unwrap();
+        db.open().unwrap().execute(
+            "INSERT INTO assets (id, account_id, original_file_name, updated_at, asset_type) VALUES (?1, ?2, ?3, 0, 'IMAGE')",
+            rusqlite::params!["asset-1", account.id, "example.jpg"],
+        ).unwrap();
+        let ism_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ism_url = format!("http://{}", ism_listener.local_addr().unwrap());
+        db.save_ism_provider(
+            &immich_url,
+            &Provider {
+                base_url: ism_url,
+                client_token: "fixture".into(),
+            },
+        )
+        .unwrap();
+        let ism_server = tokio::spawn(async move {
+            let (mut socket, _) = ism_listener.accept().await.unwrap();
+            let mut request = vec![0; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..count])
+                .contains("/api/v1/assets/asset-1/manifest"));
+            let body = br#"{"error":{"code":"maintenance_blocked","message":"Unavailable"}}"#;
+            socket.write_all(format!("HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+            socket.write_all(body).await.unwrap();
+        });
+        let client = Arc::new(ImmichClient::new());
+        *client.session.lock().await = Some(AuthSession {
+            server_url: immich_url,
+            access_token: "fixture".into(),
+            refresh_token: None,
+            user_id: "user".into(),
+            user_name: None,
+        });
+        let accounts = Arc::new(AccountManager::new());
+        accounts.insert(account.id, client.clone());
+        let state = AppState {
+            db: db.clone(),
+            immich: client,
+            accounts,
+            sync_cancel: Arc::new(AtomicBool::new(false)),
+            sync_progress: Default::default(),
+        };
+        let result = copy_assets_to_local_folder_internal(
+            vec!["asset-1".into()],
+            folder.to_string_lossy().into_owned(),
+            true,
+            &state,
+            None,
+            "explorer_copy",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.failed_count, 1);
+        assert_eq!(result.copied_original_count, 0);
+        assert_eq!(result.copied_cached_count, 0);
+        assert!(!result.has_fallback_candidates);
+        assert!(result.errors[0].message.contains("maintenance_blocked"));
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            immich_listener.accept()
+        )
+        .await
+        .is_err());
+        ism_server.await.unwrap();
+        drop(state);
+        drop(db);
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ism_download_tracks_original_and_sidecar_through_copy_command() {
+        use crate::services::{
+            account_manager::AccountManager,
+            db::Database,
+            immich_client::{AuthSession, ImmichClient},
+            ism::Provider,
+        };
+        use sha2::{Digest, Sha256};
+        use std::sync::{atomic::AtomicBool, Arc};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let folder = std::env::temp_dir().join(format!("ism-copy-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&folder).unwrap();
+        let db = Arc::new(Database::test_database(folder.join("db.sqlite")).unwrap());
+        let immich_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let immich_url = format!("http://{}", immich_listener.local_addr().unwrap());
+        let account = db
+            .upsert_account(&immich_url, "user", None, None, "api_key", "fixture")
+            .unwrap();
+        db.open().unwrap().execute(
+            "INSERT INTO assets (id, account_id, original_file_name, updated_at, asset_type) VALUES (?1, ?2, ?3, 0, 'IMAGE')",
+            rusqlite::params!["asset-1", account.id, "example.jpg"],
+        ).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        db.save_ism_provider(
+            &immich_url,
+            &Provider {
+                base_url: format!("http://{}", listener.local_addr().unwrap()),
+                client_token: "fixture".into(),
+            },
+        )
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let original = b"original";
+            let sidecar = b"sidecar";
+            let manifest = serde_json::json!({
+                "group_id": "photos:example", "asset_id": "asset-1",
+                "location": { "root_id": "photos", "path": "example.jpg" }, "folder": "",
+                "files": [
+                    { "role": "original", "name": "example.jpg", "path": "example.jpg",
+                      "size": original.len(), "revision": "rev-1", "sha256": hex::encode(Sha256::digest(original)) },
+                    { "role": "sidecar", "name": "example.jpg.xmp", "path": "example.jpg.xmp",
+                      "size": sidecar.len(), "revision": "rev-2", "sha256": hex::encode(Sha256::digest(sidecar)) }
+                ]
+            }).to_string().into_bytes();
+            for body in [manifest, original.to_vec(), sidecar.to_vec()]
+                .into_iter()
+                .cycle()
+                .take(6)
+            {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 4096];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.write_all(&body).await.unwrap();
+            }
+        });
+        let client = Arc::new(ImmichClient::new());
+        *client.session.lock().await = Some(AuthSession {
+            server_url: immich_url,
+            access_token: "fixture".into(),
+            refresh_token: None,
+            user_id: "user".into(),
+            user_name: None,
+        });
+        let accounts = Arc::new(AccountManager::new());
+        accounts.insert(account.id, client.clone());
+        let state = AppState {
+            db: db.clone(),
+            immich: client,
+            accounts,
+            sync_cancel: Arc::new(AtomicBool::new(false)),
+            sync_progress: Default::default(),
+        };
+        let result = copy_assets_to_local_folder_internal(
+            vec!["asset-1".into()],
+            folder.to_string_lossy().into_owned(),
+            true,
+            &state,
+            None,
+            "explorer_copy",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!((result.copied_original_count, result.failed_count), (1, 0));
+        assert_eq!(fs::read(folder.join("example.jpg")).unwrap(), b"original");
+        assert_eq!(
+            fs::read(folder.join("example.jpg.xmp")).unwrap(),
+            b"sidecar"
+        );
+        let count: i64 = db
+            .open()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM ism_local_files WHERE asset_id = 'asset-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(
+            db.list_local_saved_asset_sources("asset-1").unwrap().len(),
+            1
+        );
+        fs::remove_file(folder.join("example.jpg")).unwrap();
+        fs::remove_file(folder.join("example.jpg.xmp")).unwrap();
+        let redownload = copy_assets_to_local_folder_internal(
+            vec!["asset-1".into()],
+            folder.to_string_lossy().into_owned(),
+            true,
+            &state,
+            None,
+            "explorer_copy",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (redownload.copied_original_count, redownload.failed_count),
+            (1, 0)
+        );
+        assert_eq!(fs::read(folder.join("example.jpg")).unwrap(), b"original");
+        assert_eq!(
+            fs::read(folder.join("example.jpg.xmp")).unwrap(),
+            b"sidecar"
+        );
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            immich_listener.accept()
+        )
+        .await
+        .is_err());
+        server.await.unwrap();
+        drop(state);
+        drop(db);
+        fs::remove_dir_all(folder).unwrap();
     }
 }

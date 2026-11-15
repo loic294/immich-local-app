@@ -251,6 +251,46 @@ album start date. Existing album paths are reused; otherwise the normal
 `year/album name` folder is created under the configured local folder. Assets
 without an album use the configured folder directly. Explicit export destinations
 are not overridden.
+
+An optional Immich Sync Manager (ISM) connection in **Settings → Storage & cache**
+downloads verified original files and their available sidecars for the associated
+Immich server. Immich still supplies previews and server-transcoded videos. An
+already tracked local original is reused without fetching missing sidecars; an
+ISM failure is reported rather than silently falling back to Immich. With ISM
+selected, new local files are uploaded through ISM into their original (provenance)
+folder or the configured import folder, edited sidecars are sent as sidecar-only
+uploads, and rename, move, trash and folder create/move/trash actions are submitted as
+ISM operations. Refusals such as `maintenance_blocked`, `revision_changed` or
+`destination_exists` are shown and never retried with force or through Immich. Applying a local deletion notice for an
+ISM-managed file submits a trash operation through ISM with the expected Immich asset ID
+and waits for its result. New requests require ISM's identity verification,
+instance-scoped operations and cancellation-by-key capabilities. Each request
+uses a persisted random key so separate ILA installations cannot reuse the same
+operation identity.
+If ISM cannot verify the operation (including its stock-Immich maintenance
+block), the notice and local copies are retained for a safe retry; ILA never
+falls back to Immich's archive endpoint for an ISM-managed asset.
+If a local file reappears after a deletion request was prepared, its notice and
+retry identity remain pending: closing the dialog does not cancel the remote
+operation. Skipping first asks the original ISM instance to cancel the exact
+request; it succeeds only if the request was never submitted or the queued
+operation was cancelled before it started. Running or completed operations,
+older requests without a saved server identity, and changed credentials require
+inspection in ISM. ILA does not remove a reappeared local file.
+Retries of requests submitted before identity verification was added may be rejected
+as conflicting; inspect the original ISM operation before taking further action.
+Simply removing a local original does not remove its separately downloaded sidecars; a
+successfully applied ISM deletion removes the remaining tracked local copies.
+The ISM client token is stored in the local database; use HTTPS on untrusted
+networks.
+
+To debug the ISM integration, open **Help → Activity Log** and search for `ism`
+(use **Copy** or **Open log folder** to share it), or read the log files in the
+`logs` folder described in the Activity Log notes below. Entries are prefixed
+`[ism:op]` (operation submit, recovery and result), `[ism:upload]`, `[ism:download]`,
+`[ism:events]` (event stream fallback), `[ism:detect]` and `[ism:background]`. Tokens
+are never logged.
+
 Saved album thumbnails display the number of missing local files, checked against
 the filesystem. The count also appears in the **Sync** button's tooltip.
 **Sync**, next to **Open in File Explorer**, downloads missing

@@ -195,6 +195,7 @@ export type LocalCopyResult = {
   failedCount: number;
   hasFallbackCandidates: boolean;
   fallbackCandidateAssetIds: string[];
+  errors: { assetId: string; message: string }[];
 };
 
 export type CacheStats = {

@@ -8,5 +8,6 @@ pub mod deletion;
 pub mod http_log;
 pub mod immich_client;
 pub mod import_preview;
+pub mod ism;
 pub mod media;
 pub mod storage;
