@@ -1,12 +1,12 @@
 pub(super) use crate::commands::asset_owner::account_client;
-use crate::commands::asset_owner::{resolve_asset_account, AssetAccess};
+use crate::commands::asset_owner::{AssetAccess, OwnershipResolver};
 use crate::services::{
     activity_log::Phases,
     db::Account,
     immich_client::{AlbumShareUser, AlbumSummary, ImmichClient},
 };
 use crate::AppState;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Creating an album makes several requests per contributing account; only flag it beyond this.
@@ -18,43 +18,57 @@ pub(super) struct Contribution {
     pub asset_ids: Vec<String>,
 }
 
-pub(super) fn contributions(
+pub(super) async fn contributions(
     state: &AppState,
     server_url: &str,
     asset_ids: &[String],
 ) -> Result<Vec<Contribution>, String> {
-    let mut groups = BTreeMap::<String, Vec<String>>::new();
+    let mut resolver = OwnershipResolver::new(state, asset_ids).await?;
+    let accounts: HashMap<_, _> = state
+        .db
+        .list_accounts()?
+        .into_iter()
+        .map(|account| (account.id.clone(), account))
+        .collect();
+    let mut requests = Vec::new();
     let mut seen = HashSet::new();
     for id in asset_ids {
         if !seen.insert(id) {
             continue;
         }
-        let account_id = state.db.get_asset_account_id(id)?.ok_or_else(|| {
+        let account_id = resolver.cached_account(id).ok_or_else(|| {
             format!("Photo {id} has no cached account. Refresh its view before adding it.")
         })?;
-        groups.entry(account_id).or_default().push(id.clone());
+        let account = accounts.get(account_id).ok_or_else(|| {
+            format!("Photo account {account_id} no longer exists. Sign in again.")
+        })?;
+        if account.server_url.trim_end_matches('/') != server_url.trim_end_matches('/') {
+            return Err(
+                "Photos from different Immich servers cannot be added to the same album.".into(),
+            );
+        }
+        if resolver.cached_owner(id).is_none() {
+            account_client(state, account)?;
+        }
+        requests.push((account_id.to_string(), id.clone()));
     }
-    groups
-        .into_iter()
-        .map(|(id, asset_ids)| {
-            let account = state
-                .db
-                .get_account(&id)?
-                .ok_or_else(|| format!("Photo account {id} no longer exists. Sign in again."))?;
-            if account.server_url.trim_end_matches('/') != server_url.trim_end_matches('/') {
-                return Err(
-                    "Photos from different Immich servers cannot be added to the same album."
-                        .into(),
-                );
-            }
-            let client = account_client(state, &account)?;
-            Ok(Contribution {
+    let mut routes = resolver.resolve_many(&requests, AssetAccess::Share).await?;
+    let mut groups = BTreeMap::<String, Contribution>::new();
+    for (_, id) in requests {
+        let (account, client) = routes
+            .remove(&id)
+            .ok_or_else(|| format!("Ownership resolution missing photo {id}"))?;
+        groups
+            .entry(account.id.clone())
+            .or_insert_with(|| Contribution {
                 account,
                 client,
-                asset_ids,
+                asset_ids: Vec::new(),
             })
-        })
-        .collect()
+            .asset_ids
+            .push(id);
+    }
+    Ok(groups.into_values().collect())
 }
 
 pub(super) async fn create_album_with_assets_internal(
@@ -70,32 +84,6 @@ pub(super) async fn create_album_with_assets_internal(
         );
     }
     result
-}
-
-pub(super) async fn resolve_contributors(
-    state: &AppState,
-    groups: Vec<Contribution>,
-) -> Result<Vec<Contribution>, String> {
-    let mut resolved = BTreeMap::<String, Contribution>::new();
-    for group in groups {
-        for id in group.asset_ids {
-            let (account, client) =
-                resolve_asset_account(state, &group.account.id, &id, AssetAccess::Share).await?;
-            if let Some(contribution) = resolved.get_mut(&account.id) {
-                contribution.asset_ids.push(id);
-            } else {
-                resolved.insert(
-                    account.id.clone(),
-                    Contribution {
-                        account,
-                        client,
-                        asset_ids: vec![id],
-                    },
-                );
-            }
-        }
-    }
-    Ok(resolved.into_values().collect())
 }
 
 pub(super) fn configuration(
@@ -194,11 +182,10 @@ async fn create(
     let owner = owner
         .ok_or("Album owner account no longer exists. Choose an owner in Settings > Albums.")?;
     let client = account_client(state, &owner)?;
-    let groups = contributions(state, &owner.server_url, asset_ids)?;
+    let groups = contributions(state, &owner.server_url, asset_ids).await?;
     if !client.ping(&owner.server_url).await {
         return Err("offline: Connect to the album owner's server to create an album.".into());
     }
-    let groups = resolve_contributors(state, groups).await?;
     validate_contributor_access(&owner.user_id, &[], &editors, &groups)?;
     phases.mark("resolve owners");
     log::info!(

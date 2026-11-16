@@ -1808,6 +1808,7 @@ pub(crate) fn to_enriched_asset_record(
 ) -> EnrichedAssetRecord {
     EnrichedAssetRecord {
         asset: crate::services::db::AssetSummaryExtended {
+            owner_id: metadata.as_ref().and_then(|m| m.owner_id.clone()).or(asset.owner_id),
             stack: metadata.as_ref().and_then(|m| m.stack.clone()),
             id: asset.id,
             original_file_name: asset.original_file_name.clone(),
@@ -1879,6 +1880,17 @@ mod local_snapshot_tests {
         std::fs::remove_file(&path).unwrap();
         assert!(ensure_ism_deleted_file_is_missing(path.to_str().unwrap()).is_ok());
         std::fs::remove_dir(&folder).unwrap();
+    }
+
+    #[test]
+    fn ownership_enrichment_keeps_server_details_or_summary_owner() {
+        let asset: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id": "photo", "originalFileName": "photo.jpg", "ownerId": "summary-owner"
+        })).unwrap();
+        let metadata = serde_json::from_value(serde_json::json!({"ownerId": "detail-owner"})).unwrap();
+        assert_eq!(to_enriched_asset_record(asset.clone(), Some(metadata)).asset.owner_id.as_deref(), Some("detail-owner"));
+        let metadata = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(to_enriched_asset_record(asset, Some(metadata)).asset.owner_id.as_deref(), Some("summary-owner"));
     }
 
     #[test]

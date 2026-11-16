@@ -261,6 +261,22 @@ async fn edit_cached_under_reader_is_uploaded_and_stacked_as_owner() {
 }
 
 #[tokio::test]
+async fn cached_original_owner_uploads_and_stacks_without_an_ownership_request() {
+    let fixture = Fixture::new(true).await;
+    fixture.state.db.cache_asset_owner("original", &fixture.reader.server_url, "owner").unwrap();
+    fixture.server().album_members.insert("owner".into());
+    fixture.queue_edit();
+    assert_eq!(process_media_uploads(&fixture.state).await.unwrap(), 1);
+    let job = fixture.job();
+    assert_eq!(job.state, "complete", "{:?}", job.error);
+    assert_eq!(job.account_id, fixture.owner.id);
+    let server = fixture.server();
+    assert!(server.requests("GET /api/assets/original ").is_empty());
+    assert_eq!(server.requests("POST /api/assets ")[0].0, "owner");
+    assert_eq!(server.requests("POST /api/stacks ")[0].0, "owner");
+}
+
+#[tokio::test]
 async fn owner_not_signed_in_fails_before_uploading() {
     let fixture = Fixture::new(false).await;
     fixture.queue_edit();

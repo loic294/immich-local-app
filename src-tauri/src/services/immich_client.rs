@@ -53,6 +53,8 @@ pub struct AssetStatistics {
 pub struct AssetSummary {
     pub id: String,
     #[serde(default)]
+    pub owner_id: Option<String>,
+    #[serde(default)]
     pub stack_count: Option<u32>,
     #[serde(default)]
     pub stack_original_id: Option<String>,
@@ -90,6 +92,8 @@ pub struct AssetSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetMetadata {
+    #[serde(default)]
+    pub owner_id: Option<String>,
     #[serde(default)]
     pub live_photo_video_id: Option<String>,
     #[serde(default)]
@@ -901,11 +905,7 @@ impl ImmichClient {
 
     pub async fn get_asset_owner_id(&self, asset_id: &str) -> Result<String, String> {
         let value = self.get_asset_value(asset_id).await?;
-        value
-            .get("ownerId")
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
-            .map(str::to_string)
+        parse_asset_owner(&value)
             .ok_or_else(|| format!("Photo {asset_id} has no owner in the server response."))
     }
 
@@ -4915,6 +4915,7 @@ fn parse_asset_summary_from_value(value: &Value) -> Result<AssetSummary, String>
     let mut asset = AssetSummary {
         is_trashed: value.get("isTrashed").and_then(Value::as_bool).unwrap_or(false),
         id,
+        owner_id: parse_asset_owner(value),
         stack_count: None,
         stack_original_id: None,
         is_stack_secondary: false,
@@ -5066,6 +5067,29 @@ fn live_photo_detail_parser_preserves_pairing_and_accepts_unlinked_assets() {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn asset_ownership_parser_keeps_only_nonempty_server_owner_ids() {
+    for (value, expected) in [
+        (serde_json::json!({"id":"photo","ownerId":"owner"}), Some("owner")),
+        (serde_json::json!({"id":"photo","ownerId":""}), None),
+        (serde_json::json!({"id":"photo","ownerId":" "}), None),
+        (serde_json::json!({"id":"photo","ownerId":123}), None),
+        (serde_json::json!({"id":"photo"}), None),
+    ] {
+        assert_eq!(parse_asset_summary_from_value(&value).unwrap().owner_id.as_deref(), expected);
+        assert_eq!(parse_asset_metadata_from_value(&value).owner_id.as_deref(), expected);
+    }
+}
+
+fn parse_asset_owner(value: &Value) -> Option<String> {
+    value
+        .get("ownerId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+}
+
 fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
     let exif_info = value.get("exifInfo");
     let original_path = value
@@ -5089,6 +5113,7 @@ fn parse_asset_metadata_from_value(value: &Value) -> AssetMetadata {
     let (people, person_ids) = extract_people_data(people_items);
 
     AssetMetadata {
+        owner_id: parse_asset_owner(value),
         stack: None,
         live_photo_video_id: value
             .get("livePhotoVideoId")

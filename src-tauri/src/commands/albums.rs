@@ -266,11 +266,10 @@ async fn add_assets_to_album_internal(
     let mut account = state.db.get_account(&account_id)?
         .ok_or("Album account no longer exists.")?;
     let mut client = creation::account_client(state, &account)?;
-    let groups = creation::contributions(state, &account.server_url, asset_ids)?;
+    let groups = creation::contributions(state, &account.server_url, asset_ids).await?;
     if !client.ping(&account.server_url).await {
         return Err("offline: Connect to the album's server to add photos.".into());
     }
-    let groups = creation::resolve_contributors(state, groups).await?;
     let (mut album, users) = client.get_album_sharing(album_id).await?;
     let (configured_owner, mut editors) = creation::configuration(state)?;
     if let Some(owner) = configured_owner.filter(|owner| {
@@ -356,8 +355,7 @@ pub(super) async fn create_share_link_for_assets_inner(
         .db
         .get_account(&account_id)?
         .ok_or("Photo account no longer exists")?;
-    let groups = creation::contributions(state, &account.server_url, asset_ids)?;
-    let groups = creation::resolve_contributors(state, groups).await?;
+    let groups = creation::contributions(state, &account.server_url, asset_ids).await?;
     let client = groups
         .iter()
         .find(|group| group.asset_ids.contains(first))

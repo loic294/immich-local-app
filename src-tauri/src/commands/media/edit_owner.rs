@@ -3,7 +3,8 @@
 //! Immich only stacks assets owned by the same user, so an edit must land in
 //! the original owner's library. The cached `assets.account_id` is
 //! last-writer-wins across signed-in accounts (a shared or partner photo can be
-//! cached under a reader), so ownership is resolved from the server instead.
+//! cached under a reader). Resolve cached owner IDs first, fetching and retaining
+//! server ownership only when it is missing locally.
 
 #[cfg(test)]
 use crate::commands::asset_owner::OWNER_NOT_SIGNED_IN;

@@ -315,6 +315,87 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn cached_owner_resolution_is_entirely_local_even_offline() {
+    let fixture = Fixture::new(true).await;
+    fixture.state.db.cache_asset_owner("photo", &fixture.reader.server_url, "owner").unwrap();
+    fixture.server.lock().unwrap().offline = true;
+    let (owner, _) = resolve_asset_account(
+        &fixture.state, &fixture.reader.id, "photo", AssetAccess::Owner,
+    ).await.unwrap();
+    assert_eq!(owner.id, fixture.owner.id);
+    assert!(fixture.server.lock().unwrap().requests.is_empty());
+}
+
+#[tokio::test]
+async fn cached_owner_never_uses_signed_out_or_wrong_server_sessions() {
+    let fixture = Fixture::new(false).await;
+    fixture.state.db.cache_asset_owner("photo", &fixture.reader.server_url, "owner").unwrap();
+    let foreign = fixture.state.db.upsert_account(
+        "http://different.invalid", "owner", None, None, "api_key", "foreign",
+    ).unwrap();
+    let client = Arc::new(ImmichClient::new());
+    client.hydrate_offline_session("http://different.invalid", "foreign", false, "owner", None)
+        .await.unwrap();
+    fixture.state.accounts.insert(foreign.id, client);
+    assert_eq!(
+        owner_client(&fixture.state, &fixture.reader.id, "photo").await.err().unwrap(),
+        OWNER_NOT_SIGNED_IN,
+    );
+    assert!(fixture.server.lock().unwrap().requests.is_empty());
+}
+
+#[tokio::test]
+async fn cached_partner_ownership_permits_sharing_but_not_mutation() {
+    let fixture = Fixture::new(true).await;
+    fixture.state.db.cache_asset_owner("photo", &fixture.reader.server_url, "partner").unwrap();
+    let (reader, _) = resolve_asset_account(
+        &fixture.state, &fixture.reader.id, "photo", AssetAccess::Share,
+    ).await.unwrap();
+    assert_eq!(reader.id, fixture.reader.id);
+    assert_eq!(
+        owner_client(&fixture.state, &fixture.reader.id, "photo").await.err().unwrap(),
+        OWNER_NOT_SIGNED_IN,
+    );
+    assert!(fixture.server.lock().unwrap().requests.is_empty());
+}
+
+#[tokio::test]
+async fn fallback_persists_owner_for_later_resolvers_and_normalizes_server_slashes() {
+    let fixture = Fixture::new(true).await;
+    fixture.state.db.open().unwrap().execute(
+        "UPDATE accounts SET server_url=server_url || '/' WHERE id=?1", [&fixture.owner.id],
+    ).unwrap();
+    for _ in 0..2 {
+        let (owner, _) = resolve_asset_account(
+            &fixture.state, &fixture.reader.id, "photo", AssetAccess::Owner,
+        ).await.unwrap();
+        assert_eq!(owner.id, fixture.owner.id);
+    }
+    let server = fixture.server.lock().unwrap();
+    assert_eq!(server.requests.len(), 1);
+    assert!(server.requests[0].0.starts_with("GET /api/assets/photo "));
+}
+
+#[tokio::test]
+async fn cached_ownership_preserves_offline_queue_and_replay_order_without_owner_reads() {
+    let fixture = Fixture::new(true).await;
+    fixture.state.db.cache_asset_owner("photo", &fixture.reader.server_url, "owner").unwrap();
+    fixture.server.lock().unwrap().offline = true;
+    fixture.change(DeleteBehavior::Archive, false).await.unwrap();
+    fixture.change(DeleteBehavior::Archive, true).await.unwrap();
+    assert_eq!(fixture.state.db.count_pending_mutations().unwrap(), 2);
+    fixture.server.lock().unwrap().offline = false;
+    assert_eq!(fixture.flush().await, 0);
+    let server = fixture.server.lock().unwrap();
+    let writes = server.writes();
+    assert_eq!(writes.len(), 2);
+    assert!(writes.iter().all(|(_, user, _)| user == "owner"));
+    assert_eq!(writes[0].2["visibility"], "archive");
+    assert_eq!(writes[1].2["visibility"], "timeline");
+    assert!(!server.requests.iter().any(|(request, _, _)| request.starts_with("GET /api/assets/")));
+}
+
+#[tokio::test]
 async fn delete_shared_photo_uses_owner_instead_of_cached_reader() {
     let fixture = Fixture::new(true).await;
     let result = fixture.change(DeleteBehavior::Archive, false).await;

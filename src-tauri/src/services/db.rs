@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -863,6 +863,8 @@ pub struct LocalSavedAssetChange {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetSummaryExtended {
     #[serde(default)]
+    pub owner_id: Option<String>,
+    #[serde(default)]
     pub stack: Option<crate::services::immich_client::AssetStack>,
     pub id: String,
     pub original_file_name: String,
@@ -898,6 +900,12 @@ pub struct AssetSummaryExtended {
     /// Display name (or email) of the owning account, for the info panel.
     #[serde(default)]
     pub account_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CachedAssetOwnership {
+    pub account_id: String,
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1338,6 +1346,7 @@ impl Database {
             ("full_resolution_local", "BOOLEAN DEFAULT 0"),
             ("is_stack_secondary", "BOOLEAN DEFAULT 0"),
             ("live_photo_video_id", "TEXT"),
+            ("owner_id", "TEXT"),
         ];
 
         for (col_name, col_type) in required_columns {
@@ -2425,9 +2434,9 @@ impl Database {
                 "
                 INSERT INTO assets (
                     id, account_id, original_file_name, original_path, file_created_at, checksum, updated_at,
-                    asset_type, duration, is_favorite, is_archived, visibility, rating, width, height, thumbhash, live_photo_video_id
+                    asset_type, duration, is_favorite, is_archived, visibility, rating, width, height, thumbhash, live_photo_video_id, owner_id
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
                 ON CONFLICT(id) DO UPDATE SET
                     account_id = excluded.account_id,
                     original_file_name = excluded.original_file_name,
@@ -2444,7 +2453,12 @@ impl Database {
                     width = excluded.width,
                     height = excluded.height,
                     thumbhash = excluded.thumbhash,
-                    live_photo_video_id = excluded.live_photo_video_id
+                    live_photo_video_id = excluded.live_photo_video_id,
+                    owner_id = CASE WHEN EXISTS(
+                        SELECT 1 FROM accounts old JOIN accounts new
+                        ON old.id=assets.account_id AND new.id=excluded.account_id
+                        WHERE rtrim(old.server_url,'/')<>rtrim(new.server_url,'/')
+                    ) THEN excluded.owner_id ELSE COALESCE(excluded.owner_id, assets.owner_id) END
                 ",
                 params![
                     asset.id,
@@ -2462,7 +2476,8 @@ impl Database {
                     asset.width,
                     asset.height,
                     asset.thumbhash,
-                    asset.live_photo_video_id
+                    asset.live_photo_video_id,
+                    asset.owner_id.as_deref().filter(|id| !id.trim().is_empty())
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -2627,9 +2642,9 @@ impl Database {
                 INSERT INTO assets (
                     id, account_id, original_file_name, description, original_path, file_created_at, checksum, updated_at,
                     asset_type, duration, is_favorite, is_archived, visibility, rating,
-                    width, height, thumbhash, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json, live_photo_video_id
+                    width, height, thumbhash, camera, lens, file_size_bytes, file_extension, people, tags, exif_info_json, live_photo_video_id, owner_id
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now'), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now'), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
                 ON CONFLICT(id) DO UPDATE SET
                     account_id = excluded.account_id,
                     original_file_name = excluded.original_file_name,
@@ -2654,7 +2669,12 @@ impl Database {
                     people = excluded.people,
                     tags = excluded.tags,
                     exif_info_json = excluded.exif_info_json,
-                    live_photo_video_id = excluded.live_photo_video_id
+                    live_photo_video_id = excluded.live_photo_video_id,
+                    owner_id = CASE WHEN EXISTS(
+                        SELECT 1 FROM accounts old JOIN accounts new
+                        ON old.id=assets.account_id AND new.id=excluded.account_id
+                        WHERE rtrim(old.server_url,'/')<>rtrim(new.server_url,'/')
+                    ) THEN excluded.owner_id ELSE COALESCE(excluded.owner_id, assets.owner_id) END
                 ",
                 params![
                     asset.id,
@@ -2680,7 +2700,8 @@ impl Database {
                     asset.people,
                     asset.tags,
                     asset.exif_info_json,
-                    asset.live_photo_video_id
+                    asset.live_photo_video_id,
+                    asset.owner_id.as_deref().filter(|id| !id.trim().is_empty())
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -3154,7 +3175,8 @@ impl Database {
                     full_resolution_local,
                     (SELECT COALESCE(NULLIF(user_name, ''), user_email, user_id)
                        FROM accounts WHERE accounts.id = assets.account_id) AS account_name,
-                    live_photo_video_id
+                    live_photo_video_id,
+                    owner_id
                 FROM assets
                 WHERE id = ?1
                 LIMIT 1
@@ -3191,6 +3213,7 @@ impl Database {
         let details = self.get_asset_details(asset_id)?;
         let mut summary = details.map(|asset| AssetSummary {
             id: asset.id,
+            owner_id: asset.owner_id,
             stack_count: None,
             stack_original_id: None,
             is_stack_secondary: false,
@@ -3223,11 +3246,11 @@ impl Database {
         self.init_media()?;
         let conn = self.open()?;
         for asset in assets {
-            asset.live_photo_video_id = conn
+            (asset.live_photo_video_id, asset.owner_id) = conn
                 .query_row(
-                    "SELECT live_photo_video_id FROM assets WHERE id=?1",
+                    "SELECT live_photo_video_id, owner_id FROM assets WHERE id=?1",
                     [&asset.id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .map_err(|error| format!("[live-photo:cache] {}: {error}", asset.id))?;
             asset.is_trashed = conn.query_row(
@@ -3624,6 +3647,48 @@ impl Database {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),
             other => Err(other.to_string()),
         })
+    }
+
+    pub(crate) fn get_asset_ownership(
+        &self,
+        asset_ids: &[String],
+    ) -> Result<HashMap<String, CachedAssetOwnership>, String> {
+        let mut ownership = HashMap::with_capacity(asset_ids.len());
+        if asset_ids.is_empty() {
+            return Ok(ownership);
+        }
+        let conn = self.open()?;
+        for batch in asset_ids.chunks(500) {
+            let placeholders = vec!["?"; batch.len()].join(",");
+            let mut statement = conn.prepare(&format!(
+                "SELECT id, account_id, owner_id FROM assets WHERE id IN ({placeholders})"
+            )).map_err(|error| error.to_string())?;
+            let rows = statement.query_map(params_from_iter(batch), |row| {
+                Ok((row.get::<_, String>(0)?, CachedAssetOwnership {
+                    account_id: row.get(1)?,
+                    owner_id: row.get::<_, Option<String>>(2)?.filter(|id| !id.trim().is_empty()),
+                }))
+            }).map_err(|error| error.to_string())?;
+            for row in rows {
+                let (id, cached) = row.map_err(|error| error.to_string())?;
+                ownership.insert(id, cached);
+            }
+        }
+        Ok(ownership)
+    }
+
+    pub(crate) fn cache_asset_owner(
+        &self,
+        asset_id: &str,
+        server_url: &str,
+        owner_id: &str,
+    ) -> Result<(), String> {
+        self.open()?.execute(
+            "UPDATE assets SET owner_id=?3 WHERE id=?1 AND account_id IN
+             (SELECT id FROM accounts WHERE rtrim(server_url, '/')=rtrim(?2, '/'))",
+            params![asset_id, server_url, owner_id],
+        ).map_err(|error| format!("[assets.owner] cache write failed asset={asset_id}: {error}"))?;
+        Ok(())
     }
 
     /// Resolve which account a cached album belongs to, for routing album
@@ -4955,6 +5020,7 @@ fn dirs_home() -> Option<PathBuf> {
 fn map_asset_summary(row: &rusqlite::Row<'_>) -> Result<AssetSummary, rusqlite::Error> {
     Ok(AssetSummary {
         id: row.get(0)?,
+        owner_id: None,
         stack_count: None,
         stack_original_id: None,
         is_stack_secondary: false,
@@ -4980,6 +5046,7 @@ fn map_asset_summary_extended(
     row: &rusqlite::Row<'_>,
 ) -> Result<AssetSummaryExtended, rusqlite::Error> {
     Ok(AssetSummaryExtended {
+        owner_id: row.get(28)?,
         stack: None,
         live_photo_video_id: row.get(27)?,
         id: row.get(0)?,
@@ -5166,6 +5233,61 @@ mod account_local_navigation_tests {
             }
         }
         drop(db);
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn ownership_migration_and_upserts_preserve_authoritative_owner() {
+        let path = test_db_path("asset-owner");
+        let db = Database::test_database(path.clone()).unwrap();
+        let mut photo: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id": "photo", "originalFileName": "photo.jpg", "ownerId": "owner"
+        })).unwrap();
+        db.upsert_assets("reader", &[photo.clone()]).unwrap();
+        assert_eq!(db.get_asset_summary("photo").unwrap().unwrap().owner_id.as_deref(), Some("owner"));
+        photo.owner_id = None;
+        db.upsert_assets("another-reader", &[photo.clone()]).unwrap();
+        let mut enriched = crate::commands::sync::to_enriched_asset_record(photo, None).asset;
+        enriched.owner_id = Some(" ".into());
+        db.upsert_assets_with_metadata("reader", &[enriched.clone()]).unwrap();
+        assert_eq!(db.get_asset_details("photo").unwrap().unwrap().owner_id.as_deref(), Some("owner"));
+        enriched.owner_id = Some("updated-owner".into());
+        db.upsert_assets_with_metadata("reader", &[enriched]).unwrap();
+        assert_eq!(db.get_asset_summary("photo").unwrap().unwrap().owner_id.as_deref(), Some("updated-owner"));
+        db.open().unwrap().execute_batch("ALTER TABLE assets DROP COLUMN owner_id").unwrap();
+        drop(db);
+        for _ in 0..2 {
+            let db = Database::test_database(path.clone()).unwrap();
+            let photo = db.get_asset_summary("photo").unwrap().unwrap();
+            assert_eq!(photo.original_file_name, "photo.jpg");
+            assert!(photo.owner_id.is_none());
+        }
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn ownership_is_not_carried_to_a_different_server_on_either_upsert_path() {
+        let path = test_db_path("asset-owner-servers");
+        let db = Database::test_database(path.clone()).unwrap();
+        let first = db.upsert_account("http://first.invalid", "reader", None, None, "api_key", "key").unwrap();
+        let second = db.upsert_account("http://second.invalid", "reader", None, None, "api_key", "key").unwrap();
+        let mut photo: AssetSummary = serde_json::from_value(serde_json::json!({
+            "id": "photo", "originalFileName": "photo.jpg", "ownerId": "first-owner"
+        })).unwrap();
+        for extended in [false, true] {
+            db.upsert_assets(&first.id, &[photo.clone()]).unwrap();
+            photo.owner_id = None;
+            if extended {
+                let record = crate::commands::sync::to_enriched_asset_record(photo.clone(), None);
+                db.upsert_assets_with_metadata(&second.id, &[record.asset]).unwrap();
+            } else {
+                db.upsert_assets(&second.id, &[photo.clone()]).unwrap();
+            }
+            assert!(db.get_asset_summary("photo").unwrap().unwrap().owner_id.is_none());
+            db.cache_asset_owner("photo", &first.server_url, "wrong-server-owner").unwrap();
+            assert!(db.get_asset_summary("photo").unwrap().unwrap().owner_id.is_none());
+            photo.owner_id = Some("first-owner".into());
+        }
         cleanup_db(&path);
     }
 

@@ -1106,6 +1106,8 @@ pub(super) async fn flush_pending_mutations_inner(state: &AppState) -> Result<i6
         "[assets.flush_pending_mutations] replaying {} queued mutation(s)",
         pending.len()
     );
+    let ids = pending.iter().map(|mutation| mutation.asset_id.clone()).collect::<Vec<_>>();
+    let mut owners = super::asset_owner::OwnershipResolver::new(state, &ids).await?;
 
     for mutation in pending {
         let payload: serde_json::Value = serde_json::from_str(&mutation.payload_json)
@@ -1130,9 +1132,9 @@ pub(super) async fn flush_pending_mutations_inner(state: &AppState) -> Result<i6
             continue;
         }
         let result = async {
-            let client =
-                super::asset_owner::owner_client(state, &mutation.account_id, &mutation.asset_id)
-                    .await?;
+            let (_, client) = owners.resolve(
+                &mutation.account_id, &mutation.asset_id, super::asset_owner::AssetAccess::Owner,
+            ).await?;
             match mutation.kind.as_str() {
                 "delete_asset" | "restore_deleted" => {
                     match payload

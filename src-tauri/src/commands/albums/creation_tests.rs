@@ -306,6 +306,80 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn cached_owners_skip_per_photo_requests_for_large_album_selection() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second"]);
+    fixture.seed_album("first", 0);
+    let assets: Vec<AssetSummary> = (0..2536)
+        .map(|index| {
+            serde_json::from_value(json!({
+                "id": format!("second-{index}"),
+                "originalFileName": "photo.jpg",
+                "ownerId": "second"
+            }))
+            .unwrap()
+        })
+        .collect();
+    // Shared photos were last cached through the first account, not their owner.
+    fixture.state.db.upsert_assets(&fixture.accounts[0].id, &assets).unwrap();
+    let ids: Vec<_> = assets.iter().map(|asset| asset.id.clone()).collect();
+    crate::commands::albums::add_assets_to_album_internal("album", &ids, &fixture.state)
+        .await
+        .unwrap();
+    let server = fixture.server.lock().unwrap();
+    assert_eq!(server.assets.len(), 2536);
+    assert_eq!(
+        server.requests.iter().filter(|(request, _, _)| request.starts_with("GET /api/assets/")).count(),
+        0,
+        "Cached owners must avoid per-photo ownership requests"
+    );
+    let contributions: Vec<_> = server.requests.iter()
+        .filter(|(request, _, _)| request.starts_with("PUT /api/albums/album/assets "))
+        .collect();
+    assert_eq!(contributions.len(), 1);
+    assert_eq!(contributions[0].1, "second");
+}
+
+#[tokio::test]
+async fn mixed_ownership_fetches_only_missing_photos_once_and_reuses_them() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &["second"]);
+    fixture.seed_album("first", 0);
+    fixture.state.db.cache_asset_owner(
+        "first-photo", &fixture.accounts[0].server_url, "first",
+    ).unwrap();
+    let ids = vec!["first-photo".into(), "second-photo".into(), "second-photo".into()];
+    for _ in 0..2 {
+        crate::commands::albums::add_assets_to_album_internal("album", &ids, &fixture.state)
+            .await.unwrap();
+    }
+    let server = fixture.server.lock().unwrap();
+    let reads: Vec<_> = server.requests.iter()
+        .filter(|(request, _, _)| request.starts_with("GET /api/assets/")).collect();
+    assert_eq!(reads.len(), 1);
+    assert!(reads[0].0.starts_with("GET /api/assets/second-photo "));
+    assert_eq!(server.assets.len(), 2);
+}
+
+#[tokio::test]
+async fn cached_owner_can_contribute_when_cached_reader_is_signed_out() {
+    let fixture = Fixture::new().await;
+    fixture.configure(0, &[]);
+    fixture.seed_album("first", 0);
+    let asset: AssetSummary = serde_json::from_value(json!({
+        "id": "first-photo", "originalFileName": "photo.jpg", "ownerId": "first"
+    })).unwrap();
+    fixture.state.db.upsert_assets(&fixture.accounts[1].id, &[asset]).unwrap();
+    fixture.state.accounts.remove(&fixture.accounts[1].id);
+    crate::commands::albums::add_assets_to_album_internal(
+        "album", &["first-photo".into()], &fixture.state,
+    ).await.unwrap();
+    let server = fixture.server.lock().unwrap();
+    assert_eq!(server.assets.len(), 1);
+    assert!(!server.requests.iter().any(|(request, _, _)| request.starts_with("GET /api/assets/")));
+}
+
+#[tokio::test]
 async fn new_album_contains_photos_from_both_accounts() {
     let fixture = Fixture::new().await;
     let created = fixture

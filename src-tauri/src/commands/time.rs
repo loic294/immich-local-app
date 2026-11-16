@@ -408,9 +408,10 @@ pub(super) async fn shift_asset_times_inner(
         failed: Vec::new(),
     };
     let mut offline_accounts: HashMap<String, bool> = HashMap::new();
+    let mut owners = super::asset_owner::OwnershipResolver::new(state, &asset_ids).await?;
 
     for asset_id in asset_ids {
-        let Some(account_id) = state.db.get_asset_account_id(&asset_id)? else {
+        let Some(account_id) = owners.cached_account(&asset_id).map(str::to_string) else {
             log::warn!("[time.shift] photo has no cached account asset={asset_id}");
             result.failed.push(ShiftAssetTimeFailure {
                 asset_id,
@@ -422,8 +423,9 @@ pub(super) async fn shift_asset_times_inner(
 
         if !known_offline {
             let online = async {
-                let client =
-                    super::asset_owner::owner_client(state, &account_id, &asset_id).await?;
+                let (_, client) = owners.resolve(
+                    &account_id, &asset_id, super::asset_owner::AssetAccess::Owner,
+                ).await?;
                 let time = client.get_asset_time(&asset_id).await?;
                 let shifted = shift_time(time, delta)
                     .ok_or_else(|| "shifted time out of range".to_string())?;

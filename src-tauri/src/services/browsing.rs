@@ -321,7 +321,7 @@ fn read_map_assets(
         };
         let mut stmt = conn.prepare(&format!(
                 "SELECT a.id,a.original_file_name,a.original_path,a.file_created_at,a.checksum,a.asset_type,a.duration,
-                a.is_favorite,a.is_archived,a.visibility,a.rating,a.width,a.height,a.thumbhash,a.exif_info_json,a.live_photo_video_id
+                a.is_favorite,a.is_archived,a.visibility,a.rating,a.width,a.height,a.thumbhash,a.exif_info_json,a.live_photo_video_id,a.owner_id
                 FROM assets a WHERE ({visible}) AND ({selection})"
             )).map_err(|e|e.to_string())?;
         let rows = stmt
@@ -329,6 +329,7 @@ fn read_map_assets(
                 Ok((
                     AssetSummary {
                         id: r.get(0)?,
+                        owner_id: r.get(16)?,
                         stack_count: None,
                         stack_original_id: None,
                         is_stack_secondary: false,
@@ -377,7 +378,7 @@ mod tests {
             "CREATE TABLE assets(id TEXT PRIMARY KEY, original_file_name TEXT,original_path TEXT,
              file_created_at TEXT,checksum TEXT,asset_type TEXT,duration TEXT,is_favorite INTEGER,
              is_archived INTEGER,visibility TEXT,rating INTEGER,width INTEGER,height INTEGER,thumbhash TEXT,exif_info_json TEXT,
-             people TEXT, account_id TEXT NOT NULL DEFAULT 'account',live_photo_video_id TEXT);
+             people TEXT, account_id TEXT NOT NULL DEFAULT 'account',live_photo_video_id TEXT,owner_id TEXT);
              CREATE TABLE people(id TEXT PRIMARY KEY,name TEXT,is_hidden INTEGER,thumbnail_path TEXT,account_id TEXT NOT NULL DEFAULT 'account');
              CREATE TABLE asset_people(asset_id TEXT,person_id TEXT,account_id TEXT NOT NULL DEFAULT 'account',PRIMARY KEY(asset_id,person_id));
              INSERT INTO people(id,name,is_hidden,thumbnail_path) VALUES('alice','Alice',0,NULL),('private','Private',0,NULL),('hidden-person','Hidden',1,NULL);
