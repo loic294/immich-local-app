@@ -1560,11 +1560,14 @@ mod tests {
             listener: tokio::net::TcpListener,
             body: &'static str,
             status: &'static str,
+            mut shutdown: tokio::sync::watch::Receiver<bool>,
         ) -> Vec<String> {
             let mut requests = Vec::new();
-            while let Ok(Ok((mut socket, _))) =
-                tokio::time::timeout(std::time::Duration::from_millis(500), listener.accept()).await
-            {
+            loop {
+                let (mut socket, _) = tokio::select! {
+                    _ = shutdown.changed() => break,
+                    connection = listener.accept() => connection.unwrap(),
+                };
                 let mut request = Vec::new();
                 let mut buf = [0; 4096];
                 loop {
@@ -1651,13 +1654,51 @@ mod tests {
             sync_cancel: Arc::new(AtomicBool::new(false)),
             sync_progress: Default::default(),
         };
-        let immich_requests = tokio::spawn(respond(immich, "{}", "200 OK"));
-        let ism_requests = tokio::spawn(respond(
-            ism,
-            r#"{"error":{"code":"direct_writes_unavailable","message":"gate not passed"}}"#,
-            "409 Conflict",
-        ));
-        assert_eq!(process_media_uploads(&state).await.unwrap(), 0);
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let mut servers = tokio::task::JoinSet::new();
+        let immich_receiver = receiver.clone();
+        servers.spawn(async move {
+            (
+                "immich",
+                respond(immich, "{}", "200 OK", immich_receiver).await,
+            )
+        });
+        servers.spawn(async move {
+            (
+                "ism",
+                respond(
+                    ism,
+                    r#"{"error":{"code":"direct_writes_unavailable","message":"gate not passed"}}"#,
+                    "409 Conflict",
+                    receiver,
+                )
+                .await,
+            )
+        });
+        // Slow setup must not make the mock servers disappear before the first request.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            process_media_uploads(&state),
+        )
+        .await;
+        shutdown.send(true).unwrap();
+        let requests = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let mut requests = std::collections::HashMap::new();
+            while let Some(server) = servers.join_next().await {
+                let (name, captured) = server.unwrap();
+                requests.insert(name, captured);
+            }
+            requests
+        })
+        .await
+        .expect("mock servers must stop after the upload finishes");
+        assert_eq!(
+            result
+                .expect("upload must finish before the timeout")
+                .unwrap(),
+            0
+        );
         let jobs = db.media_uploads().unwrap();
         assert_eq!(jobs[0].state, "failed");
         assert!(jobs[0]
@@ -1665,10 +1706,8 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("direct_writes_unavailable"));
-        let ism_requests = ism_requests.await.unwrap();
-        assert_eq!(ism_requests, ["POST /api/v1/uploads HTTP/1.1"]);
-        let immich_requests = immich_requests.await.unwrap();
-        assert!(immich_requests
+        assert_eq!(requests["ism"], ["POST /api/v1/uploads HTTP/1.1"]);
+        assert!(requests["immich"]
             .iter()
             .all(|request| request.starts_with("GET /api/server/ping ")));
         assert_eq!(std::fs::read(&file).unwrap(), b"local original");

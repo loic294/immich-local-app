@@ -94,6 +94,13 @@ fn path_str(path: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("Local path is not valid UTF-8: {}", path.display()))
 }
 
+fn local_file_name(path: &str) -> Result<&str, String> {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("Invalid local filename: {path}"))
+}
+
 /// Same-folder local rename of a missing tracked original: exactly one untracked file with the
 /// same size and content.
 fn renamed_original(
@@ -138,7 +145,7 @@ fn record_local_rename(
     old_path: &str,
     new_path: &str,
 ) -> Result<(), String> {
-    let name = file_name(new_path).to_string();
+    let name = local_file_name(new_path)?;
     let mut conn = db.open()?;
     let tx = conn.transaction().map_err(|err| err.to_string())?;
     tx.execute(
@@ -198,7 +205,7 @@ fn detect_rename(
         return Ok(false);
     };
     let new_path = path_str(&new_path)?;
-    let new_name = file_name(&new_path);
+    let new_name = local_file_name(&new_path)?;
     if !valid_name(new_name) {
         return Ok(false);
     }
@@ -250,7 +257,7 @@ fn detect_sidecar_changes(
         }
     }
     let local_original = Path::new(&original.local_path);
-    let local_name = file_name(&original.local_path);
+    let local_name = local_file_name(&original.local_path)?;
     let remote_name = file_name(&original.remote_path);
     let tracked_sidecar = files.iter().any(|file| file.role == "sidecar");
     let mut new_sidecars = Vec::new();
@@ -470,14 +477,17 @@ mod tests {
         fs::rename(dir.0.join("a.jpg"), dir.0.join("b.jpg")).unwrap();
         assert_eq!(detect_ism_local_changes(&db).unwrap(), 1);
         let new_path = dir.0.join("b.jpg").to_str().unwrap().to_string();
-        let saved: String = db
+        let (saved, saved_name): (String, String) = db
             .open()
             .unwrap()
-            .query_row("SELECT local_path FROM local_saved_assets", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT local_path, file_name FROM local_saved_assets",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
         assert_eq!(saved, new_path);
+        assert_eq!(saved_name, "b.jpg");
         let request: String = db
             .open()
             .unwrap()
@@ -492,6 +502,35 @@ mod tests {
         assert_eq!(action["target"]["path"], "2025/b.jpg");
         assert_eq!(action["expected_revision"], "rev-1");
         assert_eq!(detect_ism_local_changes(&db).unwrap(), 0);
+    }
+
+    #[test]
+    fn new_sidecars_use_native_local_names_and_remote_companion_names() {
+        for (local_name, remote_name) in [("a.jpg.xmp", "a.jpg.xmp"), ("a.xmp", "a.xmp")] {
+            let dir = TestDir::new();
+            let db = setup(&dir);
+            db.open()
+                .unwrap()
+                .execute("DELETE FROM ism_local_files WHERE role = 'sidecar'", [])
+                .unwrap();
+            fs::remove_file(dir.0.join("a.jpg.xmp")).unwrap();
+            fs::write(dir.0.join(local_name), b"<xmp rating='5'/>").unwrap();
+
+            assert_eq!(detect_ism_local_changes(&db).unwrap(), 1);
+            let request: String = db
+                .open()
+                .unwrap()
+                .query_row("SELECT request_json FROM ism_upload_jobs", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["target"]["path"], "2025");
+            assert_eq!(request["files"].as_array().unwrap().len(), 1);
+            assert_eq!(request["files"][0]["name"], remote_name);
+            assert_eq!(request["files"][0]["role"], "sidecar");
+            assert_eq!(detect_ism_local_changes(&db).unwrap(), 0);
+        }
     }
 
     #[test]

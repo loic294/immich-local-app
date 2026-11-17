@@ -267,7 +267,10 @@ selected, new local files are uploaded through ISM into their original (provenan
 folder or the configured import folder, edited sidecars are sent as sidecar-only
 uploads, and rename, move, trash and folder create/move/trash actions are submitted as
 ISM operations. Refusals such as `maintenance_blocked`, `revision_changed` or
-`destination_exists` are shown and never retried with force or through Immich. Applying a local deletion notice for an
+`destination_exists` are shown and never retried with force or through Immich.
+On macOS and Windows, same-folder local renames preserve local tracking, and new
+`photo.jpg.xmp` or `photo.xmp` sidecars are discovered beside the original.
+Applying a local deletion notice for an
 ISM-managed file submits a trash operation through ISM with the expected Immich asset ID
 and waits for its result. New requests require ISM's identity verification,
 instance-scoped operations and cancellation-by-key capabilities. Each request
